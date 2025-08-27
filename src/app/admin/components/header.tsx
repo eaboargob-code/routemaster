@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from "next/link";
@@ -21,6 +22,7 @@ export function AdminHeader() {
   const navItems = [
     { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin/routes", label: "Routes", icon: Route },
+    { href: "/admin/buses", label: "Buses", icon: Bus },
     { href: "/admin/users", label: "Users", icon: Users },
   ];
 
