@@ -1,0 +1,24 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function isAuthed() { return request.auth != null; }
+    function isAdminOf(schoolId) {
+      return isAutah() &&
+        exists(/databases/$(db)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(db)/documents/users/$(request.auth.uid)).data.role == "admin" &&
+        get(/databases/$(db)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+    }
+    match /routes/{id} {
+      // Admins can read/write routes belonging to their school.
+      // On create, the rule checks the schoolId from the incoming document.
+      allow read, write: if isAdminOf(resource.data.schoolId) || isAdminOf(request.resource.data.schoolId);
+    }
+    match /users/{uid} {
+       // Admins can read user documents from their own school.
+      allow read: if isAdminOf(resource.data.schoolId);
+      // Admins can write to user documents in their own school.
+      allow write: if isAdminOf(request.resource.data.schoolId);
+    }
+  }
+}
