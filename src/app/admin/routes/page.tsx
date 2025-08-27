@@ -291,6 +291,7 @@ function RoutesList() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [sortAsc, setSortAsc] = useState(true);
+  const { toast } = useToast();
 
   useEffect(() => {
     const q = query(
@@ -309,11 +310,16 @@ function RoutesList() {
       setIsLoading(false);
     }, (error) => {
       console.error("Error fetching routes:", error);
+       toast({
+        variant: "destructive",
+        title: "Failed to fetch routes",
+        description: error.message,
+      });
       setIsLoading(false);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [toast]);
   
   const filteredAndSortedRoutes = useMemo(() => {
       return routes
