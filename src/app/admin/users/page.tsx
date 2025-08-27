@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useTransition } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -8,7 +8,6 @@ import {
   collection,
   addDoc,
   updateDoc,
-  deleteDoc,
   doc,
   query,
   where,
@@ -32,7 +31,6 @@ import {
 import {
   Form,
   FormControl,
-  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -48,17 +46,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-    AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -77,7 +64,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast";
-import { PlusCircle, Trash2, Pencil, UserPlus, Check, X, Shield, CaseSensitive, PersonStanding, Users } from "lucide-react";
+import { UserPlus, Pencil, Shield, CaseSensitive, PersonStanding, Users } from "lucide-react";
 
 const UserRole = z.enum(["admin", "driver", "supervisor", "parent"]);
 type UserRoleType = z.infer<typeof UserRole>;
