@@ -6,7 +6,7 @@ import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 
 import { Button } from "@/components/ui/button";
-import { Bus, LayoutDashboard, LogOut, Route } from "lucide-react";
+import { Bus, LayoutDashboard, LogOut, Route, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AdminHeader() {
@@ -21,6 +21,7 @@ export function AdminHeader() {
   const navItems = [
     { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin/routes", label: "Routes", icon: Route },
+    { href: "/admin/users", label: "Users", icon: Users },
   ];
 
   return (

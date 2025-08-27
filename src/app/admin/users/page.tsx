@@ -1,0 +1,396 @@
+"use client";
+
+import { useEffect, useState, useCallback, useMemo, useTransition } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  query,
+  where,
+  onSnapshot,
+  getDocs,
+  limit,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from "firebase/firestore";
+import { db } from "@/lib/firebase";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+  DialogClose
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useToast } from "@/hooks/use-toast";
+import { PlusCircle, Trash2, Pencil, UserPlus, Check, X, Shield, CaseSensitive, PersonStanding, Users } from "lucide-react";
+
+const UserRole = z.enum(["admin", "driver", "supervisor", "parent"]);
+type UserRoleType = z.infer<typeof UserRole>;
+
+const inviteSchema = z.object({
+  email: z.string().email({ message: "Invalid email address." }),
+  role: UserRole,
+});
+
+type InviteFormValues = z.infer<typeof inviteSchema>;
+
+interface User {
+  id: string;
+  displayName?: string;
+  email: string;
+  role: UserRoleType;
+  active: boolean;
+  schoolId: string;
+  pending?: boolean;
+}
+
+const roleIcons: Record<UserRoleType, React.ElementType> = {
+    admin: Shield,
+    driver: CaseSensitive,
+    supervisor: PersonStanding,
+    parent: Users,
+};
+
+function InviteUserDialog({ onUserInvited }: { onUserInvited: () => void }) {
+  const { toast } = useToast();
+  const [isOpen, setIsOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const form = useForm<InviteFormValues>({
+    resolver: zodResolver(inviteSchema),
+    defaultValues: {
+      email: "",
+      role: "parent",
+    },
+  });
+
+  const onSubmit = async (data: InviteFormValues) => {
+    setIsSubmitting(true);
+    try {
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, where("email", "==", data.email), where("schoolId", "==", "TRP001"), limit(1));
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        const existingUserDoc = querySnapshot.docs[0];
+        await updateDoc(doc(db, "users", existingUserDoc.id), {
+          role: data.role,
+        });
+        toast({
+            title: "User Updated",
+            description: `User ${data.email}'s role has been updated to ${data.role}.`,
+            className: 'bg-accent text-accent-foreground border-0',
+        });
+
+      } else {
+        await addDoc(collection(db, "users"), {
+            ...data,
+            schoolId: "TRP001",
+            pending: true,
+            active: true,
+            displayName: "Invited User"
+        });
+        toast({
+            title: "Invitation Sent!",
+            description: `An invitation has been sent to ${data.email}.`,
+            className: 'bg-accent text-accent-foreground border-0',
+        });
+      }
+      
+      form.reset();
+      onUserInvited();
+      setIsOpen(false);
+    } catch (error) {
+      console.error("Error inviting user: ", error);
+      toast({
+        variant: "destructive",
+        title: "Uh oh! Something went wrong.",
+        description: "There was a problem sending the invitation.",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+      <DialogTrigger asChild>
+        <Button>
+          <UserPlus className="mr-2 h-4 w-4" />
+          Invite User
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-[425px]">
+         <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)}>
+                <DialogHeader>
+                    <DialogTitle>Invite New User</DialogTitle>
+                    <DialogDescription>
+                        Enter the email and role for the new user. They will receive an email to complete their registration.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                    <FormField
+                    control={form.control}
+                    name="email"
+                    render={({ field }) => (
+                        <FormItem>
+                        <FormLabel>Email</FormLabel>
+                        <FormControl>
+                            <Input placeholder="user@example.com" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )}
+                    />
+                    <FormField
+                    control={form.control}
+                    name="role"
+                    render={({ field }) => (
+                        <FormItem>
+                            <FormLabel>Role</FormLabel>
+                             <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                <FormControl>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select a role" />
+                                </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                    {UserRole.options.map((role) => {
+                                        const Icon = roleIcons[role];
+                                        return (
+                                            <SelectItem key={role} value={role}>
+                                                <div className="flex items-center gap-2">
+                                                   <Icon className="h-4 w-4 text-muted-foreground" />
+                                                   <span className="capitalize">{role}</span>
+                                                </div>
+                                            </SelectItem>
+                                        )
+                                    })}
+                                </SelectContent>
+                            </Select>
+                            <FormMessage />
+                        </FormItem>
+                    )}
+                    />
+                </div>
+                 <DialogFooter>
+                    <DialogClose asChild>
+                        <Button type="button" variant="ghost">Cancel</Button>
+                    </DialogClose>
+                    <Button type="submit" disabled={isSubmitting}>
+                        {isSubmitting ? "Sending..." : "Send Invite"}
+                    </Button>
+                </DialogFooter>
+            </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditableUserRow({ user }: { user: User }) {
+    const { toast } = useToast();
+
+    const handleUpdate = async (field: 'role' | 'active', value: string | boolean) => {
+        const userRef = doc(db, "users", user.id);
+        try {
+            await updateDoc(userRef, { [field]: value });
+            toast({
+                title: "Success!",
+                description: `User has been updated.`,
+                className: 'bg-accent text-accent-foreground border-0',
+            });
+        } catch (error) {
+            console.error("Error updating user: ", error);
+            toast({
+                variant: "destructive",
+                title: "Update Failed",
+                description: "There was a problem updating the user.",
+            });
+        }
+    };
+    
+    const RoleIcon = roleIcons[user.role];
+
+    return (
+        <TableRow key={user.id}>
+            <TableCell className="font-medium">{user.displayName || 'N/A'}</TableCell>
+            <TableCell>{user.email}</TableCell>
+            <TableCell>
+                <div className="flex items-center gap-2">
+                   <RoleIcon className="h-4 w-4 text-muted-foreground" />
+                   <span className="capitalize">{user.role}</span>
+                </div>
+            </TableCell>
+             <TableCell>
+                <Switch
+                    checked={user.active}
+                    onCheckedChange={(value) => handleUpdate('active', value)}
+                    aria-label="Toggle Active Status"
+                    disabled={user.pending}
+                />
+            </TableCell>
+            <TableCell className="text-right">
+                <Badge variant={user.pending ? "outline" : (user.active ? "default" : "secondary")}>
+                    {user.pending ? "Pending" : (user.active ? "Active" : "Inactive")}
+                </Badge>
+            </TableCell>
+            <TableCell className="text-right">
+                 <Select onValueChange={(value: UserRoleType) => handleUpdate('role', value)} defaultValue={user.role}>
+                    <SelectTrigger className="w-[120px] h-9">
+                        <div className="flex items-center gap-1">
+                           <Pencil className="h-3 w-3" />
+                           <span>Edit Role</span>
+                        </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                        {UserRole.options.map((role) => (
+                             <SelectItem key={role} value={role} className="capitalize">{role}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </TableCell>
+        </TableRow>
+    );
+}
+
+function UsersList({ onUserInvited }: { onUserInvited: () => void }) {
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, "users"),
+      where("schoolId", "==", "TRP001")
+    );
+
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const usersData = querySnapshot.docs.map(
+        (doc: QueryDocumentSnapshot<DocumentData>) => ({
+          id: doc.id,
+          ...(doc.data() as Omit<User, 'id'>),
+        })
+      );
+      setUsers(usersData);
+      setIsLoading(false);
+    }, (error) => {
+      console.error("Error fetching users:", error);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+  
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+            <CardTitle>User Management</CardTitle>
+            <CardDescription>
+            Invite and manage users for school TRP001.
+            </CardDescription>
+        </div>
+        <InviteUserDialog onUserInvited={onUserInvited} />
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Display Name</TableHead>
+              <TableHead>Email</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>Active</TableHead>
+              <TableHead className="text-right">Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={6} className="h-24 text-center">
+                  Loading users...
+                </TableCell>
+              </TableRow>
+            ) : users.length > 0 ? (
+              users.map((user) => (
+                <EditableUserRow key={user.id} user={user} />
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={6} className="h-24 text-center">
+                  No users found. Invite one to get started!
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function UsersPage() {
+    const [key, setKey] = useState(0);
+    const forceRerender = useCallback(() => setKey(k => k + 1), []);
+
+    return (
+        <div className="grid gap-8">
+            <UsersList key={key} onUserInvited={forceRerender} />
+        </div>
+    );
+}
