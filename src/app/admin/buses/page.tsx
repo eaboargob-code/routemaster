@@ -16,6 +16,7 @@ import {
   onSnapshot,
   type DocumentData,
   type QueryDocumentSnapshot,
+  getDocs,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -101,7 +102,6 @@ interface Route {
     id: string;
     name: string;
 }
-
 
 function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete: () => void, routes: Route[], schoolId: string }) {
     const { toast } = useToast();
@@ -225,7 +225,6 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
                     <Button type="button" variant="ghost">Cancel</Button>
                 </DialogClose>
                 <Button type="submit" disabled={isSubmitting}>
-                  <PlusCircle className="mr-2 h-4 w-4" />
                   {isSubmitting ? "Saving..." : (isEditMode ? "Save Changes" : "Add Bus")}
                 </Button>
             </DialogFooter>
@@ -237,6 +236,11 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
 function BusDialog({ children, bus, onComplete, routes, schoolId }: { children: React.ReactNode, bus?: Bus, onComplete: () => void, routes: Route[], schoolId: string }) {
     const [isOpen, setIsOpen] = useState(false);
 
+    const handleComplete = () => {
+        setIsOpen(false);
+        onComplete();
+    }
+
     return (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
             <DialogTrigger asChild>{children}</DialogTrigger>
@@ -247,36 +251,40 @@ function BusDialog({ children, bus, onComplete, routes, schoolId }: { children: 
                        {bus ? 'Update the details for this bus.' : 'Fill in the details for the new bus.'}
                     </DialogDescription>
                 </DialogHeader>
-                <BusForm bus={bus} routes={routes} schoolId={schoolId} onComplete={() => { setIsOpen(false); onComplete(); }} />
+                <BusForm bus={bus} routes={routes} schoolId={schoolId} onComplete={handleComplete} />
             </DialogContent>
         </Dialog>
     );
 }
 
 
-function BusesList({ routes, schoolId }: { routes: Route[], schoolId: string }) {
+function BusesList({ routes, schoolId, onDataNeedsRefresh }: { routes: Route[], schoolId: string, onDataNeedsRefresh: () => void }) {
   const [buses, setBuses] = useState<Bus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
 
   useEffect(() => {
-    if (!schoolId) {
-        setIsLoading(false);
-        return;
-    }
-    const q = query(collection(db, "buses"), where("schoolId", "==", schoolId));
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const busesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Bus));
-      setBuses(busesData);
-      setIsLoading(false);
-    }, (error) => {
-      console.error("Error fetching buses:", error);
-      toast({ variant: "destructive", title: "Error fetching buses", description: error.message });
-      setIsLoading(false);
-    });
-    return () => unsubscribe();
-  }, [schoolId, toast]);
+    const fetchBuses = async () => {
+        if (!schoolId) {
+            setIsLoading(false);
+            return;
+        }
+        setIsLoading(true);
+        try {
+            const q = query(collection(db, "buses"), where("schoolId", "==", schoolId));
+            const querySnapshot = await getDocs(q);
+            const busesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Bus));
+            setBuses(busesData);
+        } catch (error) {
+            console.error("Error fetching buses:", error);
+            toast({ variant: "destructive", title: "Error fetching buses", description: (error as Error).message });
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    fetchBuses();
+  }, [schoolId, toast, onDataNeedsRefresh]);
 
   const handleDelete = async (bus: Bus) => {
       try {
@@ -285,6 +293,7 @@ function BusesList({ routes, schoolId }: { routes: Route[], schoolId: string }) 
               title: "Bus Deleted",
               description: `Bus "${bus.busCode}" has been removed.`,
           });
+          onDataNeedsRefresh();
       } catch (error) {
           console.error("Error deleting bus: ", error);
           toast({
@@ -322,7 +331,7 @@ function BusesList({ routes, schoolId }: { routes: Route[], schoolId: string }) 
             Manage your fleet of buses for school {schoolId}.
             </CardDescription>
         </div>
-        <BusDialog onComplete={() => {}} routes={routes} schoolId={schoolId}>
+        <BusDialog onComplete={onDataNeedsRefresh} routes={routes} schoolId={schoolId}>
             <Button disabled={!schoolId}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Add Bus
@@ -365,7 +374,7 @@ function BusesList({ routes, schoolId }: { routes: Route[], schoolId: string }) 
                     <TableCell>{getRouteName(bus.assignedRouteId)}</TableCell>
                     <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                            <BusDialog bus={bus} onComplete={() => {}} routes={routes} schoolId={schoolId}>
+                            <BusDialog bus={bus} onComplete={onDataNeedsRefresh} routes={routes} schoolId={schoolId}>
                                 <Button variant="ghost" size="icon">
                                     <Pencil className="h-4 w-4" />
                                 </Button>
@@ -412,21 +421,26 @@ function BusesList({ routes, schoolId }: { routes: Route[], schoolId: string }) 
 export default function BusesPage() {
     const { profile, loading: profileLoading, error: profileError } = useProfile();
     const [routes, setRoutes] = useState<Route[]>([]);
-    
+    const [key, setKey] = useState(0); // Used to force-refresh child components
     const schoolId = profile?.schoolId;
 
-    useEffect(() => {
-        if (!schoolId) return;
+    const onDataNeedsRefresh = useCallback(() => setKey(k => k+1), []);
 
-        const q = query(collection(db, "routes"), where("schoolId", "==", schoolId));
-        const unsubscribe = onSnapshot(q, (querySnapshot) => {
-          const routesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
-          setRoutes(routesData);
-        }, (error) => {
-          console.error("Error fetching routes:", error);
-        });
-        return () => unsubscribe();
-      }, [schoolId]);
+    useEffect(() => {
+        const fetchRoutes = async () => {
+            if (!schoolId) return;
+
+            try {
+                const q = query(collection(db, "routes"), where("schoolId", "==", schoolId));
+                const querySnapshot = await getDocs(q);
+                const routesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
+                setRoutes(routesData);
+            } catch (error) {
+              console.error("Error fetching routes:", error);
+            }
+        };
+        fetchRoutes();
+      }, [schoolId, key]);
 
     if (profileLoading) {
         return (
@@ -452,10 +466,9 @@ export default function BusesPage() {
 
     return (
         <div className="grid gap-8">
-            <BusesList routes={routes} schoolId={profile.schoolId} />
+            <BusesList key={key} routes={routes} schoolId={profile.schoolId} onDataNeedsRefresh={onDataNeedsRefresh} />
         </div>
     );
 }
 
-    
     
