@@ -324,7 +324,19 @@ export default function RoutesPage() {
                   Create a new route for your school.
                 </DialogDescription>
               </DialogHeader>
-              <AddRouteForm schoolId={profile.schoolId} onComplete={() => setAddModalOpen(false)} />
+              <AddRouteForm schoolId={profile.schoolId} onComplete={() => {
+                  setAddModalOpen(false);
+                  // Manually re-fetch routes after adding a new one
+                  if (schoolId) {
+                      setLoading(true);
+                      const q = query(collection(db, "routes"), where("schoolId", "==", schoolId));
+                      onSnapshot(q, (snap) => {
+                          const rows: RouteDoc[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<RouteDoc, 'id'>) }));
+                          setRoutes(rows);
+                          setLoading(false);
+                      });
+                  }
+              }} />
             </DialogContent>
           </Dialog>
         </div>

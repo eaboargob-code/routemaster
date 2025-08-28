@@ -235,7 +235,7 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
   );
 }
 
-function EditableUserRow({ user }: { user: User }) {
+function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void }) {
     const { toast } = useToast();
 
     const handleActiveToggle = async (newActiveState: boolean) => {
@@ -250,6 +250,7 @@ function EditableUserRow({ user }: { user: User }) {
                 description: `User has been ${newActiveState ? 'activated' : 'deactivated'}.`,
                 className: 'bg-accent text-accent-foreground border-0',
             });
+            onUpdate();
         } catch (error) {
             console.error("Error updating user active state: ", error);
             toast({
@@ -269,6 +270,7 @@ function EditableUserRow({ user }: { user: User }) {
                 description: `User role has been updated.`,
                 className: 'bg-accent text-accent-foreground border-0',
             });
+            onUpdate();
         } catch (error) {
             console.error("Error updating user role: ", error);
             toast({
@@ -396,7 +398,7 @@ function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, sch
               </TableRow>
             ) : users.length > 0 ? (
               users.map((user) => (
-                <EditableUserRow key={user.id} user={user} />
+                <EditableUserRow key={user.id} user={user} onUpdate={onUserInvited} />
               ))
             ) : (
               <TableRow>
@@ -445,5 +447,3 @@ export default function UsersPage() {
         </div>
     );
 }
-
-    
