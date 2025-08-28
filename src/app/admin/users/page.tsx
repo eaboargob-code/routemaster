@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -18,6 +19,8 @@ import {
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useProfile } from "@/lib/useProfile";
+
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,6 +68,7 @@ import {
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast";
 import { UserPlus, Pencil, Shield, CaseSensitive, PersonStanding, Users } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const UserRole = z.enum(["admin", "driver", "supervisor", "parent"]);
 type UserRoleType = z.infer<typeof UserRole>;
@@ -93,7 +97,7 @@ const roleIcons: Record<UserRoleType, React.ElementType> = {
     parent: Users,
 };
 
-function InviteUserDialog({ onUserInvited }: { onUserInvited: () => void }) {
+function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => void, schoolId: string }) {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -109,7 +113,7 @@ function InviteUserDialog({ onUserInvited }: { onUserInvited: () => void }) {
     setIsSubmitting(true);
     try {
       const usersRef = collection(db, "users");
-      const q = query(usersRef, where("email", "==", data.email), where("schoolId", "==", "TRP001"), limit(1));
+      const q = query(usersRef, where("email", "==", data.email), where("schoolId", "==", schoolId), limit(1));
       const querySnapshot = await getDocs(q);
 
       if (!querySnapshot.empty) {
@@ -126,7 +130,7 @@ function InviteUserDialog({ onUserInvited }: { onUserInvited: () => void }) {
       } else {
         await addDoc(collection(db, "users"), {
             ...data,
-            schoolId: "TRP001",
+            schoolId: schoolId,
             pending: true,
             active: true,
             displayName: "Invited User"
@@ -296,14 +300,20 @@ function EditableUserRow({ user }: { user: User }) {
     );
 }
 
-function UsersList({ onUserInvited }: { onUserInvited: () => void }) {
+function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, schoolId: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { toast } = useToast();
 
   useEffect(() => {
+    if (!schoolId) {
+        setIsLoading(false);
+        return;
+    };
+
     const q = query(
       collection(db, "users"),
-      where("schoolId", "==", "TRP001")
+      where("schoolId", "==", schoolId)
     );
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
@@ -317,11 +327,12 @@ function UsersList({ onUserInvited }: { onUserInvited: () => void }) {
       setIsLoading(false);
     }, (error) => {
       console.error("Error fetching users:", error);
+      toast({ variant: "destructive", title: "Error fetching users", description: error.message });
       setIsLoading(false);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [schoolId, toast]);
   
   return (
     <Card>
@@ -329,10 +340,10 @@ function UsersList({ onUserInvited }: { onUserInvited: () => void }) {
         <div>
             <CardTitle>User Management</CardTitle>
             <CardDescription>
-            Invite and manage users for school TRP001.
+            Invite and manage users for school {schoolId}.
             </CardDescription>
         </div>
-        <InviteUserDialog onUserInvited={onUserInvited} />
+        <InviteUserDialog onUserInvited={onUserInvited} schoolId={schoolId} />
       </CardHeader>
       <CardContent>
         <Table>
@@ -372,12 +383,37 @@ function UsersList({ onUserInvited }: { onUserInvited: () => void }) {
 }
 
 export default function UsersPage() {
+    const { profile, loading: profileLoading, error: profileError } = useProfile();
     const [key, setKey] = useState(0);
     const forceRerender = useCallback(() => setKey(k => k + 1), []);
 
+    if (profileLoading) {
+        return (
+             <Card>
+                <CardHeader>
+                    <Skeleton className="h-8 w-1/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                </CardHeader>
+                <CardContent>
+                    <Skeleton className="h-40 w-full" />
+                </CardContent>
+            </Card>
+        )
+    }
+
+    if (profileError) {
+        return <div className="text-red-500">Error loading profile: {profileError.message}</div>
+    }
+
+    if (!profile) {
+        return <div>No user profile found. Access denied.</div>
+    }
+
     return (
         <div className="grid gap-8">
-            <UsersList key={key} onUserInvited={forceRerender} />
+            <UsersList key={key} onUserInvited={forceRerender} schoolId={profile.schoolId} />
         </div>
     );
 }
+
+    

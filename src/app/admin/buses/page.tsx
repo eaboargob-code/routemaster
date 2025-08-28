@@ -18,6 +18,7 @@ import {
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useProfile } from "@/lib/useProfile";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -74,6 +75,7 @@ import {
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast";
 import { PlusCircle, Trash2, Pencil, Search, Route } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const busSchema = z.object({
   busCode: z.string().min(1, { message: "Bus code is required." }),
@@ -101,7 +103,7 @@ interface Route {
 }
 
 
-function BusForm({ bus, onComplete, routes }: { bus?: Bus, onComplete: () => void, routes: Route[] }) {
+function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete: () => void, routes: Route[], schoolId: string }) {
     const { toast } = useToast();
     const [isSubmitting, setIsSubmitting] = useState(false);
     const isEditMode = !!bus;
@@ -120,16 +122,17 @@ function BusForm({ bus, onComplete, routes }: { bus?: Bus, onComplete: () => voi
     const onSubmit = async (data: BusFormValues) => {
         setIsSubmitting(true);
         try {
+            const busData = { ...data, schoolId };
             if (isEditMode) {
                 const busRef = doc(db, "buses", bus.id);
-                await updateDoc(busRef, { ...data, schoolId: "TRP001" });
+                await updateDoc(busRef, busData);
                 toast({
                     title: "Success!",
                     description: "Bus has been updated.",
                     className: 'bg-accent text-accent-foreground border-0',
                 });
             } else {
-                await addDoc(collection(db, "buses"), { ...data, schoolId: "TRP001" });
+                await addDoc(collection(db, "buses"), busData);
                 toast({
                     title: "Success!",
                     description: "New bus has been added.",
@@ -231,7 +234,7 @@ function BusForm({ bus, onComplete, routes }: { bus?: Bus, onComplete: () => voi
     );
 }
 
-function BusDialog({ children, bus, onComplete, routes }: { children: React.ReactNode, bus?: Bus, onComplete: () => void, routes: Route[] }) {
+function BusDialog({ children, bus, onComplete, routes, schoolId }: { children: React.ReactNode, bus?: Bus, onComplete: () => void, routes: Route[], schoolId: string }) {
     const [isOpen, setIsOpen] = useState(false);
 
     return (
@@ -244,31 +247,36 @@ function BusDialog({ children, bus, onComplete, routes }: { children: React.Reac
                        {bus ? 'Update the details for this bus.' : 'Fill in the details for the new bus.'}
                     </DialogDescription>
                 </DialogHeader>
-                <BusForm bus={bus} routes={routes} onComplete={() => { setIsOpen(false); onComplete(); }} />
+                <BusForm bus={bus} routes={routes} schoolId={schoolId} onComplete={() => { setIsOpen(false); onComplete(); }} />
             </DialogContent>
         </Dialog>
     );
 }
 
 
-function BusesList({ routes }: { routes: Route[] }) {
+function BusesList({ routes, schoolId }: { routes: Route[], schoolId: string }) {
   const [buses, setBuses] = useState<Bus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
 
   useEffect(() => {
-    const q = query(collection(db, "buses"), where("schoolId", "==", "TRP001"));
+    if (!schoolId) {
+        setIsLoading(false);
+        return;
+    }
+    const q = query(collection(db, "buses"), where("schoolId", "==", schoolId));
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const busesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Bus));
       setBuses(busesData);
       setIsLoading(false);
     }, (error) => {
       console.error("Error fetching buses:", error);
+      toast({ variant: "destructive", title: "Error fetching buses", description: error.message });
       setIsLoading(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, [schoolId, toast]);
 
   const handleDelete = async (bus: Bus) => {
       try {
@@ -311,11 +319,11 @@ function BusesList({ routes }: { routes: Route[] }) {
         <div>
             <CardTitle>Bus Management</CardTitle>
             <CardDescription>
-            Manage your fleet of buses for school TRP001.
+            Manage your fleet of buses for school {schoolId}.
             </CardDescription>
         </div>
-        <BusDialog onComplete={() => {}} routes={routes}>
-            <Button>
+        <BusDialog onComplete={() => {}} routes={routes} schoolId={schoolId}>
+            <Button disabled={!schoolId}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Add Bus
             </Button>
@@ -345,7 +353,7 @@ function BusesList({ routes }: { routes: Route[] }) {
             {isLoading ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-24 text-center">
-                  Loading buses...
+                  <Skeleton className="h-4 w-1/2 mx-auto" />
                 </TableCell>
               </TableRow>
             ) : filteredBuses.length > 0 ? (
@@ -357,7 +365,7 @@ function BusesList({ routes }: { routes: Route[] }) {
                     <TableCell>{getRouteName(bus.assignedRouteId)}</TableCell>
                     <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                            <BusDialog bus={bus} onComplete={() => {}} routes={routes}>
+                            <BusDialog bus={bus} onComplete={() => {}} routes={routes} schoolId={schoolId}>
                                 <Button variant="ghost" size="icon">
                                     <Pencil className="h-4 w-4" />
                                 </Button>
@@ -402,10 +410,15 @@ function BusesList({ routes }: { routes: Route[] }) {
 }
 
 export default function BusesPage() {
+    const { profile, loading: profileLoading, error: profileError } = useProfile();
     const [routes, setRoutes] = useState<Route[]>([]);
     
+    const schoolId = profile?.schoolId;
+
     useEffect(() => {
-        const q = query(collection(db, "routes"), where("schoolId", "==", "TRP001"));
+        if (!schoolId) return;
+
+        const q = query(collection(db, "routes"), where("schoolId", "==", schoolId));
         const unsubscribe = onSnapshot(q, (querySnapshot) => {
           const routesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
           setRoutes(routesData);
@@ -413,11 +426,35 @@ export default function BusesPage() {
           console.error("Error fetching routes:", error);
         });
         return () => unsubscribe();
-      }, []);
+      }, [schoolId]);
+
+    if (profileLoading) {
+        return (
+             <Card>
+                <CardHeader>
+                    <Skeleton className="h-8 w-1/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                </CardHeader>
+                <CardContent>
+                    <Skeleton className="h-40 w-full" />
+                </CardContent>
+            </Card>
+        )
+    }
+
+    if (profileError) {
+        return <div className="text-red-500">Error loading profile: {profileError.message}</div>
+    }
+
+    if (!profile) {
+        return <div>No user profile found. Access denied.</div>
+    }
 
     return (
         <div className="grid gap-8">
-            <BusesList routes={routes} />
+            <BusesList routes={routes} schoolId={profile.schoolId} />
         </div>
     );
 }
+
+    
