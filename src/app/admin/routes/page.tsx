@@ -94,6 +94,15 @@ function AddRouteForm({ schoolId, onComplete }: { schoolId: string, onComplete: 
 
   async function onSubmit(values: RouteFormValues) {
     setIsSubmitting(true);
+    if (!schoolId) {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "School ID is missing. Cannot add route.",
+        });
+        setIsSubmitting(false);
+        return;
+    }
     try {
       await addDoc(collection(db, "routes"), { ...values, schoolId });
       toast({
@@ -179,39 +188,40 @@ export default function RoutesPage() {
   const schoolId = profile?.schoolId;
 
   useEffect(() => {
-    if (!schoolId) return;
+    if (!schoolId) {
+        if (!profileLoading) {
+            setLoading(false);
+        }
+        return;
+    };
+    
     setLoading(true);
     setErr(null);
-    try {
-      const q = query(
-        collection(db, "routes"),
-        where("schoolId", "==", schoolId)
-      );
-      const unsub = onSnapshot(
-        q,
-        (snap) => {
-          const rows: RouteDoc[] = snap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<RouteDoc, "id">),
-          }));
-          setRoutes(rows);
-          setLoading(false);
-        },
-        (e) => {
-          console.error("routes/onSnapshot error:", e);
-          setErr(e.message ?? String(e));
-          toast({ variant: "destructive", title: "Error fetching data", description: e.message });
-          setLoading(false);
-        }
-      );
-      return () => unsub();
-    } catch (e: any) {
-      console.error("routes/query init error:", e);
-      setErr(e.message ?? String(e));
-      toast({ variant: "destructive", title: "Error initializing query", description: e.message });
-      setLoading(false);
-    }
-  }, [schoolId, toast]);
+
+    const q = query(
+      collection(db, "routes"),
+      where("schoolId", "==", schoolId)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows: RouteDoc[] = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<RouteDoc, "id">),
+        }));
+        setRoutes(rows);
+        setLoading(false);
+      },
+      (e) => {
+        console.error("[routes load]", e);
+        setErr(e.message ?? String(e));
+        toast({ variant: "destructive", title: "Error fetching routes", description: e.message });
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [schoolId, profileLoading, toast]);
 
   const sortedAndFilteredRoutes = useMemo(() => {
     return routes
@@ -284,18 +294,18 @@ export default function RoutesPage() {
               <Skeleton className="h-4 w-1/2" />
           </CardHeader>
           <CardContent>
-              <Skeleton className="h-40 w-full" />
+              <div className="text-center p-8 text-muted-foreground">Loading profile...</div>
           </CardContent>
       </Card>
     );
   }
   
   if (profileError) {
-      return <div className="text-red-500">Error loading profile: {profileError.message}</div>
+      return <div className="text-red-500 text-center p-8">Error loading profile: {profileError.message}</div>
   }
 
   if (!profile) {
-      return <div>No user profile found. Access denied.</div>
+      return <div className="text-red-500 text-center p-8">No user profile found. Access denied.</div>
   }
 
 
@@ -324,19 +334,7 @@ export default function RoutesPage() {
                   Create a new route for your school.
                 </DialogDescription>
               </DialogHeader>
-              <AddRouteForm schoolId={profile.schoolId} onComplete={() => {
-                  setAddModalOpen(false);
-                  // Manually re-fetch routes after adding a new one
-                  if (schoolId) {
-                      setLoading(true);
-                      const q = query(collection(db, "routes"), where("schoolId", "==", schoolId));
-                      onSnapshot(q, (snap) => {
-                          const rows: RouteDoc[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<RouteDoc, 'id'>) }));
-                          setRoutes(rows);
-                          setLoading(false);
-                      });
-                  }
-              }} />
+              <AddRouteForm schoolId={profile.schoolId} onComplete={() => setAddModalOpen(false)} />
             </DialogContent>
           </Dialog>
         </div>
@@ -358,9 +356,9 @@ export default function RoutesPage() {
       </CardHeader>
       <CardContent>
         {loading ? (
-          <div className="text-center text-muted-foreground">Loading routes…</div>
+          <div className="text-center text-muted-foreground p-8">Loading routes...</div>
         ) : err ? (
-          <div className="text-center text-red-600">Error: {err}</div>
+          <div className="text-center text-red-600 p-8">Error: {err}</div>
         ) : (
           <Table>
             <TableHeader>
@@ -374,7 +372,7 @@ export default function RoutesPage() {
               {sortedAndFilteredRoutes.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={3} className="h-24 text-center">
-                    No routes found. Add one to get started!
+                    No routes found for this school. Add one to get started!
                   </TableCell>
                 </TableRow>
               ) : (
@@ -439,3 +437,5 @@ export default function RoutesPage() {
     </Card>
   );
 }
+
+    

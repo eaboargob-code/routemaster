@@ -111,6 +111,12 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
 
   const onSubmit = async (data: InviteFormValues) => {
     setIsSubmitting(true);
+    if (!schoolId) {
+        toast({ variant: "destructive", title: "Error", description: "School ID is missing." });
+        setIsSubmitting(false);
+        return;
+    }
+
     try {
       const usersRef = collection(db, "users");
       const q = query(usersRef, where("email", "==", data.email), where("schoolId", "==", schoolId), limit(1));
@@ -147,7 +153,7 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
       onUserInvited();
       setIsOpen(false);
     } catch (error) {
-      console.error("Error inviting user: ", error);
+      console.error("[users invite]", error);
       toast({
         variant: "destructive",
         title: "Uh oh! Something went wrong.",
@@ -252,7 +258,7 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
             });
             onUpdate();
         } catch (error) {
-            console.error("Error updating user active state: ", error);
+            console.error("[users toggle active]", error);
             toast({
                 variant: "destructive",
                 title: "Update Failed",
@@ -272,7 +278,7 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
             });
             onUpdate();
         } catch (error) {
-            console.error("Error updating user role: ", error);
+            console.error("[users update role]", error);
             toast({
                 variant: "destructive",
                 title: "Update Failed",
@@ -342,7 +348,8 @@ function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, sch
         setIsLoading(false);
         return;
     };
-
+    
+    setIsLoading(true);
     const q = query(
       collection(db, "users"),
       where("schoolId", "==", schoolId)
@@ -358,7 +365,7 @@ function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, sch
       setUsers(usersData);
       setIsLoading(false);
     }, (error) => {
-      console.error("Error fetching users:", error);
+      console.error("[users load]", error);
       toast({ variant: "destructive", title: "Error fetching users", description: error.message });
       setIsLoading(false);
     });
@@ -403,7 +410,7 @@ function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, sch
             ) : (
               <TableRow>
                 <TableCell colSpan={6} className="h-24 text-center">
-                  No users found. Invite one to get started!
+                  No users found for this school. Invite one to get started!
                 </TableCell>
               </TableRow>
             )}
@@ -427,18 +434,18 @@ export default function UsersPage() {
                     <Skeleton className="h-4 w-1/2" />
                 </CardHeader>
                 <CardContent>
-                    <Skeleton className="h-40 w-full" />
+                    <div className="text-center p-8 text-muted-foreground">Loading profile...</div>
                 </CardContent>
             </Card>
         )
     }
 
     if (profileError) {
-        return <div className="text-red-500">Error loading profile: {profileError.message}</div>
+        return <div className="text-red-500 text-center p-8">Error loading profile: {profileError.message}</div>
     }
 
     if (!profile) {
-        return <div>No user profile found. Access denied.</div>
+        return <div className="text-red-500 text-center p-8">No user profile found. Access denied.</div>
     }
 
     return (
@@ -447,3 +454,5 @@ export default function UsersPage() {
         </div>
     );
 }
+
+    
