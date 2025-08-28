@@ -105,7 +105,7 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
     resolver: zodResolver(inviteSchema),
     defaultValues: {
       email: "",
-      role: "parent",
+      role: "driver",
     },
   });
 
@@ -301,7 +301,7 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
 
     return (
         <TableRow key={user.id}>
-            <TableCell className="font-medium">{user.displayName || 'N/A'}</TableCell>
+            <TableCell className="font-medium">{user.displayName || 'Invited User'}</TableCell>
             <TableCell>{user.email}</TableCell>
             <TableCell>
                 <div className="flex items-center gap-2">
@@ -311,7 +311,7 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
             </TableCell>
              <TableCell>
                 <Switch
-                    checked={user.active}
+                    checked={!!user.active}
                     onCheckedChange={handleActiveToggle}
                     aria-label="Toggle Active Status"
                 />
@@ -349,29 +349,29 @@ function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, sch
         return;
     };
     
-    setIsLoading(true);
-    const q = query(
-      collection(db, "users"),
-      where("schoolId", "==", schoolId)
-    );
+    const loadUsers = async () => {
+        setIsLoading(true);
+        try {
+            const q = query(collection(db, "users"), where("schoolId", "==", schoolId));
+            const querySnapshot = await getDocs(q);
+            const usersData = querySnapshot.docs.map(
+                (doc: QueryDocumentSnapshot<DocumentData>) => ({
+                    id: doc.id,
+                    ...(doc.data() as Omit<User, 'id'>),
+                })
+            );
+            setUsers(usersData);
+        } catch (error) {
+            console.error("[users load]", error);
+            toast({ variant: "destructive", title: "Error fetching users", description: (error as Error).message });
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    loadUsers();
 
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const usersData = querySnapshot.docs.map(
-        (doc: QueryDocumentSnapshot<DocumentData>) => ({
-          id: doc.id,
-          ...(doc.data() as Omit<User, 'id'>),
-        })
-      );
-      setUsers(usersData);
-      setIsLoading(false);
-    }, (error) => {
-      console.error("[users load]", error);
-      toast({ variant: "destructive", title: "Error fetching users", description: error.message });
-      setIsLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [schoolId, toast]);
+  }, [schoolId, toast, onUserInvited]);
   
   return (
     <Card>
@@ -400,7 +400,7 @@ function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, sch
             {isLoading ? (
               <TableRow>
                 <TableCell colSpan={6} className="h-24 text-center">
-                  Loading users...
+                  <Skeleton className="h-4 w-1/2 mx-auto" />
                 </TableCell>
               </TableRow>
             ) : users.length > 0 ? (
@@ -454,6 +454,3 @@ export default function UsersPage() {
         </div>
     );
 }
-
-    
-    
