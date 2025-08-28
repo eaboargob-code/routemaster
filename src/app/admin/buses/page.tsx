@@ -95,7 +95,7 @@ interface Bus {
   busCode: string;
   plate?: string;
   capacity?: number;
-  assignedRouteId?: string;
+  assignedRouteId?: string | null;
   active: boolean;
   schoolId: string;
 }
@@ -129,15 +129,17 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
             const busData: any = {
                 ...data,
                 schoolId,
-                assignedRouteId: data.assignedRouteId === NONE_SENTINEL ? deleteField() : data.assignedRouteId,
             };
+            
+            // Handle optional fields
+            if (data.assignedRouteId === NONE_SENTINEL || !data.assignedRouteId) {
+                busData.assignedRouteId = deleteField();
+            } else {
+                busData.assignedRouteId = data.assignedRouteId;
+            }
 
             if (isEditMode) {
                 const busRef = doc(db, "buses", bus.id);
-                // When clearing the route, we need to explicitly remove the field
-                if (!data.assignedRouteId) {
-                    busData.assignedRouteId = deleteField();
-                }
                 await updateDoc(busRef, busData);
                 toast({
                     title: "Success!",
@@ -290,7 +292,18 @@ function BusesList({ routes, schoolId, onDataNeedsRefresh }: { routes: Route[], 
         try {
             const q = query(collection(db, "buses"), where("schoolId", "==", schoolId));
             const querySnapshot = await getDocs(q);
-            const busesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Bus));
+            const busesData = querySnapshot.docs.map(doc => {
+                const d = doc.data();
+                return {
+                    id: doc.id,
+                    busCode: d.busCode ?? d.name ?? "",
+                    plate: d.plate ?? "",
+                    capacity: typeof d.capacity === 'number' ? d.capacity : undefined,
+                    assignedRouteId: d.assignedRouteId ?? null,
+                    schoolId: d.schoolId,
+                    active: d.active ?? true,
+                } as Bus;
+            });
             setBuses(busesData);
         } catch (error) {
             console.error("Error fetching buses:", error);
@@ -321,13 +334,15 @@ function BusesList({ routes, schoolId, onDataNeedsRefresh }: { routes: Route[], 
   };
 
   const filteredBuses = useMemo(() => {
+      const search = searchTerm.trim().toLowerCase();
+      if (!search) return buses;
       return buses.filter(bus =>
-        bus.busCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        bus.plate?.toLowerCase().includes(searchTerm.toLowerCase())
+        (bus.busCode?.toLowerCase?.() ?? "").includes(search) ||
+        (bus.plate?.toLowerCase?.() ?? "").includes(search)
       );
   }, [buses, searchTerm]);
   
-  const getRouteName = (routeId?: string) => {
+  const getRouteName = (routeId?: string | null) => {
       if (!routeId) return <span className="text-muted-foreground">Not Assigned</span>;
       const route = routes.find(r => r.id === routeId);
       return route ? (
@@ -384,7 +399,7 @@ function BusesList({ routes, schoolId, onDataNeedsRefresh }: { routes: Route[], 
             ) : filteredBuses.length > 0 ? (
               filteredBuses.map((bus) => (
                 <TableRow key={bus.id}>
-                    <TableCell className="font-medium">{bus.busCode}</TableCell>
+                    <TableCell className="font-medium">{bus.busCode || '(no code)'}</TableCell>
                     <TableCell>{bus.plate || 'N/A'}</TableCell>
                     <TableCell>{bus.capacity || 'N/A'}</TableCell>
                     <TableCell>{getRouteName(bus.assignedRouteId)}</TableCell>
@@ -486,5 +501,3 @@ export default function BusesPage() {
         </div>
     );
 }
-
-    
