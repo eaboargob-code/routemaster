@@ -57,6 +57,7 @@ import {
     AlertDialogFooter,
     AlertDialogHeader,
     AlertDialogTitle,
+    AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
   Dialog,
@@ -128,11 +129,15 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
             const busData: any = {
                 ...data,
                 schoolId,
-                assignedRouteId: data.assignedRouteId || (isEditMode ? deleteField() : undefined),
+                assignedRouteId: data.assignedRouteId === NONE_SENTINEL ? deleteField() : data.assignedRouteId,
             };
 
             if (isEditMode) {
                 const busRef = doc(db, "buses", bus.id);
+                // When clearing the route, we need to explicitly remove the field
+                if (!data.assignedRouteId) {
+                    busData.assignedRouteId = deleteField();
+                }
                 await updateDoc(busRef, busData);
                 toast({
                     title: "Success!",
@@ -297,16 +302,16 @@ function BusesList({ routes, schoolId, onDataNeedsRefresh }: { routes: Route[], 
     fetchBuses();
   }, [schoolId, toast, onDataNeedsRefresh]);
 
-  const handleDelete = async (bus: Bus) => {
+  const handleDelete = async (busId: string) => {
       try {
-          await deleteDoc(doc(db, "buses", bus.id));
+          await deleteDoc(doc(db, "buses", busId));
           toast({
               title: "Bus Deleted",
-              description: `Bus "${bus.busCode}" has been removed.`,
+              description: `Bus has been removed.`,
           });
           onDataNeedsRefresh();
       } catch (error) {
-          console.error("Error deleting bus: ", error);
+          console.error("[buses delete]", error);
           toast({
               variant: "destructive",
               title: "Deletion Failed",
@@ -392,20 +397,20 @@ function BusesList({ routes, schoolId, onDataNeedsRefresh }: { routes: Route[], 
                             </BusDialog>
                             <AlertDialog>
                                 <AlertDialogTrigger asChild>
-                                    <Button variant="ghost" size="icon" className="text-red-600 hover:text-red-700">
+                                    <Button variant="ghost" size="icon" className="text-red-600 hover:text-red-700" aria-label="Delete bus">
                                        <Trash2 className="h-4 w-4" />
                                     </Button>
                                 </AlertDialogTrigger>
                                 <AlertDialogContent>
                                     <AlertDialogHeader>
-                                    <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                    <AlertDialogTitle>Delete this bus?</AlertDialogTitle>
                                     <AlertDialogDescription>
                                         This action cannot be undone. This will permanently delete bus "{bus.busCode}".
                                     </AlertDialogDescription>
                                     </AlertDialogHeader>
                                     <AlertDialogFooter>
                                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => handleDelete(bus)} className="bg-destructive hover:bg-destructive/90">
+                                    <AlertDialogAction onClick={() => handleDelete(bus.id)} className="bg-destructive hover:bg-destructive/90">
                                         Delete
                                     </AlertDialogAction>
                                     </AlertDialogFooter>
