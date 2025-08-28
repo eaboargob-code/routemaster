@@ -73,3 +73,5 @@ export function useProfile(): UseProfileReturn {
 
   return { user, profile, loading, error };
 }
+
+    

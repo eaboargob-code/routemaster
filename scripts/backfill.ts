@@ -1,3 +1,4 @@
+
 /**
  * @fileoverview One-time backfill script to normalize Firestore data.
  * 
@@ -216,3 +217,5 @@ main().catch((err) => {
   console.error('Fatal error running backfill script:', err);
   process.exit(1);
 });
+
+    

@@ -1,3 +1,4 @@
+
 "use client";
 
 import { type User } from "firebase/auth";
@@ -40,3 +41,5 @@ export function DebugBanner({ user, profile, loading }: DebugBannerProps) {
         </div>
     );
 }
+
+    
