@@ -54,7 +54,9 @@ export default function DriverLoginPage() {
     setIsLoading(true);
     try {
       await signInWithEmailAndPassword(auth, data.email, data.password);
-      router.push("/driver");
+      // On successful login, the layout will handle redirection based on role.
+      // We just need to push to the driver dashboard.
+      router.replace("/driver");
     } catch (error) {
       console.error("Login failed:", error);
       toast({
@@ -111,10 +113,10 @@ export default function DriverLoginPage() {
               </Button>
             </form>
           </Form>
-          <div className="mt-4 text-center text-sm">
+           <div className="mt-4 text-center text-sm">
             Are you an admin?{" "}
             <Link href="/login" className="underline">
-                Admin Login
+                Go to Admin Login
             </Link>
            </div>
         </CardContent>
@@ -122,4 +124,3 @@ export default function DriverLoginPage() {
     </div>
   );
 }
-
