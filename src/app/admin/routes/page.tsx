@@ -14,6 +14,9 @@ import {
   updateDoc,
   deleteDoc,
   doc,
+  getDocs,
+  writeBatch,
+  limit,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -67,13 +70,14 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { PlusCircle, Trash2, Edit, X, Check, ArrowUpDown, Search } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { PlusCircle, Trash2, Edit, X, Check, ArrowUpDown, Search, Wrench } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type RouteDoc = {
   id: string;
   name: string;
-  schoolId: string;
+  schoolId?: string;
   active: boolean;
 };
 
@@ -176,6 +180,7 @@ function AddRouteForm({ schoolId, onComplete }: { schoolId: string, onComplete: 
 export default function RoutesPage() {
   const { profile, loading: profileLoading, error: profileError } = useProfile();
   const [routes, setRoutes] = useState<RouteDoc[]>([]);
+  const [needsBackfill, setNeedsBackfill] = useState<RouteDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -189,39 +194,71 @@ export default function RoutesPage() {
 
   useEffect(() => {
     if (!schoolId) {
-        if (!profileLoading) {
-            setLoading(false);
-        }
+        if (!profileLoading) setLoading(false);
         return;
     };
     
-    setLoading(true);
-    setErr(null);
+    const loadRoutes = async () => {
+        setLoading(true);
+        setErr(null);
+        setNeedsBackfill([]);
 
-    const q = query(
-      collection(db, "routes"),
-      where("schoolId", "==", schoolId)
-    );
+        try {
+            // Primary query
+            const q = query(collection(db, "routes"), where("schoolId", "==", schoolId));
+            const mainSnapshot = await getDocs(q);
+            let routesData = mainSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as RouteDoc));
+            setRoutes(routesData);
 
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const rows: RouteDoc[] = snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<RouteDoc, "id">),
-        }));
-        setRoutes(rows);
-        setLoading(false);
-      },
-      (e) => {
-        console.error("[routes load]", e);
-        setErr(e.message ?? String(e));
-        toast({ variant: "destructive", title: "Error fetching routes", description: e.message });
-        setLoading(false);
-      }
-    );
-    return () => unsub();
+            // Fallback query if primary is empty
+            if (routesData.length === 0) {
+                console.info("[routes load] Primary query empty, running fallback.");
+                const fallbackQuery = query(collection(db, "routes"), limit(20));
+                const fallbackSnapshot = await getDocs(fallbackQuery);
+                const unassigned = fallbackSnapshot.docs
+                    .map(d => ({ id: d.id, ...d.data() } as RouteDoc))
+                    .filter(r => !r.schoolId);
+                
+                if (unassigned.length > 0) {
+                    console.info(`[routes load] Found ${unassigned.length} routes missing schoolId.`);
+                    setNeedsBackfill(unassigned);
+                }
+            }
+        } catch (e: any) {
+            console.error("[routes load]", e);
+            setErr(e.message ?? String(e));
+            toast({ variant: "destructive", title: "Error fetching routes", description: e.message });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    loadRoutes();
   }, [schoolId, profileLoading, toast]);
+
+
+  const handleBackfill = async () => {
+    if (!schoolId || needsBackfill.length === 0) return;
+    
+    console.info(`[routes backfill] Starting backfill for ${needsBackfill.length} docs.`);
+    const batch = writeBatch(db);
+    needsBackfill.forEach(route => {
+        const routeRef = doc(db, "routes", route.id);
+        batch.update(routeRef, { schoolId: schoolId });
+    });
+
+    try {
+        await batch.commit();
+        toast({ title: "Success!", description: `${needsBackfill.length} routes have been assigned to your school.` });
+        // Refresh data
+        setRoutes(prev => [...prev, ...needsBackfill.map(r => ({...r, schoolId}))]);
+        setNeedsBackfill([]);
+    } catch (e: any) {
+        console.error("[routes backfill]", e);
+        toast({ variant: "destructive", title: "Backfill Failed", description: e.message });
+    }
+  };
+
 
   const sortedAndFilteredRoutes = useMemo(() => {
     return routes
@@ -257,8 +294,15 @@ export default function RoutesPage() {
         return;
     }
     try {
-      await updateDoc(doc(db, "routes", id), { name: editingName.trim() });
+      const routeRef = doc(db, "routes", id);
+      const updates: { name: string, schoolId?: string } = { name: editingName.trim() };
+      const currentRoute = routes.find(r => r.id === id);
+      if (currentRoute && !currentRoute.schoolId && schoolId) {
+          updates.schoolId = schoolId;
+      }
+      await updateDoc(routeRef, updates);
       toast({ title: "Route updated successfully" });
+      setRoutes(routes.map(r => r.id === id ? {...r, ...updates} : r));
       handleCancelEdit();
     } catch (e: any) {
       console.error("update name error:", e);
@@ -266,10 +310,16 @@ export default function RoutesPage() {
     }
   };
 
-  async function toggleActive(id: string, next: boolean) {
+  async function toggleActive(id: string, currentRoute: RouteDoc, next: boolean) {
     try {
-      await updateDoc(doc(db, "routes", id), { active: next });
+      const routeRef = doc(db, "routes", id);
+      const updates: { active: boolean, schoolId?: string } = { active: next };
+      if (!currentRoute.schoolId && schoolId) {
+          updates.schoolId = schoolId;
+      }
+      await updateDoc(routeRef, updates);
       toast({ title: `Route ${next ? 'activated' : 'deactivated'}` });
+      setRoutes(routes.map(r => r.id === id ? {...r, ...updates} : r));
     } catch (e: any) {
       console.error("toggleActive error:", e);
       toast({ variant: "destructive", title: "Failed to update status", description: e.message });
@@ -280,26 +330,27 @@ export default function RoutesPage() {
     try {
       await deleteDoc(doc(db, "routes", id));
       toast({ title: "Route deleted successfully" });
+      setRoutes(routes.filter(r => r.id !== id));
     } catch (e: any) {
-      console.error("deleteRoute error:", e);
+      console.error("removeRoute error:", e);
       toast({ variant: "destructive", title: "Failed to delete route", description: e.message });
     }
   }
 
   if (profileLoading) {
     return (
-      <Card>
-          <CardHeader>
-              <Skeleton className="h-8 w-1/4" />
-              <Skeleton className="h-4 w-1/2" />
-          </CardHeader>
-          <CardContent>
-              <div className="text-center p-8 text-muted-foreground">Loading profile...</div>
-          </CardContent>
-      </Card>
+        <Card>
+            <CardHeader>
+                <Skeleton className="h-8 w-1/4" />
+                <Skeleton className="h-4 w-1/2" />
+            </CardHeader>
+            <CardContent>
+                <div className="text-center p-8 text-muted-foreground">Loading profile...</div>
+            </CardContent>
+        </Card>
     );
   }
-  
+
   if (profileError) {
       return <div className="text-red-500 text-center p-8">Error loading profile: {profileError.message}</div>
   }
@@ -308,135 +359,145 @@ export default function RoutesPage() {
       return <div className="text-red-500 text-center p-8">No user profile found. Access denied.</div>
   }
 
-
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>Route Management</CardTitle>
-            <CardDescription>
-              Manage routes for school{" "}
-              <span className="font-mono">{profile.schoolId}</span>.
-            </CardDescription>
-          </div>
-          <Dialog open={isAddModalOpen} onOpenChange={setAddModalOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Add Route
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add New Route</DialogTitle>
-                <DialogDescription>
-                  Create a new route for your school.
-                </DialogDescription>
-              </DialogHeader>
-              <AddRouteForm schoolId={profile.schoolId} onComplete={() => setAddModalOpen(false)} />
-            </DialogContent>
-          </Dialog>
+        <div className="flex justify-between items-start">
+            <div>
+                <CardTitle>Manage Routes</CardTitle>
+                <CardDescription>
+                    View, create, and manage bus routes for school {profile.schoolId}.
+                </CardDescription>
+            </div>
+            <Dialog open={isAddModalOpen} onOpenChange={setAddModalOpen}>
+                <DialogTrigger asChild>
+                    <Button><PlusCircle className="mr-2 h-4 w-4" /> Add Route</Button>
+                </DialogTrigger>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Add New Route</DialogTitle>
+                        <DialogDescription>
+                            Enter the details for your new route.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <AddRouteForm schoolId={profile.schoolId} onComplete={() => setAddModalOpen(false)} />
+                </DialogContent>
+            </Dialog>
         </div>
-        <div className="mt-4 flex items-center gap-2">
-            <div className="relative w-full">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        {needsBackfill.length > 0 && (
+            <Alert className="mb-4 bg-yellow-50 border-yellow-200 text-yellow-800">
+                <Wrench className="h-4 w-4 !text-yellow-700" />
+                <AlertTitle>Data Inconsistency Found</AlertTitle>
+                <AlertDescription className="flex justify-between items-center">
+                   <p>Found {needsBackfill.length} routes missing a School ID. Assign them to your school to manage them.</p>
+                   <Button onClick={handleBackfill} variant="outline" size="sm" className="bg-yellow-100 hover:bg-yellow-200">
+                     Backfill Routes
+                   </Button>
+                </AlertDescription>
+            </Alert>
+        )}
+        <div className="flex justify-between items-center mb-4">
+            <div className="relative w-full max-w-sm">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                    placeholder="Search routes by name..."
+                    placeholder="Search routes..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-8"
                 />
             </div>
-             <Button variant="outline" onClick={handleToggleSortOrder}>
-                Name
-                <ArrowUpDown className="ml-2 h-4 w-4" />
-             </Button>
         </div>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <div className="text-center text-muted-foreground p-8">Loading routes...</div>
-        ) : err ? (
-          <div className="text-center text-red-600 p-8">Error: {err}</div>
-        ) : (
-          <Table>
-            <TableHeader>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>
+                <Button variant="ghost" onClick={handleToggleSortOrder}>
+                  Route Name
+                  <ArrowUpDown className="ml-2 h-4 w-4" />
+                </Button>
+              </TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Active</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableCell colSpan={3} className="h-24 text-center">
+                    <Skeleton className="h-4 w-1/2 mx-auto" />
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sortedAndFilteredRoutes.length === 0 ? (
+            ) : err ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="h-24 text-center">
-                    No routes found for this school. Add one to get started!
+                    <TableCell colSpan={3} className="h-24 text-center text-red-500">
+                        Error: {err}
+                    </TableCell>
+                </TableRow>
+            ) : sortedAndFilteredRoutes.length > 0 ? (
+              sortedAndFilteredRoutes.map((route) => (
+                <TableRow key={route.id}>
+                  <TableCell>
+                    {editingId === route.id ? (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          className="h-8"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => handleSaveName(route.id)}><Check className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" onClick={handleCancelEdit}><X className="h-4 w-4" /></Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span>{route.name}</span>
+                        <Button variant="ghost" size="icon" onClick={() => handleEdit(route)}><Edit className="h-4 w-4" /></Button>
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Switch
+                      checked={route.active}
+                      onCheckedChange={(next) => toggleActive(route.id, route, next)}
+                    />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" size="icon" className="text-red-600 hover:text-red-700">
+                            <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                          <AlertDialogHeader>
+                              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                  This will permanently delete the route "{route.name}". This action cannot be undone.
+                              </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => removeRoute(route.id)} className="bg-destructive hover:bg-destructive/90">
+                                  Delete
+                              </AlertDialogAction>
+                          </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </TableCell>
                 </TableRow>
-              ) : (
-                sortedAndFilteredRoutes.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      {editingId === r.id ? (
-                        <div className="flex items-center gap-2">
-                          <Input
-                            value={editingName}
-                            onChange={(e) => setEditingName(e.target.value)}
-                            className="h-8"
-                          />
-                           <Button variant="ghost" size="icon" onClick={() => handleSaveName(r.id)}><Check className="h-4 w-4 text-green-600"/></Button>
-                           <Button variant="ghost" size="icon" onClick={handleCancelEdit}><X className="h-4 w-4 text-red-600"/></Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                            {r.name}
-                            <Button variant="ghost" size="icon" onClick={() => handleEdit(r)}>
-                                <Edit className="h-4 w-4" />
-                            </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={r.active}
-                        onCheckedChange={(val) => toggleActive(r.id, val)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right">
-                       <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-600">
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  This action cannot be undone. This will permanently delete the route "{r.name}".
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => removeRoute(r.id)} className="bg-destructive hover:bg-destructive/90">
-                                  Delete
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                          </AlertDialogContent>
-                       </AlertDialog>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        )}
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={3} className="h-24 text-center">
+                  No routes found. Add one to get started.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
       </CardContent>
     </Card>
   );
 }
 
-    
-    
