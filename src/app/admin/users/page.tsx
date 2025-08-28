@@ -132,7 +132,7 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
             ...data,
             schoolId: schoolId,
             pending: true,
-            active: true,
+            active: false,
             displayName: "Invited User"
         });
         toast({
@@ -237,17 +237,20 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
 function EditableUserRow({ user }: { user: User }) {
     const { toast } = useToast();
 
-    const handleUpdate = async (field: 'role' | 'active', value: string | boolean) => {
+    const handleActiveToggle = async (newActiveState: boolean) => {
         const userRef = doc(db, "users", user.id);
         try {
-            await updateDoc(userRef, { [field]: value });
+            await updateDoc(userRef, { 
+                active: newActiveState,
+                pending: false // Toggling active status removes pending state
+            });
             toast({
                 title: "Success!",
-                description: `User has been updated.`,
+                description: `User has been ${newActiveState ? 'activated' : 'deactivated'}.`,
                 className: 'bg-accent text-accent-foreground border-0',
             });
         } catch (error) {
-            console.error("Error updating user: ", error);
+            console.error("Error updating user active state: ", error);
             toast({
                 variant: "destructive",
                 title: "Update Failed",
@@ -256,7 +259,36 @@ function EditableUserRow({ user }: { user: User }) {
         }
     };
     
+    const handleRoleUpdate = async (newRole: UserRoleType) => {
+        const userRef = doc(db, "users", user.id);
+        try {
+            await updateDoc(userRef, { role: newRole });
+            toast({
+                title: "Success!",
+                description: `User role has been updated.`,
+                className: 'bg-accent text-accent-foreground border-0',
+            });
+        } catch (error) {
+            console.error("Error updating user role: ", error);
+            toast({
+                variant: "destructive",
+                title: "Update Failed",
+                description: "There was a problem updating the user role.",
+            });
+        }
+    };
+    
     const RoleIcon = roleIcons[user.role];
+    
+    const getStatusBadge = () => {
+        if (user.pending) {
+            return <Badge variant="outline" className="bg-yellow-100 text-yellow-800">Pending</Badge>;
+        }
+        if (user.active) {
+            return <Badge className="bg-green-100 text-green-800 hover:bg-green-100/80">Active</Badge>;
+        }
+        return <Badge variant="secondary">Inactive</Badge>;
+    };
 
     return (
         <TableRow key={user.id}>
@@ -271,18 +303,15 @@ function EditableUserRow({ user }: { user: User }) {
              <TableCell>
                 <Switch
                     checked={user.active}
-                    onCheckedChange={(value) => handleUpdate('active', value)}
+                    onCheckedChange={handleActiveToggle}
                     aria-label="Toggle Active Status"
-                    disabled={user.pending}
                 />
             </TableCell>
             <TableCell className="text-right">
-                <Badge variant={user.pending ? "outline" : (user.active ? "default" : "secondary")}>
-                    {user.pending ? "Pending" : (user.active ? "Active" : "Inactive")}
-                </Badge>
+                {getStatusBadge()}
             </TableCell>
             <TableCell className="text-right">
-                 <Select onValueChange={(value: UserRoleType) => handleUpdate('role', value)} defaultValue={user.role}>
+                 <Select onValueChange={handleRoleUpdate} defaultValue={user.role}>
                     <SelectTrigger className="w-[120px] h-9">
                         <div className="flex items-center gap-1">
                            <Pencil className="h-3 w-3" />
