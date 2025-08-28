@@ -9,7 +9,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "backfill": "tsc scripts/backfill.ts && node scripts/backfill.js"
   },
   "dependencies": {
     "@genkit-ai/googleai": "^1.14.1",
@@ -52,9 +53,12 @@
     "recharts": "^2.15.1",
     "tailwind-merge": "^3.0.1",
     "tailwindcss-animate": "^1.0.7",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "firebase-admin": "^12.1.0",
+    "minimist": "^1.2.8"
   },
   "devDependencies": {
+    "@types/minimist": "^1.2.5",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
