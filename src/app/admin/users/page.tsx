@@ -129,7 +129,8 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
 
       } else {
         await addDoc(collection(db, "users"), {
-            ...data,
+            email: data.email,
+            role: data.role,
             schoolId: schoolId,
             pending: true,
             active: false,
@@ -242,7 +243,7 @@ function EditableUserRow({ user }: { user: User }) {
         try {
             await updateDoc(userRef, { 
                 active: newActiveState,
-                pending: false // Toggling active status removes pending state
+                pending: false
             });
             toast({
                 title: "Success!",
@@ -282,10 +283,10 @@ function EditableUserRow({ user }: { user: User }) {
     
     const getStatusBadge = () => {
         if (user.pending) {
-            return <Badge variant="outline" className="bg-yellow-100 text-yellow-800">Pending</Badge>;
+            return <Badge variant="outline" className="bg-yellow-100 text-yellow-800 border-yellow-200">Pending</Badge>;
         }
         if (user.active) {
-            return <Badge className="bg-green-100 text-green-800 hover:bg-green-100/80">Active</Badge>;
+            return <Badge className="bg-green-100 text-green-800 hover:bg-green-100/80 border-green-200">Active</Badge>;
         }
         return <Badge variant="secondary">Inactive</Badge>;
     };
