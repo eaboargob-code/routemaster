@@ -12,7 +12,7 @@ A one-time script to normalize data in the `users` and `routes` collections in F
     ```sh
     npm install
     ```
-    This will install `firebase-admin` and `minimist` as defined in `package.json`.
+    This will install `firebase-admin`, `minimist`, and `tsx` as defined in `package.json`.
 
 2.  **Set up authentication:**
     You need a service account key for your project. Download the JSON key from the Firebase Console:

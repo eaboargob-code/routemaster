@@ -10,9 +10,9 @@
  * 
  * ## Prerequisites
  * 
- * 1.  Install the Firebase Admin SDK:
+ * 1.  Install dependencies:
  *     ```sh
- *     npm i firebase-admin minimist @types/minimist
+ *     npm i
  *     ```
  * 
  * 2.  Set up authentication. You need a service account key for your project.
@@ -26,20 +26,22 @@
  * 
  * ## How to Run
  * 
- * Compile the TypeScript file:
+ * The `package.json` file contains a helper script to compile and run the backfill.
+ *
+ * **1. Dry Run (Recommended First)**
+ * To preview changes without writing to Firestore, use the `--dry-run` flag.
  * ```sh
- * npx tsc scripts/backfill.ts
+ * npm run backfill -- --project routemaster-admin-k1thy --dry-run
  * ```
  * 
- * To preview changes without writing to Firestore (dry run):
+ * **2. Execute Backfill**
+ * To execute the backfill and apply the changes to your Firestore database:
  * ```sh
- * node scripts/backfill.js --project routemaster-admin-k1thy --dry-run
+ * npm run backfill -- --project routemaster-admin-k1thy
  * ```
  * 
- * To execute the backfill and write changes to Firestore:
- * ```sh
- * node scripts/backfill.js --project routemaster-admin-k1thy
- * ```
+ * *Note: The `--` after `npm run backfill` is important. It separates the arguments
+ * for the npm command from the arguments for the script itself.*
  * 
  */
 
@@ -90,9 +92,11 @@ async function main() {
     const usersCounters = await backfillUsers(db, bulkWriter, isDryRun);
     const routesCounters = await backfillRoutes(db, bulkWriter, isDryRun);
 
-    if (!isDryRun) {
+    if (!isDryRun && (usersCounters.updated > 0 || routesCounters.updated > 0)) {
         await bulkWriter.close();
         console.log('\nAll batched writes have been committed.');
+    } else if (!isDryRun) {
+        console.log('\nNo documents needed updates.');
     }
 
     console.log('\n--- Summary ---');
@@ -125,6 +129,12 @@ async function backfillUsers(
     const data = doc.data();
     const updates: { [key: string]: any } = {};
 
+    // 0. Rename 'schoolid' to 'schoolId'
+    if (data.schoolid !== undefined) {
+      updates.schoolId = data.schoolid;
+      updates.schoolid = admin.firestore.FieldValue.delete();
+    }
+
     // 1. Set default for 'displayName' if missing
     if (data.displayName === undefined) {
       updates.displayName = 'Invited User';
@@ -143,7 +153,7 @@ async function backfillUsers(
     }
     
     // 4. Set default for 'schoolId' if missing
-    if (data.schoolId === undefined) {
+    if (data.schoolId === undefined && data.schoolid === undefined) {
       updates.schoolId = SCHOOL_ID_TO_BACKFILL;
     }
     
@@ -188,14 +198,25 @@ async function backfillRoutes(
     const data = doc.data();
     const updates: { [key: string]: any } = {};
 
+    // 0. Rename 'schoolid' to 'schoolId'
+    if (data.schoolid !== undefined) {
+      updates.schoolId = data.schoolid;
+      updates.schoolid = admin.firestore.FieldValue.delete();
+    }
+    
     // 1. Set default for 'schoolId' if missing
-    if (data.schoolId === undefined) {
+    if (data.schoolId === undefined && data.schoolid === undefined) {
       updates.schoolId = SCHOOL_ID_TO_BACKFILL;
     }
     
     // 2. Set default for 'active' if missing
     if (data.active === undefined) {
       updates.active = true;
+    }
+    
+    // 3. Set default for 'name' if missing
+    if (data.name === undefined) {
+        updates.name = 'Unnamed Route';
     }
 
     if (Object.keys(updates).length > 0) {
@@ -217,5 +238,3 @@ main().catch((err) => {
   console.error('Fatal error running backfill script:', err);
   process.exit(1);
 });
-
-    
