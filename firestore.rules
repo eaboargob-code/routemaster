@@ -1,24 +1,50 @@
-
 rules_version = '2';
 service cloud.firestore {
-  match /databases/{db}/documents {
-    function isAuthed() { return request.auth != null; }
-    function isAdminOf(schoolId) {
-      return isAutah() &&
-        exists(/databases/$(db)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(db)/documents/users/$(request.auth.uid)).data.role == "admin" &&
-        get(/databases/$(db)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+  match /databases/{database}/documents {
+    
+    // --- Helper Functions ---
+    function isAuthed() {
+      return request.auth != null;
     }
-    match /routes/{id} {
-      // Admins can read/write routes belonging to their school.
-      // On create, the rule checks the schoolId from the incoming document.
-      allow read, write: if isAdminOf(resource.data.schoolId) || isAdminOf(request.resource.data.schoolId);
+
+    function me() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
+    
+    function myData() {
+      return me().data;
+    }
+
+    function myRole() {
+      return myData().role;
+    }
+
+    function mySchoolId() {
+      return myData().schoolId;
+    }
+
+    function isAdmin() {
+      return isAuthed() && myRole() == "admin";
+    }
+
+    // --- Collection Rules ---
+
     match /users/{uid} {
-       // Admins can read user documents from their own school.
-      allow read: if isAdminOf(resource.data.schoolId);
-      // Admins can write to user documents in their own school.
-      allow write: if isAdminOf(request.resource.data.schoolId);
+      // Admins can read/write any user within their school.
+      // Users can read their own data.
+      allow read: if (isAdmin() && mySchoolId() == resource.data.schoolId) ||
+                     (isAuthed() && request.auth.uid == uid);
+      allow write: if isAdmin() && mySchoolId() == request.resource.data.schoolId;
+    }
+
+    match /routes/{routeId} {
+      // Admins can read/write routes within their own school.
+      allow read, write: if isAdmin() && mySchoolId() == resource.data.schoolId;
+    }
+
+    match /buses/{busId} {
+      // Admins can read/write buses within their own school.
+      allow read, write: if isAdmin() && mySchoolId() == resource.data.schoolId;
     }
   }
 }
