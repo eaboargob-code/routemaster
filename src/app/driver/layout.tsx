@@ -4,7 +4,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { useProfile, type UserProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
@@ -66,9 +66,9 @@ function AccessDeniedScreen() {
 }
 
 export default function DriverLayout({ children }: { children: ReactNode }) {
-  const { user, profile, loading, error } = useProfile();
-  const router = useRouter();
   const pathname = usePathname();
+  const { user, profile, loading } = useProfile();
+  const router = useRouter();
 
   // The login page is public and does not require any auth checks.
   if (pathname.startsWith('/driver/login')) {
@@ -105,7 +105,7 @@ export default function DriverLayout({ children }: { children: ReactNode }) {
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
         {children}
       </main>
-      <DebugBanner user={user} profile={profile} loading={loading} />
+      {user && <DebugBanner user={user} profile={profile} loading={loading} />}
     </div>
   );
 }
