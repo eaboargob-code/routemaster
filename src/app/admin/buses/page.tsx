@@ -17,6 +17,7 @@ import {
   type DocumentData,
   type QueryDocumentSnapshot,
   getDocs,
+  deleteField,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -82,7 +83,7 @@ const busSchema = z.object({
   busCode: z.string().min(1, { message: "Bus code is required." }),
   plate: z.string().optional(),
   capacity: z.coerce.number().int().positive().optional(),
-  assignedRouteId: z.string().optional(),
+  assignedRouteId: z.string().nullable().optional(),
   active: z.boolean().default(true),
 });
 
@@ -103,6 +104,8 @@ interface Route {
     name: string;
 }
 
+const NONE_SENTINEL = "__none__";
+
 function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete: () => void, routes: Route[], schoolId: string }) {
     const { toast } = useToast();
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -114,7 +117,7 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
             busCode: bus?.busCode || "",
             plate: bus?.plate || "",
             capacity: bus?.capacity || undefined,
-            assignedRouteId: bus?.assignedRouteId || "",
+            assignedRouteId: bus?.assignedRouteId || null,
             active: bus?.active ?? true,
         },
     });
@@ -122,7 +125,12 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
     const onSubmit = async (data: BusFormValues) => {
         setIsSubmitting(true);
         try {
-            const busData = { ...data, schoolId };
+            const busData: any = {
+                ...data,
+                schoolId,
+                assignedRouteId: data.assignedRouteId || (isEditMode ? deleteField() : undefined),
+            };
+
             if (isEditMode) {
                 const busRef = doc(db, "buses", bus.id);
                 await updateDoc(busRef, busData);
@@ -142,7 +150,7 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
             form.reset();
             onComplete();
         } catch (error) {
-            console.error("Error saving bus: ", error);
+            console.error("[buses save]", error);
             toast({
                 variant: "destructive",
                 title: "Uh oh! Something went wrong.",
@@ -176,7 +184,7 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
                     <FormItem>
                     <FormLabel>License Plate (Optional)</FormLabel>
                     <FormControl>
-                        <Input placeholder="e.g., XYZ-123" {...field} />
+                        <Input placeholder="e.g., XYZ-123" {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                     </FormItem>
@@ -189,7 +197,7 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
                     <FormItem>
                     <FormLabel>Capacity (Optional)</FormLabel>
                     <FormControl>
-                        <Input type="number" placeholder="e.g., 50" {...field} />
+                        <Input type="number" placeholder="e.g., 50" {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                     </FormItem>
@@ -201,14 +209,17 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Assign to Route (Optional)</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select
+                    value={field.value ?? NONE_SENTINEL}
+                    onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}
+                  >
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder="Select a route" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>
                       {routes.map((route) => (
                         <SelectItem key={route.id} value={route.id}>
                           {route.name}
