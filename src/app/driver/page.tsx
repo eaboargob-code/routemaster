@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -32,14 +32,9 @@ interface Trip {
     status: 'active' | 'ended';
 }
 
-interface UIState {
-    status: 'loading' | 'error' | 'empty' | 'ready';
-    errorMessage?: string;
-}
-
 function LoadingState() {
     return (
-        <Card>
+        <Card className="w-full max-w-2xl mx-auto">
             <CardHeader>
                 <Skeleton className="h-8 w-3/4" />
                 <Skeleton className="h-4 w-1/2" />
@@ -56,25 +51,22 @@ function LoadingState() {
 }
 
 export default function DriverPage() {
-    const { user, profile, loading: profileLoading } = useProfile();
+    const { user, profile, loading: profileLoading, error: profileError } = useProfile();
     const { toast } = useToast();
 
     const [bus, setBus] = useState<Bus | null>(null);
     const [route, setRoute] = useState<RouteInfo | null>(null);
     const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
-    const [uiState, setUiState] = useState<UIState>({ status: 'loading' });
     const [isSubmitting, setIsSubmitting] = useState(false);
     
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
 
-        setUiState({ status: 'loading' });
         try {
-            // 1. Find assigned bus using a simple query.
+            // 1. Find assigned bus.
             const busQuery = query(
                 collection(db, "buses"),
-                where("driverId", "==", user.uid),
-                limit(1)
+                where("driverId", "==", user.uid)
             );
             const busSnapshot = await getDocs(busQuery);
 
@@ -82,7 +74,6 @@ export default function DriverPage() {
                 setBus(null);
                 setRoute(null);
                 setActiveTrip(null);
-                setUiState({ status: 'empty' });
                 return;
             }
             
@@ -90,21 +81,16 @@ export default function DriverPage() {
             const busData = { id: busDoc.id, ...busDoc.data() } as Bus;
             setBus(busData);
 
-            // 2. Find assigned route if it exists, otherwise clear it.
+            // 2. Find assigned route if it exists.
             if (busData.assignedRouteId) {
                 const routeRef = doc(db, "routes", busData.assignedRouteId);
                 const routeDoc = await getDoc(routeRef);
-                if (routeDoc.exists()) {
-                    setRoute({ id: routeDoc.id, ...routeDoc.data() } as RouteInfo);
-                } else {
-                    console.warn(`[driver data fetch] Route with id ${busData.assignedRouteId} not found.`);
-                    setRoute(null);
-                }
+                setRoute(routeDoc.exists() ? { id: routeDoc.id, ...routeDoc.data() } as RouteInfo : null);
             } else {
                 setRoute(null);
             }
 
-            // 3. Check for an active trip for this driver.
+            // 3. Check for an active trip.
              const today = new Date();
              today.setHours(0, 0, 0, 0);
 
@@ -115,21 +101,11 @@ export default function DriverPage() {
              );
              
              const tripSnapshot = await getDocs(tripQuery);
-             
-             // Sort on the client to find the most recent active trip.
              const activeTripDoc = tripSnapshot.docs
                 .map(d => ({ id: d.id, ...d.data() } as Trip))
-                .filter(d => d.status === 'active')
-                .sort((a, b) => b.startedAt.toMillis() - a.startedAt.toMillis())
-                [0];
+                .find(d => d.status === 'active');
+             setActiveTrip(activeTripDoc || null);
 
-            if (activeTripDoc) {
-                setActiveTrip(activeTripDoc);
-            } else {
-                setActiveTrip(null);
-            }
-
-            setUiState({ status: 'ready' });
         } catch (error: any) {
             console.error("[driver data fetch]", error);
             
@@ -145,26 +121,14 @@ export default function DriverPage() {
                 title: 'Error Loading Data',
                 description: errorMessage,
             });
-
-            setUiState({
-                status: 'error',
-                errorMessage: errorMessage
-            });
-            setBus(null);
-            setRoute(null);
         }
     }, [user, profile, toast]);
 
     useEffect(() => {
         if (!profileLoading && user && profile) {
             fetchData();
-        } else if (!profileLoading && (!user || !profile)) {
-            // This case handles when loading is done but there is no user/profile.
-            // It prevents staying in a loading state forever.
-            setUiState({ status: 'empty' }); 
         }
     }, [profileLoading, user, profile, fetchData]);
-
 
     const handleStartTrip = async () => {
         if (!user || !profile || !bus) return;
@@ -213,14 +177,13 @@ export default function DriverPage() {
         }
     };
 
-
-    if (uiState.status === 'loading' || profileLoading) {
+    if (profileLoading) {
         return <LoadingState />;
     }
 
-    if (uiState.status === 'error') {
+    if (profileError) {
          return (
-            <Card>
+            <Card className="w-full max-w-2xl mx-auto">
                 <CardHeader>
                     <CardTitle>Error Loading Data</CardTitle>
                 </CardHeader>
@@ -229,7 +192,7 @@ export default function DriverPage() {
                         <AlertTriangle className="h-4 w-4" />
                         <AlertTitle>Could not load your assignment</AlertTitle>
                         <AlertDescription>
-                            {uiState.errorMessage}
+                            {profileError.message}
                         </AlertDescription>
                     </Alert>
                 </CardContent>
@@ -237,9 +200,9 @@ export default function DriverPage() {
         );
     }
     
-    if (uiState.status === 'empty' || !bus) {
+    if (!bus) {
         return (
-            <Card>
+            <Card className="w-full max-w-2xl mx-auto">
                 <CardHeader>
                     <CardTitle>No Assignment Found</CardTitle>
                 </CardHeader>
