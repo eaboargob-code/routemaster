@@ -2,57 +2,51 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // USERS
-    // Admins can manage users in their school.
-    // Users can read their own profile.
+
+    // Helper function to get the requesting user's profile
+    function getUserProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Helper function to check if the user has a specific role for a given school
+    function hasRole(schoolId, role) {
+      let profile = getUserProfile();
+      return request.auth.uid != null &&
+             profile.schoolId == schoolId &&
+             profile.role == role;
+    }
+
+    // Admins can manage any user within their own school
     match /users/{userId} {
-      allow read: if request.auth.uid == userId;
-      allow read, write: if request.auth.uid != null 
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == get(/databases/$(database)/documents/users/$(userId)).data.schoolId;
+      allow read, write: if hasRole(resource.data.schoolId, 'admin');
+    }
+    
+    // Logged-in users can read their own profile
+    match /users/{userId} {
+      allow get: if request.auth.uid == userId;
     }
 
-    // ROUTES
-    // Admins can manage routes in their school.
-    // Drivers can read any route (they only know the ID of their assigned one).
+    // Admins can manage all routes for their school
     match /routes/{routeId} {
-      allow read, write: if request.auth.uid != null 
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == resource.data.schoolId;
-      
-      allow read: if request.auth.uid != null 
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver';
+      allow read, write: if hasRole(request.resource.data.schoolId, 'admin');
     }
-
-    // BUSES
-    // Admins can manage buses in their school.
-    // Drivers can read the bus assigned to them in their school.
+    
+    // Admins can manage all buses for their school
     match /buses/{busId} {
-       allow read, write: if request.auth.uid != null 
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == resource.data.schoolId;
-
-      allow read: if request.auth.uid != null 
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver'
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == resource.data.schoolId
-        && request.auth.uid == resource.data.driverId;
+        allow read, write: if hasRole(request.resource.data.schoolId, 'admin');
     }
 
-    // TRIPS
-    // Drivers can create their own trips.
-    // Admins can view all trips in their school.
+    // Drivers can only read the bus they are assigned to
+    match /buses/{busId} {
+        allow get: if request.auth.uid != null &&
+                      resource.data.driverId == request.auth.uid &&
+                      hasRole(resource.data.schoolId, 'driver');
+    }
+    
+    // Drivers can manage their own trips
     match /trips/{tripId} {
-      allow read, write: if request.auth.uid != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == resource.data.schoolId;
-
-      allow create: if request.auth.uid != null
-        && request.auth.uid == request.resource.data.driverId
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == request.resource.data.schoolId;
-
-       allow read, update: if request.auth.uid != null
-        && request.auth.uid == resource.data.driverId;
+        allow read, write: if hasRole(request.resource.data.schoolId, 'driver') &&
+                              request.resource.data.driverId == request.auth.uid;
     }
   }
 }
