@@ -65,15 +65,14 @@ export default function DriverPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     
     const fetchData = useCallback(async () => {
-        if (!user || !profile?.schoolId) return;
+        if (!user || !profile) return;
 
         setUiState({ status: 'loading' });
         try {
-            // 1. Find assigned bus using a secure and efficient query
+            // 1. Find assigned bus using a simple query.
             const busQuery = query(
                 collection(db, "buses"),
                 where("driverId", "==", user.uid),
-                where("schoolId", "==", profile.schoolId),
                 limit(1)
             );
             const busSnapshot = await getDocs(busQuery);
@@ -89,7 +88,7 @@ export default function DriverPage() {
             const busData = { id: busDoc.id, ...busDoc.data() } as Bus;
             setBus(busData);
 
-            // 2. Find assigned route if it exists
+            // 2. Find assigned route if it exists, otherwise clear it.
             if (busData.assignedRouteId) {
                 const routeRef = doc(db, "routes", busData.assignedRouteId);
                 const routeDoc = await getDoc(routeRef);
@@ -103,51 +102,52 @@ export default function DriverPage() {
                 setRoute(null);
             }
 
-            // 3. Check for active trip for today
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            // 3. Check for an active trip for this driver.
+            // A composite index is needed for this query. If it fails, the UI will show an error.
+             const today = new Date();
+             today.setHours(0, 0, 0, 0);
 
-            // Firestore requires the first orderBy to match the inequality filter, if one exists.
-            // Since we filter by driverId and then by a time range, we can't easily order by time
-            // without a composite index. We'll fetch recent trips and find the active one in code.
-            const tripQuery = query(
+             const tripQuery = query(
                 collection(db, "trips"),
                 where("driverId", "==", user.uid),
-                where("startedAt", ">=", Timestamp.fromDate(today)),
-                limit(5)
-            );
-            const tripSnapshot = await getDocs(tripQuery);
-
-            const activeTripDoc = tripSnapshot.docs.find(d => d.data().status === 'active');
+                where("startedAt", ">=", Timestamp.fromDate(today))
+             );
+             const tripSnapshot = await getDocs(tripQuery);
+             
+             // Sort on the client to find the most recent active trip.
+             const activeTripDoc = tripSnapshot.docs
+                .filter(d => d.data().status === 'active')
+                .sort((a, b) => b.data().startedAt.toMillis() - a.data().startedAt.toMillis())
+                [0];
 
             if (activeTripDoc) {
                 setActiveTrip({ id: activeTripDoc.id, ...activeTripDoc.data() } as Trip);
             } else {
                 setActiveTrip(null);
             }
+
             setUiState({ status: 'ready' });
         } catch (error: any) {
             console.error("[driver data fetch]", error);
-            if (error.code === 'failed-precondition') {
-                setUiState({
-                    status: 'error',
-                    errorMessage: "The database is being updated to support this query. Please refresh in a minute."
-                });
-            } else {
-                setUiState({
-                    status: 'error',
-                    errorMessage: "An unexpected error occurred while loading your data."
-                });
-            }
+            toast({
+                variant: 'destructive',
+                title: 'Error Loading Data',
+                description: "An unexpected error occurred while loading your data."
+            });
+            setUiState({
+                status: 'error',
+                errorMessage: "An unexpected error occurred while loading your data."
+            });
             setBus(null);
             setRoute(null);
         }
-    }, [user, profile]);
+    }, [user, profile, toast]);
 
     useEffect(() => {
         if (!profileLoading && user && profile) {
             fetchData();
-        } else if (!profileLoading) {
+        } else if (!profileLoading && !user) {
+            // This case can be handled by DriverGuard, but setting state is safe.
             setUiState({ status: 'empty' });
         }
     }, [profileLoading, user, profile, fetchData]);
