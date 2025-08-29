@@ -1,54 +1,54 @@
+
 rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
   
     // --- Helper Functions ---
+    
+    // Check if the user is authenticated
     function isAuth() {
       return request.auth != null;
     }
-
+    
+    // Check if the user making the request has the 'admin' role for a given school
     function isSchoolAdmin(schoolId) {
-      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
     }
 
-    // --- Users Collection ---
+    // --- Collection Rules ---
+
     match /users/{userId} {
-      // Admins can manage users in their school. Users can read their own profile.
-      allow read, write: if isAuth() && (isSchoolAdmin(resource.data.schoolId) || request.auth.uid == userId);
-    }
-
-    // --- Routes Collection ---
-    match /routes/{routeId} {
-      // Admins can manage all routes for their school.
-      allow read, write: if isAuth() && isSchoolAdmin(resource.data.schoolId);
-    }
-    
-    // --- Buses Collection ---
-    match /buses/{busId} {
-      // Admins can manage all buses for their school.
-      allow get, write: if isAuth() && isSchoolAdmin(resource.data.schoolId);
+      // Admins can manage any user in their own school.
+      // A user can read their own profile.
+      allow read: if isSchoolAdmin(resource.data.schoolId) || (isAuth() && request.auth.uid == userId);
       
-      // Drivers can query for the bus assigned to them.
-      // This rule MUST match the query in the driver page.
-      allow list: if isAuth() && 
-                    request.query.driverId == request.auth.uid &&
-                    request.query.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId;
+      // Admins can write to any user profile in their school.
+      allow write: if isSchoolAdmin(resource.data.schoolId);
     }
     
-    // --- Trips Collection ---
-    match /trips/{tripId} {
-      // Admins can read all trips in their school. Drivers can create and read their own trips.
-      allow read, create: if isAuth() && 
-                             (isSchoolAdmin(resource.data.schoolId) || request.auth.uid == resource.data.driverId);
-      // Drivers can update (end) their own trips.
-      allow update: if isAuth() && request.auth.uid == resource.data.driverId;
+    match /routes/{routeId} {
+        // Admins can perform any action on routes within their school.
+        allow read, write: if isSchoolAdmin(resource.data.schoolId);
     }
 
-    // --- Default Deny ---
-    // Deny all other access to collections not explicitly defined.
-    match /{document=**} {
-      allow read, write: if false;
+    match /buses/{busId} {
+      // An admin can read any bus in their school.
+      // A driver can read a bus if it's assigned to them.
+      allow read: if isSchoolAdmin(resource.data.schoolId) || (isAuth() && resource.data.driverId == request.auth.uid);
+      
+      // Only admins can create, update, or delete buses.
+      allow write: if isSchoolAdmin(resource.data.schoolId);
+    }
+    
+    match /trips/{tripId} {
+        // A user can create a trip for themselves.
+        allow create: if isAuth() && request.resource.data.driverId == request.auth.uid;
+        
+        // A user can read/update their own trips.
+        // An admin can read/update any trip in their school.
+        allow read, update: if (isAuth() && resource.data.driverId == request.auth.uid) || isSchoolAdmin(resource.data.schoolId);
     }
   }
 }
