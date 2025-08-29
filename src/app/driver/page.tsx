@@ -107,14 +107,12 @@ export default function DriverPage() {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // This query is simplified to avoid needing a composite index.
-            // It fetches recent trips and we filter for the active one client-side.
             const tripQuery = query(
                 collection(db, "trips"),
                 where("driverId", "==", user.uid),
                 where("startedAt", ">=", Timestamp.fromDate(today)),
                 orderBy("startedAt", "desc"),
-                limit(5) // Look at the last 5 trips today
+                limit(5) 
             );
             const tripSnapshot = await getDocs(tripQuery);
 
@@ -290,5 +288,3 @@ export default function DriverPage() {
         </Card>
     )
 }
-
-    
