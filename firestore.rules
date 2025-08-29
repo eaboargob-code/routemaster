@@ -3,34 +3,46 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper function to check if a user is an admin of a specific school
-    function isSchoolAdmin(schoolId) {
-      let userProfile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-      return request.auth != null &&
-             userProfile.role == 'admin' &&
-             userProfile.schoolId == schoolId;
+    // Helper functions
+    function isAuth() {
+      return request.auth != null;
     }
 
+    function isSchoolAdmin(schoolId) {
+      // Check if user is an admin for the given schoolId by looking up their user profile
+      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+    }
+
+    // --- Collections ---
+
     match /users/{userId} {
-      // Admins can manage users in their school.
+      // An admin can manage any user in their own school
       allow read, write: if isSchoolAdmin(resource.data.schoolId);
-      // Users can read their own profile.
-      allow get: if request.auth != null && request.auth.uid == userId;
+      // A user can read their own profile
+      allow get: if isAuth() && request.auth.uid == userId;
     }
 
     match /buses/{busId} {
-      // Admins of the school can read and write all buses.
-      allow read, write: if isSchoolAdmin(resource.data.schoolId);
-
-      // A driver can read a bus document if their UID is in the driverId field.
-      // This covers both direct gets and queries like `where("driverId", "==", uid)`.
-      allow list: if request.auth != null && request.query.driverId == request.auth.uid;
-      allow get: if request.auth != null && resource.data.driverId == request.auth.uid;
+        // Admins can perform any operation on buses within their school
+        allow read, write: if isSchoolAdmin(request.resource.data.schoolId);
+        
+        // Drivers can query for the bus they are assigned to
+        allow list: if isAuth() && request.query.driverId == request.auth.uid;
+        
+        // A driver can directly read their own assigned bus document
+        allow get: if isAuth() && get(/databases/$(database)/documents/buses/$(busId)).data.driverId == request.auth.uid;
     }
-
+    
     match /routes/{routeId} {
-      // Admins can manage all routes for their school.
-      allow read, write: if isSchoolAdmin(resource.data.schoolId);
+      // Admins can manage all routes for their school
+      allow read, write: if isSchoolAdmin(request.resource.data.schoolId);
+    }
+    
+    match /trips/{tripId} {
+        // A driver can create their own trip record
+        allow create: if isAuth() && request.resource.data.driverId == request.auth.uid;
+        // A driver can read or update their own trip record
+        allow read, update: if isAuth() && resource.data.driverId == request.auth.uid;
     }
   }
 }
