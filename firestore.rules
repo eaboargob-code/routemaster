@@ -1,75 +1,46 @@
-// ROUTEMASTER – Admin full control, Driver read-own
 rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
+    // --- helpers ---
+    function authed()      { return request.auth != null; }
+    function me()          { return get(/databases/$(db)/documents/users/$(request.auth.uid)); }
+    function hasMe()       { return authed() && me().exists(); }
+    function myRole()      { return hasMe() ? me().data.role : null; }
+    function mySchool()    { return hasMe() ? me().data.schoolId : null; }
+    function isAdmin()     { return myRole() == "admin"; }
+    function isDriver()    { return myRole() == "driver"; }
 
-    // ---------- helpers ----------
-    function authed()     { return request.auth != null; }
-    function me()         { return get(/databases/$(db)/documents/users/$(request.auth.uid)); }
-    function hasMe()      { return authed() && me().exists(); }
-    function myRole()     { return hasMe() ? me().data.role : null; }
-    function mySchool()   { return hasMe() ? me().data.schoolId : null; }
-    function isAdmin()    { return myRole() == "admin"; }
-    function isDriver()   { return myRole() == "driver"; }
-
-    // ---------- users ----------
+    // users: everyone can read their own; admins can manage all
     match /users/{uid} {
-      // users can read their own profile
-      allow read: if authed() && uid == request.auth.uid;
-
-      // admins can read/write any user in their own school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||        // existing doc
-        (resource == null && request.resource.data.schoolId == mySchool())    // creating
-      );
+      allow read:  if authed() && uid == request.auth.uid;
+      allow read, write: if isAdmin();
     }
 
-    // ---------- routes ----------
+    // routes: admins full control; drivers can read routes for their school
     match /routes/{id} {
-      // admin full control in their school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||
-        (resource == null && request.resource.data.schoolId == mySchool())
-      );
-
-      // drivers may read routes in their school
+      allow read, write: if isAdmin();
       allow read: if isDriver() && resource.data.schoolId == mySchool();
     }
 
-    // ---------- buses ----------
+    // buses: admins full control; drivers can read only their assigned bus in their school
     match /buses/{id} {
-      // admin full control in their school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||
-        (resource == null && request.resource.data.schoolId == mySchool())
-      );
-
-      // drivers can read *their own* bus (same school + driverId match)
+      allow read, write: if isAdmin();
       allow read: if isDriver()
-        && resource.data.schoolId == mySchool()
-        && resource.data.driverId == request.auth.uid;
+                  && resource.data.driverId == request.auth.uid
+                  && resource.data.schoolId == mySchool();
     }
 
-    // ---------- trips ----------
+    // trips: admins full control; drivers can create/read/update their own in their school
     match /trips/{id} {
-      // admin full control in their school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||
-        (resource == null && request.resource.data.schoolId == mySchool())
-      );
+      allow read, write: if isAdmin();
 
-      // drivers: create/update/read only their trips in their school
       allow create: if isDriver()
-        && request.resource.data.driverId == request.auth.uid
-        && request.resource.data.schoolId == mySchool();
+                    && request.resource.data.driverId == request.auth.uid
+                    && request.resource.data.schoolId == mySchool();
 
-      allow read: if isDriver()
-        && resource.data.driverId == request.auth.uid
-        && resource.data.schoolId == mySchool();
-
-      allow update: if isDriver()
-        && resource.data.driverId == request.auth.uid
-        && resource.data.schoolId == mySchool();
+      allow read, update: if isDriver()
+                          && resource.data.driverId == request.auth.uid
+                          && resource.data.schoolId == mySchool();
     }
   }
 }
