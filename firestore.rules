@@ -1,71 +1,97 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{db}/documents {
 
-    // ---------- helpers ----------
-    function authed()     { return request.auth != null; }
-    function me()         { return get(/databases/$(db)/documents/users/$(request.auth.uid)); }
-    function hasMe()      { return authed() && me().exists(); }
-    function myRole()     { return hasMe() ? me().data.role : null; }
-    function mySchool()   { return hasMe() ? me().data.schoolId : null; }
-    function isAdmin()    { return myRole() == "admin"; }
-    function isDriver()   { return myRole() == "driver"; }
+    // --- Helper Functions ---
+    // These functions provide shortcuts for common checks in the rules below.
 
-    // ---------- users ----------
-    match /users/{uid} {
-      // users can read their own profile
-      allow read: if authed() && uid == request.auth.uid;
-
-      // admins can read/write any user in their own school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||        // existing doc
-        (request.resource != null && request.resource.data.schoolId == mySchool())    // creating/querying
-      );
+    // Is there a user signed in?
+    function isAuth() {
+      return request.auth != null;
     }
 
-    // ---------- routes ----------
-    match /routes/{id} {
-      // admin full control in their school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||
-        (request.resource != null && request.resource.data.schoolId == mySchool())
-      );
-
-      // drivers may read routes in their school
-      allow read: if isDriver() && resource.data.schoolId == mySchool();
+    // Get the profile document for the currently signed-in user.
+    function getUserProfile() {
+      return get(/databases/$(db)/documents/users/$(request.auth.uid));
     }
 
-    // ---------- buses ----------
-    match /buses/{id} {
-      // admin full control in their school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||
-        (request.resource != null && request.resource.data.schoolId == mySchool())
-      );
+    // Does the current user have a profile document?
+    function userHasProfile() {
+      return isAuth() && getUserProfile() != null;
+    }
 
-      // drivers can query for their own bus by driverId
+    // What is the current user's role? (e.g., "admin", "driver")
+    function getUserRole() {
+      return userHasProfile() ? getUserProfile().data.role : null;
+    }
+    
+    // What is the current user's schoolId?
+    function getUserSchoolId() {
+      return userHasProfile() ? getUserProfile().data.schoolId : null;
+    }
+
+    // Is the current user an admin?
+    function isAdmin() {
+      return getUserRole() == "admin";
+    }
+
+    // Is the current user a driver?
+    function isDriver() {
+      return getUserRole() == "driver";
+    }
+    
+    // Can an admin access this resource?
+    // This function checks if the user is an admin AND the resource
+    // they are trying to access belongs to their own school.
+    function isSchoolAdmin(schoolId) {
+      return isAdmin() && schoolId == getUserSchoolId();
+    }
+
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      // Admins can manage any user within their own school.
+      // A user can always read their own profile.
+      allow read, write: if isSchoolAdmin(resource.data.schoolId) ||
+                             isSchoolAdmin(request.resource.data.schoolId);
+      allow get: if isAuth() && request.auth.uid == userId;
+    }
+
+    match /routes/{routeId} {
+      // Admins have full control over routes in their school.
+      allow read, write: if isSchoolAdmin(resource.data.schoolId) ||
+                             isSchoolAdmin(request.resource.data.schoolId);
+      // Drivers can read any route that belongs to their school.
+      allow get: if isDriver() && resource.data.schoolId == getUserSchoolId();
+    }
+
+    match /buses/{busId} {
+      // Admins have full control over buses in their school.
+      allow read, write: if isSchoolAdmin(resource.data.schoolId) ||
+                             isSchoolAdmin(request.resource.data.schoolId);
+      // A driver can list/query for the bus they are assigned to.
       allow list: if isDriver() && request.query.driverId == request.auth.uid;
-      
-      // drivers can directly get their own bus document
-      allow get: if isDriver() && resource.data.driverId == request.auth.uid;
     }
 
-    // ---------- trips ----------
-    match /trips/{id} {
-      // admin full control in their school
-      allow read, write: if isAdmin() && (
-        (resource != null  && resource.data.schoolId == mySchool()) ||
-        (request.resource != null && request.resource.data.schoolId == mySchool())
-      );
-
-      // drivers: create/update/read only their trips in their school
-      allow create: if isDriver()
-        && request.resource.data.driverId == request.auth.uid
-        && request.resource.data.schoolId == mySchool();
-
-      allow read, update: if isDriver()
-        && resource.data.driverId == request.auth.uid
-        && resource.data.schoolId == mySchool();
+    match /trips/{tripId} {
+        // Admins have full control over trips in their school.
+        allow read, write: if isSchoolAdmin(resource.data.schoolId) ||
+                               isSchoolAdmin(request.resource.data.schoolId);
+        
+        // Drivers can create, read, and update their own trips.
+        function isOwnTrip() {
+            return resource.data.driverId == request.auth.uid &&
+                   resource.data.schoolId == getUserSchoolId();
+        }
+        function isCreatingOwnTrip() {
+            return request.resource.data.driverId == request.auth.uid &&
+                   request.resource.data.schoolId == getUserSchoolId();
+        }
+        
+        allow read, update: if isDriver() && isOwnTrip();
+        allow create: if isDriver() && isCreatingOwnTrip();
     }
   }
 }
