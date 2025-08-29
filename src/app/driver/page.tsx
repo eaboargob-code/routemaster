@@ -107,12 +107,14 @@ export default function DriverPage() {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
+            // Firestore requires the first orderBy to match the inequality filter, if one exists.
+            // Since we filter by driverId and then by a time range, we can't easily order by time
+            // without a composite index. We'll fetch recent trips and find the active one in code.
             const tripQuery = query(
                 collection(db, "trips"),
                 where("driverId", "==", user.uid),
                 where("startedAt", ">=", Timestamp.fromDate(today)),
-                orderBy("startedAt", "desc"),
-                limit(5) 
+                limit(5)
             );
             const tripSnapshot = await getDocs(tripQuery);
 
