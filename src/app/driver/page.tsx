@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Bus, Route, PlayCircle, StopCircle, Info } from 'lucide-react';
+import { Bus, Route, PlayCircle, StopCircle, Info, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface Bus {
@@ -29,6 +29,11 @@ interface Trip {
     id: string;
     startedAt: Timestamp;
     status: 'active' | 'ended';
+}
+
+interface UIState {
+    status: 'loading' | 'error' | 'empty' | 'ready';
+    errorMessage?: string;
 }
 
 function LoadingState() {
@@ -56,13 +61,13 @@ export default function DriverPage() {
     const [bus, setBus] = useState<Bus | null>(null);
     const [route, setRoute] = useState<RouteInfo | null>(null);
     const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+    const [uiState, setUiState] = useState<UIState>({ status: 'loading' });
     const [isSubmitting, setIsSubmitting] = useState(false);
     
     const fetchData = useCallback(async () => {
         if (!user || !profile?.schoolId) return;
 
-        setIsLoading(true);
+        setUiState({ status: 'loading' });
         try {
             // 1. Find assigned bus using a secure and efficient query
             const busQuery = query(
@@ -76,7 +81,7 @@ export default function DriverPage() {
             if (busSnapshot.empty) {
                 setBus(null);
                 setRoute(null);
-                setIsLoading(false);
+                setUiState({ status: 'empty' });
                 return;
             }
             
@@ -120,21 +125,32 @@ export default function DriverPage() {
             } else {
                 setActiveTrip(null);
             }
-        } catch (error) {
+            setUiState({ status: 'ready' });
+        } catch (error: any) {
             console.error("[driver data fetch]", error);
-            // Avoid toast spam for fetch errors, UI will show a message.
+            if (error.code === 'failed-precondition') {
+                setUiState({
+                    status: 'error',
+                    errorMessage: "A database index is required for this query. Please contact your administrator. The detailed error has been logged to the console."
+                });
+            } else {
+                setUiState({
+                    status: 'error',
+                    errorMessage: "An unexpected error occurred while loading your data."
+                });
+            }
             setBus(null);
             setRoute(null);
-        } finally {
-            setIsLoading(false);
         }
     }, [user, profile]);
 
     useEffect(() => {
-        if (!profileLoading) {
+        if (!profileLoading && user && profile) {
             fetchData();
+        } else if (!profileLoading) {
+            setUiState({ status: 'empty' });
         }
-    }, [profileLoading, fetchData]);
+    }, [profileLoading, user, profile, fetchData]);
 
     const handleStartTrip = async () => {
         if (!user || !profile || !bus) return;
@@ -184,11 +200,30 @@ export default function DriverPage() {
     };
 
 
-    if (isLoading || profileLoading) {
+    if (uiState.status === 'loading' || profileLoading) {
         return <LoadingState />;
     }
 
-    if (!bus) {
+    if (uiState.status === 'error') {
+         return (
+            <Card>
+                <CardHeader>
+                    <CardTitle>Error Loading Data</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <Alert variant="destructive">
+                        <AlertTriangle className="h-4 w-4" />
+                        <AlertTitle>Could not load your assignment</AlertTitle>
+                        <AlertDescription>
+                            {uiState.errorMessage}
+                        </AlertDescription>
+                    </Alert>
+                </CardContent>
+            </Card>
+        );
+    }
+    
+    if (uiState.status === 'empty' || !bus) {
         return (
             <Card>
                 <CardHeader>
@@ -246,7 +281,7 @@ export default function DriverPage() {
                         {isSubmitting ? "Ending Trip..." : "End Trip"}
                     </Button>
                 ) : (
-                    <Button onClick={handleStartTrip} disabled={isSubmitting} className="w-full">
+                    <Button onClick={handleStartTrip} disabled={isSubmitting || !bus} className="w-full">
                         <PlayCircle className="mr-2" />
                         {isSubmitting ? "Starting Trip..." : "Start Trip"}
                     </Button>
