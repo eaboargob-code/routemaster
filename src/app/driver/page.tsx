@@ -158,10 +158,13 @@ export default function DriverPage() {
     useEffect(() => {
         if (!profileLoading && user && profile) {
             fetchData();
-        } else if (!profileLoading && !user) {
-            setUiState({ status: 'empty' });
+        } else if (!profileLoading && (!user || !profile)) {
+            // This case handles when loading is done but there is no user/profile.
+            // It prevents staying in a loading state forever.
+            setUiState({ status: 'empty' }); 
         }
     }, [profileLoading, user, profile, fetchData]);
+
 
     const handleStartTrip = async () => {
         if (!user || !profile || !bus) return;
