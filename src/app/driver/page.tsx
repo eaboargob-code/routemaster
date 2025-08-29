@@ -64,7 +64,7 @@ export default function DriverPage() {
 
         setIsLoading(true);
         try {
-            // 1. Find assigned bus
+            // 1. Find assigned bus using a secure and efficient query
             const busQuery = query(
                 collection(db, "buses"),
                 where("driverId", "==", user.uid),
@@ -84,18 +84,21 @@ export default function DriverPage() {
             const busData = { id: busDoc.id, ...busDoc.data() } as Bus;
             setBus(busData);
 
-            // 2. Find assigned route
+            // 2. Find assigned route if it exists
             if (busData.assignedRouteId) {
                 const routeRef = doc(db, "routes", busData.assignedRouteId);
                 const routeDoc = await getDoc(routeRef);
                 if (routeDoc.exists()) {
                     setRoute({ id: routeDoc.id, ...routeDoc.data() } as RouteInfo);
+                } else {
+                    console.warn(`[driver data fetch] Route with id ${busData.assignedRouteId} not found.`);
+                    setRoute(null);
                 }
             } else {
                 setRoute(null);
             }
 
-            // 3. Check for active trip
+            // 3. Check for active trip for today
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const tomorrow = new Date(today);
@@ -119,11 +122,13 @@ export default function DriverPage() {
             }
         } catch (error) {
             console.error("[driver data fetch]", error);
-            toast({ variant: 'destructive', title: "Error", description: "Failed to load your assignment." });
+            // Avoid toast spam for fetch errors, UI will show a message.
+            setBus(null);
+            setRoute(null);
         } finally {
             setIsLoading(false);
         }
-    }, [user, profile, toast]);
+    }, [user, profile]);
 
     useEffect(() => {
         if (!profileLoading) {
