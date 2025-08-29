@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
@@ -7,7 +8,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { useProfile, type UserProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
-import { Bus, LogOut } from "lucide-react";
+import { Bus, LogOut, ShieldAlert } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
 
 function Header() {
@@ -50,14 +51,20 @@ function LoadingScreen() {
     );
 }
 
-function AccessDeniedScreen() {
+function AccessDeniedScreen({ message, details }: { message: string, details?: string }) {
      const router = useRouter();
      return (
          <div className="flex h-screen w-full items-center justify-center bg-background">
-            <div className="flex flex-col items-center gap-4 text-center p-4">
-                <h1 className="text-2xl font-bold text-destructive">Access Denied</h1>
-                <p className="text-muted-foreground">You do not have the required 'driver' role to access this page.</p>
-                <Button onClick={() => signOut(auth).then(() => router.push('/login'))}>Go to Admin Login</Button>
+            <div className="flex flex-col items-center gap-4 text-center p-4 max-w-md mx-auto">
+                <ShieldAlert className="h-12 w-12 text-destructive" />
+                <h1 className="text-2xl font-bold text-destructive">{message}</h1>
+                <p className="text-muted-foreground">
+                    {details || "Please contact your administrator if you believe this is an error."}
+                </p>
+                <div className="flex gap-4 mt-4">
+                    <Button onClick={() => signOut(auth).then(() => router.push('/driver/login'))}>Driver Login</Button>
+                    <Button variant="outline" onClick={() => signOut(auth).then(() => router.push('/login'))}>Admin Login</Button>
+                </div>
             </div>
         </div>
      )
@@ -65,7 +72,7 @@ function AccessDeniedScreen() {
 
 export function DriverGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, profile, loading } = useProfile();
+  const { user, profile, loading, error } = useProfile();
 
   useEffect(() => {
     // If loading is finished and there's no user, redirect to login.
@@ -78,16 +85,24 @@ export function DriverGuard({ children }: { children: ReactNode }) {
   if (loading) {
     return <LoadingScreen />;
   }
-  
-  // If auth check is done but there is no user or profile, it means the redirect is happening.
-  // Return null to avoid a flash of content.
-  if (!user || !profile) {
+
+  // If loading is finished, but there's no authenticated user,
+  // the redirect is in progress. Return null to avoid content flash.
+  if (!user) {
     return null;
   }
   
+  // If loading is finished and we have a user, but their profile failed to load or is missing.
+  if (!profile) {
+    const details = error 
+      ? `Error: ${error.message}. Check browser console for more details.` 
+      : "Your user profile could not be found in the database.";
+    return <AccessDeniedScreen message="Profile Not Found" details={details} />;
+  }
+
   // If the user has a profile but is not a driver, show access denied.
   if (profile.role !== 'driver') {
-    return <AccessDeniedScreen />;
+    return <AccessDeniedScreen message="Access Denied" details="You do not have the required 'driver' role to access this page." />;
   }
 
   // User is an authenticated driver, render the main layout.
