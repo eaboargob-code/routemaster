@@ -28,6 +28,7 @@ interface RouteInfo {
 interface Trip {
     id: string;
     startedAt: Timestamp;
+    endedAt?: Timestamp;
     status: 'active' | 'ended';
 }
 
@@ -80,6 +81,7 @@ export default function DriverPage() {
             if (busSnapshot.empty) {
                 setBus(null);
                 setRoute(null);
+                setActiveTrip(null);
                 setUiState({ status: 'empty' });
                 return;
             }
@@ -103,7 +105,6 @@ export default function DriverPage() {
             }
 
             // 3. Check for an active trip for this driver.
-            // A composite index is needed for this query. If it fails, the UI will show an error.
              const today = new Date();
              today.setHours(0, 0, 0, 0);
 
@@ -112,16 +113,18 @@ export default function DriverPage() {
                 where("driverId", "==", user.uid),
                 where("startedAt", ">=", Timestamp.fromDate(today))
              );
+             
              const tripSnapshot = await getDocs(tripQuery);
              
              // Sort on the client to find the most recent active trip.
              const activeTripDoc = tripSnapshot.docs
-                .filter(d => d.data().status === 'active')
-                .sort((a, b) => b.data().startedAt.toMillis() - a.data().startedAt.toMillis())
+                .map(d => ({ id: d.id, ...d.data() } as Trip))
+                .filter(d => d.status === 'active')
+                .sort((a, b) => b.startedAt.toMillis() - a.startedAt.toMillis())
                 [0];
 
             if (activeTripDoc) {
-                setActiveTrip({ id: activeTripDoc.id, ...activeTripDoc.data() } as Trip);
+                setActiveTrip(activeTripDoc);
             } else {
                 setActiveTrip(null);
             }
@@ -129,14 +132,23 @@ export default function DriverPage() {
             setUiState({ status: 'ready' });
         } catch (error: any) {
             console.error("[driver data fetch]", error);
+            
+            let errorMessage = "An unexpected error occurred while loading your data.";
+            if (error?.code === 'permission-denied') {
+                errorMessage = 'Permission denied. Ask admin or check Firestore rules.';
+            } else if (error?.code === 'failed-precondition') {
+                errorMessage = 'Missing Firestore index. Open the link in the console to create it.';
+            }
+
             toast({
                 variant: 'destructive',
                 title: 'Error Loading Data',
-                description: "An unexpected error occurred while loading your data."
+                description: errorMessage,
             });
+
             setUiState({
                 status: 'error',
-                errorMessage: "An unexpected error occurred while loading your data."
+                errorMessage: errorMessage
             });
             setBus(null);
             setRoute(null);
@@ -147,7 +159,6 @@ export default function DriverPage() {
         if (!profileLoading && user && profile) {
             fetchData();
         } else if (!profileLoading && !user) {
-            // This case can be handled by DriverGuard, but setting state is safe.
             setUiState({ status: 'empty' });
         }
     }, [profileLoading, user, profile, fetchData]);
@@ -170,7 +181,7 @@ export default function DriverPage() {
                 status: "active" as const,
             };
             const docRef = await addDoc(collection(db, "trips"), newTrip);
-            setActiveTrip({ ...newTrip, id: docRef.id });
+            setActiveTrip({ ...newTrip, id: docRef.id, startedAt: newTrip.startedAt });
             toast({ title: "Trip Started!", description: "Your trip is now active.", className: 'bg-accent text-accent-foreground border-0' });
         } catch (error) {
             console.error("[start trip]", error);
