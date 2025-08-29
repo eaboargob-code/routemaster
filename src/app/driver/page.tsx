@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -106,22 +106,22 @@ export default function DriverPage() {
             // 3. Check for active trip for today
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-            const tomorrow = new Date(today);
-            tomorrow.setDate(today.getDate() + 1);
 
+            // This query is simplified to avoid needing a composite index.
+            // It fetches recent trips and we filter for the active one client-side.
             const tripQuery = query(
                 collection(db, "trips"),
                 where("driverId", "==", user.uid),
-                where("status", "==", "active"),
                 where("startedAt", ">=", Timestamp.fromDate(today)),
-                where("startedAt", "<", Timestamp.fromDate(tomorrow)),
-                limit(1)
+                orderBy("startedAt", "desc"),
+                limit(5) // Look at the last 5 trips today
             );
             const tripSnapshot = await getDocs(tripQuery);
 
-            if (!tripSnapshot.empty) {
-                const tripDoc = tripSnapshot.docs[0];
-                setActiveTrip({ id: tripDoc.id, ...tripDoc.data() } as Trip);
+            const activeTripDoc = tripSnapshot.docs.find(d => d.data().status === 'active');
+
+            if (activeTripDoc) {
+                setActiveTrip({ id: activeTripDoc.id, ...activeTripDoc.data() } as Trip);
             } else {
                 setActiveTrip(null);
             }
@@ -290,3 +290,5 @@ export default function DriverPage() {
         </Card>
     )
 }
+
+    
