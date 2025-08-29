@@ -131,7 +131,7 @@ export default function DriverPage() {
             if (error.code === 'failed-precondition') {
                 setUiState({
                     status: 'error',
-                    errorMessage: "A database index is required for this query. Please contact your administrator. The detailed error has been logged to the console."
+                    errorMessage: "The database is being updated to support this query. Please refresh in a minute."
                 });
             } else {
                 setUiState({
