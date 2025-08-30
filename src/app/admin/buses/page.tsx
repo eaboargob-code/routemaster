@@ -109,6 +109,7 @@ interface Route {
 interface Driver {
     id: string;
     displayName: string;
+    email: string;
 }
 
 const NONE_SENTINEL = "__none__";
@@ -384,7 +385,7 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
       return driver ? (
           <div className="flex items-center gap-2">
             <User className="h-4 w-4 text-primary"/>
-            {driver.displayName}
+            {driver.displayName || driver.email}
           </div>
       ) : <span className="text-muted-foreground">Unknown Driver</span>;
   }
@@ -452,7 +453,7 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
                              <SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>
                              {drivers.map((driver) => (
                                <SelectItem key={driver.id} value={driver.id}>
-                                 {driver.displayName}
+                                 {driver.displayName || driver.email}
                                </SelectItem>
                              ))}
                            </SelectContent>
@@ -536,10 +537,14 @@ export default function BusesPage() {
                     where("active", "==", true)
                 );
                 const driversSnapshot = await getDocs(driversQuery);
-                const driversData = driversSnapshot.docs.map(doc => ({ 
-                    id: doc.id,
-                    displayName: doc.data().displayName ?? "Unnamed Driver" 
-                } as Driver));
+                const driversData = driversSnapshot.docs.map(doc => {
+                    const data = doc.data();
+                    return {
+                        id: doc.id,
+                        displayName: data.displayName ?? "",
+                        email: data.email ?? "no-email@example.com",
+                    } as Driver;
+                });
                 setDrivers(driversData);
             } catch (error) {
               console.error("Error fetching drivers:", error);

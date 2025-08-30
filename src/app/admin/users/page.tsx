@@ -17,6 +17,7 @@ import {
   limit,
   type DocumentData,
   type QueryDocumentSnapshot,
+  Timestamp,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -67,7 +68,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast";
-import { UserPlus, Pencil, Shield, CaseSensitive, PersonStanding, Users } from "lucide-react";
+import { UserPlus, Pencil, Shield, CaseSensitive, PersonStanding, Users, Send } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const UserRole = z.enum(["admin", "driver", "supervisor", "parent"]);
@@ -140,7 +141,8 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
             schoolId: schoolId,
             pending: true,
             active: false,
-            displayName: "Invited User"
+            displayName: "Invited User",
+            invitedAt: Timestamp.now(),
         });
         toast({
             title: "Invitation Sent!",
@@ -286,12 +288,42 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
             });
         }
     };
+
+    const handleResendInvite = async () => {
+        const userRef = doc(db, "users", user.id);
+        try {
+            await updateDoc(userRef, {
+                invitedAt: Timestamp.now(),
+            });
+            toast({
+                title: "Invite Resent",
+                description: `A new invitation has been sent to ${user.email}.`,
+                className: 'bg-accent text-accent-foreground border-0',
+            });
+            onUpdate();
+        } catch (error) {
+            console.error("[users resend invite]", error);
+            toast({
+                variant: "destructive",
+                title: "Invite Failed",
+                description: "There was a problem resending the invitation.",
+            });
+        }
+    };
     
     const RoleIcon = roleIcons[user.role];
     
     const getStatusBadge = () => {
         if (user.pending) {
-            return <Badge variant="outline" className="bg-yellow-100 text-yellow-800 border-yellow-200">Pending</Badge>;
+            return (
+                <div className="flex items-center gap-2">
+                     <Badge variant="outline" className="bg-yellow-100 text-yellow-800 border-yellow-200">Pending</Badge>
+                     <Button variant="ghost" size="sm" onClick={handleResendInvite} className="h-7 gap-1 text-xs">
+                        <Send className="h-3 w-3" />
+                        Resend Invite
+                     </Button>
+                </div>
+            );
         }
         if (user.active) {
             return <Badge className="bg-green-100 text-green-800 hover:bg-green-100/80 border-green-200">Active</Badge>;
@@ -314,6 +346,7 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
                     checked={!!user.active}
                     onCheckedChange={handleActiveToggle}
                     aria-label="Toggle Active Status"
+                    disabled={user.pending}
                 />
             </TableCell>
             <TableCell className="text-right">
