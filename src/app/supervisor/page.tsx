@@ -8,6 +8,8 @@ import {
   where,
   getDocs,
   Timestamp,
+  orderBy,
+  type FirestoreError,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -32,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Frown } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 interface Trip {
   id: string;
@@ -41,6 +44,7 @@ interface Trip {
   status: "active" | "ended";
   startedAt: Timestamp;
   endedAt?: Timestamp;
+  schoolId: string;
 }
 
 interface User {
@@ -69,7 +73,7 @@ async function fetchReferencedDocs<T>(collectionName: string, ids: string[]): Pr
     if (ids.length === 0) return dataMap;
 
     const CHUNK_SIZE = 30;
-    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    for (let i = 0; < ids.length; i += CHUNK_SIZE) {
         const idChunk = ids.slice(i, i + CHUNK_SIZE);
         const q = query(collection(db, collectionName), where("__name__", "in", idChunk));
         const snapshot = await getDocs(q);
@@ -83,6 +87,7 @@ async function fetchReferencedDocs<T>(collectionName: string, ids: string[]): Pr
 export default function SupervisorPage() {
   const { profile, loading: profileLoading, error: profileError } = useProfile();
   const schoolId = profile?.schoolId;
+  const { toast } = useToast();
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [referencedData, setReferencedData] = useState<ReferencedData>({
@@ -98,23 +103,23 @@ export default function SupervisorPage() {
     setError(null);
 
     try {
+      const today = new Date();
+      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(today.setHours(23, 59, 59, 999));
+      
+      const startOfDayTs = Timestamp.fromDate(startOfDay);
+      const endOfDayTs = Timestamp.fromDate(endOfDay);
+
       const tripsQuery = query(
         collection(db, "trips"),
-        where("schoolId", "==", currentSchoolId)
+        where("schoolId", "==", currentSchoolId),
+        where("startedAt", ">=", startOfDayTs),
+        where("startedAt", "<=", endOfDayTs),
+        orderBy("startedAt", "desc")
       );
       const tripsSnapshot = await getDocs(tripsQuery);
       
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-
-      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip))
-        .filter(trip => {
-            const startedAtDate = trip.startedAt.toDate();
-            return startedAtDate >= todayStart && startedAtDate <= todayEnd;
-        });
-      
+      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip));
       setTrips(fetchedTrips);
 
       if (fetchedTrips.length > 0) {
@@ -135,11 +140,20 @@ export default function SupervisorPage() {
 
     } catch (err: any) {
       console.error("Failed to fetch trips:", err);
-      setError(err.message || "An unexpected error occurred.");
+       if (err.code === "failed-precondition") {
+        setError("A required database index is still building. Please try again in a minute.");
+        toast({
+          title: "Database Index Building",
+          description: "A required index for this query is still being created. Please wait a moment and try again.",
+          variant: "destructive"
+        });
+      } else {
+         setError(err.message || "An unexpected error occurred.");
+      }
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     if (schoolId) {
@@ -238,3 +252,5 @@ export default function SupervisorPage() {
     </Card>
   );
 }
+
+    

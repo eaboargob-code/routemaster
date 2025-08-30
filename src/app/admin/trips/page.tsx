@@ -10,6 +10,8 @@ import {
   Timestamp,
   doc,
   getDoc,
+  orderBy,
+  type FirestoreError,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -42,6 +44,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Search, Frown } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 // --- Data Interfaces ---
 interface Trip {
@@ -52,6 +55,7 @@ interface Trip {
   status: "active" | "ended";
   startedAt: Timestamp;
   endedAt?: Timestamp;
+  schoolId: string;
 }
 
 interface User {
@@ -98,6 +102,7 @@ async function fetchReferencedDocs<T>(collectionName: string, ids: string[]): Pr
 export default function TripsPage() {
   const { profile, loading: profileLoading, error: profileError } = useProfile();
   const schoolId = profile?.schoolId;
+  const { toast } = useToast();
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [referencedData, setReferencedData] = useState<ReferencedData>({
@@ -116,24 +121,31 @@ export default function TripsPage() {
     setError(null);
 
     try {
-      // 1. Fetch trips for the school
-      const tripsQuery = query(
-        collection(db, "trips"),
-        where("schoolId", "==", currentSchoolId)
-      );
+      // 1. Build the base query for today's trips
+      const today = new Date();
+      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(today.setHours(23, 59, 59, 999));
+      
+      const startOfDayTs = Timestamp.fromDate(startOfDay);
+      const endOfDayTs = Timestamp.fromDate(endOfDay);
+      
+      let tripQueryConstraints = [
+        where("schoolId", "==", currentSchoolId),
+        where("startedAt", ">=", startOfDayTs),
+        where("startedAt", "<=", endOfDayTs),
+      ];
+
+      // Add status filter if not "all"
+      if (statusFilter !== "all") {
+        tripQueryConstraints.push(where("status", "==", statusFilter));
+      }
+      
+      tripQueryConstraints.push(orderBy("startedAt", "desc"));
+      
+      const tripsQuery = query(collection(db, "trips"), ...tripQueryConstraints);
       const tripsSnapshot = await getDocs(tripsQuery);
       
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-
-      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip))
-        .filter(trip => {
-            const startedAtDate = trip.startedAt.toDate();
-            return startedAtDate >= todayStart && startedAtDate <= todayEnd;
-        });
-
+      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip));
       setTrips(fetchedTrips);
 
       if (fetchedTrips.length > 0) {
@@ -157,11 +169,20 @@ export default function TripsPage() {
 
     } catch (err: any) {
       console.error("Failed to fetch trips:", err);
-      setError(err.message || "An unexpected error occurred.");
+      if (err.code === "failed-precondition") {
+        setError("A required database index is still building. Please try again in a minute.");
+        toast({
+          title: "Database Index Building",
+          description: "A required index for this query is still being created. Please wait a moment and try again.",
+          variant: "destructive"
+        });
+      } else {
+         setError(err.message || "An unexpected error occurred.");
+      }
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [schoolId, statusFilter, toast]);
 
   useEffect(() => {
     if (schoolId) {
@@ -173,24 +194,16 @@ export default function TripsPage() {
 
 
   const filteredTrips = useMemo(() => {
+    // Search is now client-side on the already server-filtered data
     const lowercasedSearch = searchTerm.toLowerCase();
+    if (!lowercasedSearch) return trips;
     
     return trips.filter(trip => {
-      // Status filter
-      if (statusFilter !== "all" && trip.status !== statusFilter) {
-        return false;
-      }
-
-      // Search filter
-      if (lowercasedSearch) {
         const driverName = referencedData.users.get(trip.driverId)?.displayName.toLowerCase() || "";
         const busCode = referencedData.buses.get(trip.busId)?.busCode.toLowerCase() || "";
         return driverName.includes(lowercasedSearch) || busCode.includes(lowercasedSearch);
-      }
-
-      return true;
     });
-  }, [trips, statusFilter, searchTerm, referencedData]);
+  }, [trips, searchTerm, referencedData]);
 
   if (profileLoading) {
     return <Skeleton className="h-96 w-full" />;
@@ -304,3 +317,5 @@ export default function TripsPage() {
     </Card>
   );
 }
+
+    
