@@ -56,6 +56,11 @@ interface Trip {
   startedAt: Timestamp;
   endedAt?: Timestamp;
   schoolId: string;
+  lastLocation?: {
+    lat: number;
+    lng: number;
+    at: Timestamp;
+  };
 }
 
 interface User {
@@ -262,20 +267,21 @@ export default function TripsPage() {
                 <TableHead>Status</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Ended</TableHead>
+                <TableHead>Last Update</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={`skel-${i}`}>
-                    <TableCell colSpan={6}>
+                    <TableCell colSpan={7}>
                       <Skeleton className="h-6 w-full" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : error ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-destructive py-8">
+                  <TableCell colSpan={7} className="text-center text-destructive py-8">
                     Error loading trips: {error}
                   </TableCell>
                 </TableRow>
@@ -296,12 +302,13 @@ export default function TripsPage() {
                       </TableCell>
                       <TableCell>{format(trip.startedAt.toDate(), "HH:mm")}</TableCell>
                       <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "HH:mm") : "In Progress"}</TableCell>
+                      <TableCell>{trip.lastLocation?.at ? format(trip.lastLocation.at.toDate(), "HH:mm:ss") : "N/A"}</TableCell>
                     </TableRow>
                   );
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     <div className="flex flex-col items-center gap-2">
                        <Frown className="h-8 w-8" />
                        <span className="font-medium">No trips found</span>
@@ -317,4 +324,3 @@ export default function TripsPage() {
     </Card>
   );
 }
-

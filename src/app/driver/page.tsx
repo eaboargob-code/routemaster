@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit, orderBy, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Bus, Route, PlayCircle, StopCircle, Info, AlertTriangle } from 'lucide-react';
+import { Bus, Route, PlayCircle, StopCircle, Info, AlertTriangle, Send } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface Bus {
@@ -58,6 +58,7 @@ export default function DriverPage() {
     const [route, setRoute] = useState<RouteInfo | null>(null);
     const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isSendingLocation, setIsSendingLocation] = useState(false);
     
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
@@ -108,9 +109,8 @@ export default function DriverPage() {
           throw e;
         }
         
-        // 3) Load trips
+        // 3) Check for an active trip for this driver (today)
         try {
-            // 3) Check for an active trip for this driver (today)
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
@@ -189,6 +189,46 @@ export default function DriverPage() {
         }
     };
 
+    const handleSendLocation = () => {
+        if (!activeTrip) {
+            toast({ variant: "destructive", title: "No Active Trip", description: "You must start a trip to send your location." });
+            return;
+        }
+        setIsSendingLocation(true);
+
+        navigator.geolocation.getCurrentPosition(
+            async (position) => {
+                const { latitude, longitude } = position.coords;
+                const tripRef = doc(db, "trips", activeTrip.id);
+                try {
+                    await updateDoc(tripRef, {
+                        lastLocation: {
+                            lat: latitude,
+                            lng: longitude,
+                            at: serverTimestamp(),
+                        }
+                    });
+                    toast({
+                        title: "Location Sent!",
+                        description: `Coordinates: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+                        className: 'bg-accent text-accent-foreground border-0',
+                    });
+                } catch (error) {
+                    console.error("[send location]", error);
+                    toast({ variant: "destructive", title: "Failed to Send Location", description: (error as Error).message });
+                } finally {
+                    setIsSendingLocation(false);
+                }
+            },
+            (error) => {
+                console.error("Geolocation error:", error);
+                toast({ variant: "destructive", title: "Geolocation Error", description: error.message });
+                setIsSendingLocation(false);
+            },
+            { enableHighAccuracy: true }
+        );
+    };
+
     if (profileLoading) {
         return <LoadingState />;
     }
@@ -263,12 +303,18 @@ export default function DriverPage() {
                     </Alert>
                 )}
             </CardContent>
-            <CardFooter>
+            <CardFooter className="flex flex-col gap-2">
                 {activeTrip ? (
-                    <Button onClick={handleEndTrip} disabled={isSubmitting} className="w-full bg-red-600 hover:bg-red-700 text-white">
-                        <StopCircle className="mr-2" />
-                        {isSubmitting ? "Ending Trip..." : "End Trip"}
-                    </Button>
+                    <>
+                        <Button onClick={handleEndTrip} disabled={isSubmitting} className="w-full bg-red-600 hover:bg-red-700 text-white">
+                            <StopCircle className="mr-2" />
+                            {isSubmitting ? "Ending Trip..." : "End Trip"}
+                        </Button>
+                         <Button onClick={handleSendLocation} disabled={isSendingLocation} className="w-full" variant="outline">
+                            <Send className="mr-2" />
+                            {isSendingLocation ? "Sending..." : "Send Location"}
+                        </Button>
+                    </>
                 ) : (
                     <Button onClick={handleStartTrip} disabled={isSubmitting || !bus || !!activeTrip} className="w-full">
                         <PlayCircle className="mr-2" />
