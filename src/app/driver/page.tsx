@@ -21,7 +21,7 @@ interface Bus {
     busCode: string;
     plate?: string;
     assignedRouteId?: string;
-    supervisorId?: string;
+    supervisorId?: string | null;
 }
 
 interface RouteInfo {

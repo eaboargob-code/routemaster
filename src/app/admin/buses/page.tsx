@@ -77,7 +77,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast";
-import { PlusCircle, Trash2, Pencil, Search, Route, User } from "lucide-react";
+import { PlusCircle, Trash2, Pencil, Search, Route, User, Eye } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const busSchema = z.object({
@@ -97,6 +97,7 @@ interface Bus {
   capacity?: number;
   assignedRouteId?: string | null;
   driverId?: string | null;
+  supervisorId?: string | null;
   active: boolean;
   schoolId: string;
 }
@@ -106,7 +107,7 @@ interface Route {
     name: string;
 }
 
-interface Driver {
+interface UserInfo {
     id: string;
     displayName: string;
     email: string;
@@ -283,7 +284,7 @@ function BusDialog({ children, bus, onComplete, routes, schoolId }: { children: 
 }
 
 
-function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: Route[], drivers: Driver[], schoolId: string, onDataNeedsRefresh: () => void }) {
+function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh }: { routes: Route[], drivers: UserInfo[], supervisors: UserInfo[], schoolId: string, onDataNeedsRefresh: () => void }) {
   const [buses, setBuses] = useState<Bus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -308,6 +309,7 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
                     capacity: typeof d.capacity === 'number' ? d.capacity : undefined,
                     assignedRouteId: d.assignedRouteId ?? null,
                     driverId: d.driverId ?? null,
+                    supervisorId: d.supervisorId ?? null,
                     schoolId: d.schoolId,
                     active: d.active ?? true,
                 } as Bus;
@@ -341,21 +343,21 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
       }
   };
   
-  const handleDriverChange = async (busId: string, newDriverId: string | null) => {
+  const handleAssignUser = async (busId: string, field: 'driverId' | 'supervisorId', newUserId: string | null) => {
     const busRef = doc(db, "buses", busId);
     try {
-        const payload: { driverId?: string | null } = {};
-        if (newDriverId) {
-            payload.driverId = newDriverId;
+        const payload: { [key: string]: any } = {};
+        if (newUserId) {
+            payload[field] = newUserId;
         } else {
-            payload.driverId = deleteField() as any;
+            payload[field] = deleteField();
         }
         await updateDoc(busRef, payload);
         onDataNeedsRefresh();
-        toast({ title: "Driver updated successfully" });
+        toast({ title: `${field === 'driverId' ? 'Driver' : 'Supervisor'} updated successfully` });
     } catch(err) {
-        console.error("[bus driver update]", err);
-        toast({ variant: "destructive", title: "Error", description: "Failed to update driver" });
+        console.error(`[bus ${field} update]`, err);
+        toast({ variant: "destructive", title: "Error", description: `Failed to update ${field === 'driverId' ? 'driver' : 'supervisor'}` });
     }
   }
 
@@ -379,15 +381,31 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
       ) : <span className="text-muted-foreground">Unknown Route</span>;
   }
   
-  const getDriverName = (driverId?: string | null) => {
-      if (!driverId) return <span className="text-muted-foreground">Not Assigned</span>;
-      const driver = drivers.find(d => d.id === driverId);
-      return driver ? (
-          <div className="flex items-center gap-2">
-            <User className="h-4 w-4 text-primary"/>
-            {driver.displayName || driver.email}
-          </div>
-      ) : <span className="text-muted-foreground">Unknown Driver</span>;
+  const renderUserSelect = (bus: Bus, userType: 'driver' | 'supervisor', usersList: UserInfo[]) => {
+    const userId = userType === 'driver' ? bus.driverId : bus.supervisorId;
+    const Icon = userType === 'driver' ? User : Eye;
+
+    return (
+      <Select
+        value={userId ?? NONE_SENTINEL}
+        onValueChange={(value) => handleAssignUser(bus.id, `${userType}Id`, value === NONE_SENTINEL ? null : value)}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder={`Select a ${userType}`} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>
+          {usersList.map((user) => (
+            <SelectItem key={user.id} value={user.id}>
+                <div className="flex items-center gap-2">
+                    <Icon className="h-4 w-4 text-muted-foreground"/>
+                    {user.displayName || user.email}
+                </div>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
   }
 
   return (
@@ -424,13 +442,14 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
               <TableHead>Capacity</TableHead>
               <TableHead>Assigned Route</TableHead>
               <TableHead>Assigned Driver</TableHead>
+              <TableHead>Assigned Supervisor</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell colSpan={7} className="h-24 text-center">
                   <Skeleton className="h-4 w-1/2 mx-auto" />
                 </TableCell>
               </TableRow>
@@ -442,22 +461,10 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
                     <TableCell>{bus.capacity || 'N/A'}</TableCell>
                     <TableCell>{getRouteName(bus.assignedRouteId)}</TableCell>
                     <TableCell>
-                         <Select
-                            value={bus.driverId ?? NONE_SENTINEL}
-                            onValueChange={(value) => handleDriverChange(bus.id, value === NONE_SENTINEL ? null : value)}
-                          >
-                           <SelectTrigger>
-                             <SelectValue placeholder="Select a driver" />
-                           </SelectTrigger>
-                           <SelectContent>
-                             <SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>
-                             {drivers.map((driver) => (
-                               <SelectItem key={driver.id} value={driver.id}>
-                                 {driver.displayName || driver.email}
-                               </SelectItem>
-                             ))}
-                           </SelectContent>
-                         </Select>
+                        {renderUserSelect(bus, 'driver', drivers)}
+                    </TableCell>
+                     <TableCell>
+                        {renderUserSelect(bus, 'supervisor', supervisors)}
                     </TableCell>
                     <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
@@ -493,7 +500,7 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell colSpan={7} className="h-24 text-center">
                   No buses found. Add one to get started!
                 </TableCell>
               </TableRow>
@@ -508,11 +515,35 @@ function BusesList({ routes, drivers, schoolId, onDataNeedsRefresh }: { routes: 
 export default function BusesPage() {
     const { profile, loading: profileLoading, error: profileError } = useProfile();
     const [routes, setRoutes] = useState<Route[]>([]);
-    const [drivers, setDrivers] = useState<Driver[]>([]);
+    const [drivers, setDrivers] = useState<UserInfo[]>([]);
+    const [supervisors, setSupervisors] = useState<UserInfo[]>([]);
     const [key, setKey] = useState(0); // Used to force-refresh child components
     const schoolId = profile?.schoolId;
 
     const onDataNeedsRefresh = useCallback(() => setKey(k => k+1), []);
+
+    const fetchUsersByRole = useCallback(async (schId: string, role: 'driver' | 'supervisor') => {
+        try {
+            const usersQuery = query(
+                collection(db, "users"),
+                where("schoolId", "==", schId),
+                where("role", "==", role),
+                where("active", "==", true)
+            );
+            const usersSnapshot = await getDocs(usersQuery);
+            return usersSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: doc.id,
+                    displayName: data.displayName ?? "",
+                    email: data.email ?? "no-email@example.com",
+                } as UserInfo;
+            });
+        } catch (error) {
+            console.error(`Error fetching ${role}s:`, error);
+            return [];
+        }
+    }, []);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -528,30 +559,16 @@ export default function BusesPage() {
               console.error("Error fetching routes:", error);
             }
             
-            // Fetch drivers
-            try {
-                const driversQuery = query(
-                    collection(db, "users"),
-                    where("schoolId", "==", schoolId),
-                    where("role", "==", "driver"),
-                    where("active", "==", true)
-                );
-                const driversSnapshot = await getDocs(driversQuery);
-                const driversData = driversSnapshot.docs.map(doc => {
-                    const data = doc.data();
-                    return {
-                        id: doc.id,
-                        displayName: data.displayName ?? "",
-                        email: data.email ?? "no-email@example.com",
-                    } as Driver;
-                });
-                setDrivers(driversData);
-            } catch (error) {
-              console.error("Error fetching drivers:", error);
-            }
+            // Fetch drivers and supervisors in parallel
+            const [driversData, supervisorsData] = await Promise.all([
+                fetchUsersByRole(schoolId, 'driver'),
+                fetchUsersByRole(schoolId, 'supervisor')
+            ]);
+            setDrivers(driversData);
+            setSupervisors(supervisorsData);
         };
         fetchData();
-      }, [schoolId, key]);
+      }, [schoolId, key, fetchUsersByRole]);
 
     if (profileLoading) {
         return (
@@ -577,7 +594,7 @@ export default function BusesPage() {
 
     return (
         <div className="grid gap-8">
-            <BusesList key={key} routes={routes} drivers={drivers} schoolId={profile.schoolId} onDataNeedsRefresh={onDataNeedsRefresh} />
+            <BusesList key={key} routes={routes} drivers={drivers} supervisors={supervisors} schoolId={profile.schoolId} onDataNeedsRefresh={onDataNeedsRefresh} />
         </div>
     );
 }
