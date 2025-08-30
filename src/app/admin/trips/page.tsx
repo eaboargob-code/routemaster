@@ -44,7 +44,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Search, Frown, Eye } from "lucide-react";
+import { Search, Frown, Eye, UserCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 
@@ -54,6 +54,8 @@ interface Trip {
   driverId: string;
   busId: string;
   routeId: string | null;
+  supervisorId?: string | null;
+  allowDriverAsSupervisor?: boolean;
   status: "active" | "ended";
   startedAt: Timestamp;
   endedAt?: Timestamp;
@@ -68,6 +70,7 @@ interface Trip {
 interface User {
   id: string;
   displayName: string;
+  email: string;
 }
 
 interface Bus {
@@ -157,7 +160,9 @@ export default function TripsPage() {
 
       if (fetchedTrips.length > 0) {
         // 2. Collect unique IDs for batch fetching
-        const userIds = [...new Set(fetchedTrips.map(t => t.driverId))];
+        const driverIds = [...new Set(fetchedTrips.map(t => t.driverId))];
+        const supervisorIds = [...new Set(fetchedTrips.map(t => t.supervisorId).filter(Boolean) as string[])];
+        const userIds = [...new Set([...driverIds, ...supervisorIds])];
         const busIds = [...new Set(fetchedTrips.map(t => t.busId))];
         const routeIds = [...new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[])];
 
@@ -228,6 +233,22 @@ export default function TripsPage() {
     return content || <span className="text-muted-foreground">N/A</span>;
   };
   
+  const getSupervisorContent = (trip: Trip) => {
+    if (trip.allowDriverAsSupervisor) {
+      return (
+        <Badge variant="outline">
+          <UserCheck className="mr-2 h-3.5 w-3.5 text-blue-600" />
+          Driver as Supervisor
+        </Badge>
+      );
+    }
+    if (trip.supervisorId) {
+      const supervisor = referencedData.users.get(trip.supervisorId);
+      return renderCellContent(supervisor?.displayName || supervisor?.email);
+    }
+    return <span className="text-muted-foreground">No supervisor</span>;
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -266,6 +287,7 @@ export default function TripsPage() {
                 <TableHead>Driver</TableHead>
                 <TableHead>Bus</TableHead>
                 <TableHead>Route</TableHead>
+                <TableHead>Supervisor</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Ended</TableHead>
@@ -277,14 +299,14 @@ export default function TripsPage() {
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={`skel-${i}`}>
-                    <TableCell colSpan={8}>
+                    <TableCell colSpan={9}>
                       <Skeleton className="h-6 w-full" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : error ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-destructive py-8">
+                  <TableCell colSpan={9} className="text-center text-destructive py-8">
                     Error loading trips: {error}
                   </TableCell>
                 </TableRow>
@@ -298,6 +320,7 @@ export default function TripsPage() {
                       <TableCell>{renderCellContent(driver?.displayName)}</TableCell>
                       <TableCell>{renderCellContent(bus?.busCode)}</TableCell>
                       <TableCell>{renderCellContent(route?.name)}</TableCell>
+                      <TableCell>{getSupervisorContent(trip)}</TableCell>
                       <TableCell>
                         <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800' : ''}>
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
@@ -319,7 +342,7 @@ export default function TripsPage() {
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     <div className="flex flex-col items-center gap-2">
                        <Frown className="h-8 w-8" />
                        <span className="font-medium">No trips found</span>
