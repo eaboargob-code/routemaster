@@ -1,14 +1,13 @@
 
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
-import { useProfile, type UserProfile } from "@/lib/useProfile";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
-import { Bus, LogOut, ShieldAlert, Eye } from "lucide-react";
+import { LogOut, ShieldAlert, Eye } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
 
 function Header() {
@@ -75,19 +74,24 @@ export function SupervisorGuard({ children }: { children: ReactNode }) {
   const { user, profile, loading, error } = useProfile();
 
   useEffect(() => {
+    // If loading is finished and there's no user, redirect to login.
     if (!loading && !user) {
         router.replace("/supervisor/login");
     }
   }, [user, loading, router]);
 
+  // While checking auth state, show a loading screen.
   if (loading) {
     return <LoadingScreen />;
   }
 
+  // If loading is finished, but there's no authenticated user,
+  // the redirect is in progress. Return null to avoid content flash.
   if (!user) {
     return null;
   }
   
+  // If loading is finished and we have a user, but their profile failed to load or is missing.
   if (!profile) {
     const details = error 
       ? `Error: ${error.message}. Check browser console for more details.` 
@@ -95,10 +99,12 @@ export function SupervisorGuard({ children }: { children: ReactNode }) {
     return <AccessDeniedScreen message="Profile Not Found" details={details} />;
   }
 
+  // If the user has a profile but is not a supervisor, show access denied.
   if (profile.role !== 'supervisor') {
     return <AccessDeniedScreen message="Access Denied" details="You do not have the required 'supervisor' role to access this page." />;
   }
 
+  // User is an authenticated supervisor, render the main layout.
   return (
     <div className="flex min-h-screen w-full flex-col">
       <Header />

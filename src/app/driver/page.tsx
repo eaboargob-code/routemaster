@@ -10,14 +10,18 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Bus, Route, PlayCircle, StopCircle, Info, AlertTriangle, Send } from 'lucide-react';
+import { Bus, Route, PlayCircle, StopCircle, Info, AlertTriangle, Send, Users } from 'lucide-react';
 import { format } from 'date-fns';
+import { TripRoster } from '../supervisor/trips/[id]/TripRoster';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 
 interface Bus {
     id: string;
     busCode: string;
     plate?: string;
     assignedRouteId?: string;
+    supervisorId?: string;
 }
 
 interface RouteInfo {
@@ -30,6 +34,7 @@ interface Trip {
     startedAt: Timestamp;
     endedAt?: Timestamp;
     status: 'active' | 'ended';
+    allowDriverAsSupervisor?: boolean;
 }
 
 function LoadingState() {
@@ -59,6 +64,7 @@ export default function DriverPage() {
     const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSendingLocation, setIsSendingLocation] = useState(false);
+    const [allowDriverAsSupervisor, setAllowDriverAsSupervisor] = useState(false);
     
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
@@ -85,7 +91,7 @@ export default function DriverPage() {
         } catch (e) {
           console.error("[driver] failed bus query", e);
           toast({ variant: 'destructive', title: 'Error Loading Bus', description: (e as Error).message });
-          throw e;
+          return;
         }
 
         // 2) Load route (if any)
@@ -106,7 +112,7 @@ export default function DriverPage() {
         } catch (e) {
           console.error("[driver] failed route get", e);
           toast({ variant: 'destructive', title: 'Error Loading Route', description: (e as Error).message });
-          throw e;
+          // continue, not fatal
         }
         
         // 3) Check for an active trip for this driver (today)
@@ -158,6 +164,8 @@ export default function DriverPage() {
                 schoolId: profile.schoolId,
                 startedAt: Timestamp.now(),
                 status: "active" as const,
+                supervisorId: bus.supervisorId || null,
+                allowDriverAsSupervisor: allowDriverAsSupervisor || false,
             };
             const docRef = await addDoc(collection(db, "trips"), newTrip);
             setActiveTrip({ ...newTrip, id: docRef.id, startedAt: newTrip.startedAt });
@@ -270,58 +278,92 @@ export default function DriverPage() {
             </Card>
         );
     }
+
+    const showRoster = activeTrip && activeTrip.allowDriverAsSupervisor;
     
     return (
-        <Card className="w-full max-w-2xl mx-auto">
-            <CardHeader>
-                <CardTitle>Welcome, {profile?.displayName || 'Driver'}!</CardTitle>
-                <CardDescription>Here is your assignment for today.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <div className="border p-4 rounded-lg space-y-2">
-                    <h3 className="font-semibold flex items-center gap-2"><Bus className="h-5 w-5 text-primary" /> Your Bus</h3>
-                    <p className="pl-7"><strong>Code:</strong> {bus.busCode}</p>
-                    {bus.plate && <p className="pl-7"><strong>Plate:</strong> {bus.plate}</p>}
-                </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+            <Card className="w-full max-w-2xl mx-auto lg:col-span-2">
+                <CardHeader>
+                    <CardTitle>Welcome, {profile?.displayName || 'Driver'}!</CardTitle>
+                    <CardDescription>Here is your assignment for today.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="border p-4 rounded-lg space-y-2">
+                        <h3 className="font-semibold flex items-center gap-2"><Bus className="h-5 w-5 text-primary" /> Your Bus</h3>
+                        <p className="pl-7"><strong>Code:</strong> {bus.busCode}</p>
+                        {bus.plate && <p className="pl-7"><strong>Plate:</strong> {bus.plate}</p>}
+                    </div>
 
-                 <div className="border p-4 rounded-lg space-y-2">
-                    <h3 className="font-semibold flex items-center gap-2"><Route className="h-5 w-5 text-primary" /> Your Route</h3>
-                    {route ? (
-                         <p className="pl-7"><strong>Name:</strong> {route.name}</p>
-                    ) : (
-                         <p className="pl-7 text-muted-foreground">No route assigned to this bus.</p>
+                    <div className="border p-4 rounded-lg space-y-2">
+                        <h3 className="font-semibold flex items-center gap-2"><Route className="h-5 w-5 text-primary" /> Your Route</h3>
+                        {route ? (
+                            <p className="pl-7"><strong>Name:</strong> {route.name}</p>
+                        ) : (
+                            <p className="pl-7 text-muted-foreground">No route assigned to this bus.</p>
+                        )}
+                    </div>
+
+                    {!activeTrip && (
+                        <div className="flex items-center space-x-2 border p-4 rounded-lg">
+                            <Switch 
+                                id="driver-supervisor-mode" 
+                                checked={allowDriverAsSupervisor} 
+                                onCheckedChange={setAllowDriverAsSupervisor}
+                            />
+                            <Label htmlFor="driver-supervisor-mode">Act as Supervisor?</Label>
+                        </div>
                     )}
-                </div>
 
-                {activeTrip && (
-                     <Alert variant="default" className="bg-blue-50 border-blue-200">
-                        <Info className="h-4 w-4 !text-blue-700" />
-                        <AlertTitle className="text-blue-800">Trip in Progress</AlertTitle>
-                        <AlertDescription className="text-blue-700">
-                            Started at: {format(activeTrip.startedAt.toDate(), "HH:mm")}
-                        </AlertDescription>
-                    </Alert>
-                )}
-            </CardContent>
-            <CardFooter className="flex flex-col gap-2">
-                {activeTrip ? (
-                    <>
-                        <Button onClick={handleEndTrip} disabled={isSubmitting} className="w-full bg-red-600 hover:bg-red-700 text-white">
-                            <StopCircle className="mr-2" />
-                            {isSubmitting ? "Ending Trip..." : "End Trip"}
+                    {activeTrip && (
+                        <Alert variant="default" className="bg-blue-50 border-blue-200">
+                            <Info className="h-4 w-4 !text-blue-700" />
+                            <AlertTitle className="text-blue-800">Trip in Progress</AlertTitle>
+                            <AlertDescription className="text-blue-700">
+                                Started at: {format(activeTrip.startedAt.toDate(), "HH:mm")}
+                            </AlertDescription>
+                        </Alert>
+                    )}
+                </CardContent>
+                <CardFooter className="flex flex-col gap-2">
+                    {activeTrip ? (
+                        <>
+                            <Button onClick={handleEndTrip} disabled={isSubmitting} className="w-full bg-red-600 hover:bg-red-700 text-white">
+                                <StopCircle className="mr-2" />
+                                {isSubmitting ? "Ending Trip..." : "End Trip"}
+                            </Button>
+                            <Button onClick={handleSendLocation} disabled={isSendingLocation} className="w-full" variant="outline">
+                                <Send className="mr-2" />
+                                {isSendingLocation ? "Sending..." : "Send Location"}
+                            </Button>
+                        </>
+                    ) : (
+                        <Button onClick={handleStartTrip} disabled={isSubmitting || !bus || !!activeTrip} className="w-full">
+                            <PlayCircle className="mr-2" />
+                            {isSubmitting ? "Starting Trip..." : "Start Trip"}
                         </Button>
-                         <Button onClick={handleSendLocation} disabled={isSendingLocation} className="w-full" variant="outline">
-                            <Send className="mr-2" />
-                            {isSendingLocation ? "Sending..." : "Send Location"}
-                        </Button>
-                    </>
-                ) : (
-                    <Button onClick={handleStartTrip} disabled={isSubmitting || !bus || !!activeTrip} className="w-full">
-                        <PlayCircle className="mr-2" />
-                        {isSubmitting ? "Starting Trip..." : "Start Trip"}
-                    </Button>
-                )}
-            </CardFooter>
-        </Card>
+                    )}
+                </CardFooter>
+            </Card>
+
+            {showRoster && activeTrip && profile && (
+                 <Card className="lg:col-span-1">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Users className="h-5 w-5 text-primary" />
+                            Trip Roster
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <TripRoster 
+                            tripId={activeTrip.id} 
+                            schoolId={profile.schoolId} 
+                            routeId={route?.id} 
+                            busId={bus.id} 
+                        />
+                    </CardContent>
+                </Card>
+            )}
+        </div>
     )
 }

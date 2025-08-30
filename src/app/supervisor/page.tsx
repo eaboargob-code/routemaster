@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback } from "react";
+import Link from "next/link";
 import {
   collection,
   query,
@@ -30,10 +31,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Frown } from "lucide-react";
+import { Frown, Eye } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Trip {
@@ -204,20 +206,21 @@ export default function SupervisorPage() {
                 <TableHead>Started</TableHead>
                 <TableHead>Ended</TableHead>
                 <TableHead>Last Update</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={`skel-${i}`}>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={8}>
                       <Skeleton className="h-6 w-full" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : error ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-destructive py-8">
+                  <TableCell colSpan={8} className="text-center text-destructive py-8">
                     Error loading trips: {error}
                   </TableCell>
                 </TableRow>
@@ -237,14 +240,22 @@ export default function SupervisorPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>{format(trip.startedAt.toDate(), "HH:mm")}</TableCell>
-                      <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "HH:mm") : "In Progress"}</TableCell>
+                      <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "HH:mm") : <span className="text-muted-foreground">In Progress</span>}</TableCell>
                       <TableCell>{trip.lastLocation?.at ? format(trip.lastLocation.at.toDate(), "HH:mm:ss") : "N/A"}</TableCell>
+                      <TableCell className="text-right">
+                         <Button asChild variant="outline" size="sm">
+                            <Link href={`/supervisor/trips/${trip.id}`}>
+                                <Eye className="mr-2 h-4 w-4" />
+                                View Roster
+                            </Link>
+                         </Button>
+                      </TableCell>
                     </TableRow>
                   );
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                     <div className="flex flex-col items-center gap-2">
                        <Frown className="h-8 w-8" />
                        <span className="font-medium">No trips found for today</span>

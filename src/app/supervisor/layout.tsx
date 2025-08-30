@@ -12,5 +12,7 @@ export default function SupervisorLayout({ children }: { children: ReactNode }) 
     return <>{children}</>;
   }
 
+  // All other routes under /supervisor are protected.
+  // Note: The details page will also be wrapped by this guard.
   return <SupervisorGuard>{children}</SupervisorGuard>;
 }
