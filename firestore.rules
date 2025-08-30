@@ -1,3 +1,4 @@
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
@@ -34,13 +35,16 @@ service cloud.firestore {
     // Admins have full control over buses in their school.
     // Drivers can list buses assigned to them and get their specific bus.
     match /buses/{id} {
+  // Admins: keep your existing admin control
       allow read, write: if isAdmin() && (
         (resource != null && resource.data.schoolId == mySchool()) ||
         (request.resource.data.schoolId == mySchool())
       );
-      allow list: if isDriver() && request.query.driverId == request.auth.uid;
-      allow get: if isDriver() && resource.data.driverId == request.auth.uid;
+
+  // Drivers: may read only buses assigned to them (works for get and queries)
+      allow read: if isDriver() && resource.data.driverId == request.auth.uid;
     }
+
     
     // Trips collection - rules to be defined
     match /trips/{id} {
