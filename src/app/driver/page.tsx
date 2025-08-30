@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -62,65 +62,68 @@ export default function DriverPage() {
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
 
+        // 1) Find bus
+        let busDoc;
         try {
-            // 1. Find assigned bus.
-            const busQuery = query(
-                collection(db, "buses"),
-                where("driverId", "==", user.uid)
-            );
-            const busSnapshot = await getDocs(busQuery);
+          const busQuery = query(
+            collection(db, "buses"),
+            where("driverId", "==", user.uid),
+            limit(1)
+          );
+          const busSnap = await getDocs(busQuery);
+          if (busSnap.empty) {
+            setBus(null);
+            setRoute(null);
+            setActiveTrip(null);
+            return;
+          }
+          busDoc = busSnap.docs[0];
+          const busData = { id: busDoc.id, ...busDoc.data() } as Bus;
+          setBus(busData);
+        } catch (e) {
+          console.error("[driver] failed bus query", e);
+          toast({ variant: 'destructive', title: 'Error Loading Bus', description: (e as Error).message });
+          throw e;
+        }
 
-            if (busSnapshot.empty) {
-                setBus(null);
-                setRoute(null);
-                setActiveTrip(null);
-                return;
-            }
-            
-            const busDoc = busSnapshot.docs[0];
-            const busData = { id: busDoc.id, ...busDoc.data() } as Bus;
-            setBus(busData);
-
-            // 2. Find assigned route if it exists.
-            if (busData.assignedRouteId) {
-                const routeRef = doc(db, "routes", busData.assignedRouteId);
-                const routeDoc = await getDoc(routeRef);
-                setRoute(routeDoc.exists() ? { id: routeDoc.id, ...routeDoc.data() } as RouteInfo : null);
+        // 2) Load route (if any)
+        try {
+          const assigned = (busDoc.data() as any).assignedRouteId;
+          if (assigned) {
+            const routeRef = doc(db, "routes", assigned);
+            const routeSnap = await getDoc(routeRef);
+            if (routeSnap.exists()) {
+              setRoute({ id: routeSnap.id, ...routeSnap.data() } as RouteInfo);
             } else {
-                setRoute(null);
+              console.warn("[driver] route not found", assigned);
+              setRoute(null);
             }
-
-            // 3. Check for an active trip.
-             const today = new Date();
-             today.setHours(0, 0, 0, 0);
-
-             const tripQuery = query(
-                collection(db, "trips"),
-                where("driverId", "==", user.uid),
-                where("startedAt", ">=", Timestamp.fromDate(today))
-             );
-             
-             const tripSnapshot = await getDocs(tripQuery);
-             const activeTripDoc = tripSnapshot.docs
-                .map(d => ({ id: d.id, ...d.data() } as Trip))
-                .find(d => d.status === 'active');
-             setActiveTrip(activeTripDoc || null);
-
-        } catch (error: any) {
-            console.error("[driver data fetch]", error);
-            
-            let errorMessage = "An unexpected error occurred while loading your data.";
-            if (error?.code === 'permission-denied') {
-                errorMessage = 'Permission denied. Ask admin or check Firestore rules.';
-            } else if (error?.code === 'failed-precondition') {
-                errorMessage = 'Missing Firestore index. Open the link in the console to create it.';
-            }
-
-            toast({
-                variant: 'destructive',
-                title: 'Error Loading Data',
-                description: errorMessage,
-            });
+          } else {
+            setRoute(null);
+          }
+        } catch (e) {
+          console.error("[driver] failed route get", e);
+          toast({ variant: 'destructive', title: 'Error Loading Route', description: (e as Error).message });
+          throw e;
+        }
+        
+        // 3) Load trips
+        try {
+          const today = new Date(); today.setHours(0,0,0,0);
+          const tripQuery = query(
+            collection(db, "trips"),
+            where("driverId", "==", user.uid),
+            where("startedAt", ">=", Timestamp.fromDate(today))
+          );
+          const tripSnap = await getDocs(tripQuery);
+          const active = tripSnap.docs
+            .map(d => ({ id: d.id, ...d.data() } as Trip))
+            .find(d => d.status === 'active');
+          setActiveTrip(active || null);
+        } catch (e) {
+          console.error("[driver] failed trips query", e);
+          // don’t throw; we can still render bus/route
+          toast({ variant: 'destructive', title: 'Error Loading Trips', description: 'Could not load active trip status.' });
         }
     }, [user, profile, toast]);
 
