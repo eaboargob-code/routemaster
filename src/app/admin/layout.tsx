@@ -1,12 +1,16 @@
+
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { doc, onSnapshot } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { auth } from "@/lib/firebase";
+import { useProfile } from "@/lib/useProfile";
+
 import { AdminHeader } from "./components/header";
-import { DebugBanner, type UserProfile } from "./components/DebugBanner";
+import { DebugBanner } from "./components/DebugBanner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ShieldAlert } from "lucide-react";
 
 function LoadingScreen() {
     return (
@@ -22,58 +26,69 @@ function LoadingScreen() {
     );
 }
 
-export default function AdminLayout({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const router = useRouter();
+function AccessDenied() {
+    const { profile } = useProfile();
+    const router = useRouter();
 
-  useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-      } else {
-        setProfile(null);
-        setUser(null);
-        router.replace("/login");
-        setLoading(false);
-      }
-    });
-
-    return () => unsubscribeAuth();
-  }, [router]);
-
-  useEffect(() => {
-    if (!user) {
-        setProfile(null);
-        return;
+    const handleRedirect = () => {
+        if (!profile || !profile.role) {
+            router.push('/login');
+            return;
+        }
+        switch(profile.role) {
+            case 'driver':
+                router.push('/driver');
+                break;
+            case 'supervisor':
+                router.push('/supervisor');
+                break;
+            default:
+                router.push('/login');
+        }
     }
 
-    setLoading(true);
-    const profileRef = doc(db, "users", user.uid);
-    const unsubscribeProfile = onSnapshot(profileRef, (doc) => {
-        if (doc.exists()) {
-            setProfile(doc.data() as UserProfile);
-        } else {
-            setProfile(null);
-        }
-        setLoading(false);
-    }, (error) => {
-        console.error("Error fetching user profile:", error);
-        setProfile(null);
-        setLoading(false);
-    });
+    return (
+         <div className="flex h-screen w-full items-center justify-center bg-background">
+            <div className="flex flex-col items-center gap-4 text-center p-4 max-w-md mx-auto">
+                <ShieldAlert className="h-12 w-12 text-destructive" />
+                <h1 className="text-2xl font-bold text-destructive">Access Denied</h1>
+                <p className="text-muted-foreground">
+                    Your role is currently set to <span className="font-bold">{profile?.role || 'N/A'}</span>. You must be an administrator to access this page.
+                </p>
+                <div className="flex gap-4 mt-4">
+                     <button onClick={handleRedirect} className="text-primary underline">Go to your portal</button>
+                </div>
+            </div>
+        </div>
+    )
+}
 
-    return () => unsubscribeProfile();
+export default function AdminLayout({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  const { user, profile, loading } = useProfile();
 
-  }, [user]);
-
-  if (loading && !user) {
+  useEffect(() => {
+    if (!loading && !user) {
+        router.replace("/login");
+    }
+  }, [user, loading, router]);
+  
+  if (loading) {
     return <LoadingScreen />;
   }
   
   if (!user) {
-    return null;
+    return null; // Redirecting
+  }
+  
+  if (!profile) {
+      // Profile is still loading or doesn't exist.
+      // useProfile handles the error state for this.
+      return <LoadingScreen />;
+  }
+  
+  if (profile.role !== 'admin') {
+      return <AccessDenied />;
   }
 
   return (

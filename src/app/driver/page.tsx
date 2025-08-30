@@ -2,10 +2,12 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit, orderBy, serverTimestamp } from 'firebase/firestore';
+import { doc, addDoc, updateDoc, Timestamp, serverTimestamp, collection, type DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
+import { getAssignedBusForDriver, getRouteById, getActiveOrTodayTripsForDriver, getUsersByIds } from '@/lib/firestoreQueries';
+
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -16,7 +18,7 @@ import { TripRoster } from '../supervisor/trips/[id]/TripRoster';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 
-interface Bus {
+interface Bus extends DocumentData {
     id: string;
     busCode: string;
     plate?: string;
@@ -24,12 +26,12 @@ interface Bus {
     supervisorId?: string | null;
 }
 
-interface RouteInfo {
+interface RouteInfo extends DocumentData {
     id: string;
     name: string;
 }
 
-interface Trip {
+interface Trip extends DocumentData {
     id: string;
     startedAt: Timestamp;
     endedAt?: Timestamp;
@@ -38,7 +40,7 @@ interface Trip {
     allowDriverAsSupervisor?: boolean;
 }
 
-interface Supervisor {
+interface Supervisor extends DocumentData {
     id: string;
     displayName: string;
     email: string;
@@ -63,112 +65,57 @@ function LoadingState() {
 }
 
 export default function DriverPage() {
-    const { user, profile, loading: profileLoading, error: profileError } = useProfile();
+    const { user, profile, loading: profileLoading } = useProfile();
     const { toast } = useToast();
 
     const [bus, setBus] = useState<Bus | null>(null);
     const [route, setRoute] = useState<RouteInfo | null>(null);
     const [supervisor, setSupervisor] = useState<Supervisor | null>(null);
     const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSendingLocation, setIsSendingLocation] = useState(false);
     const [allowDriverAsSupervisor, setAllowDriverAsSupervisor] = useState(false);
     
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
+        setIsLoading(true);
+        setError(null);
 
-        // 1) Find bus
-        let busDoc;
-        let busData: Bus;
         try {
-          const busQuery = query(
-            collection(db, "buses"),
-            where("driverId", "==", user.uid),
-            where("schoolId", "==", profile.schoolId),
-            limit(1)
-          );
-          const busSnap = await getDocs(busQuery);
-          if (busSnap.empty) {
-            setBus(null);
-            setRoute(null);
-            setSupervisor(null);
-            setActiveTrip(null);
-            return;
-          }
-          busDoc = busSnap.docs[0];
-          busData = { id: busDoc.id, ...busDoc.data() } as Bus;
-          setBus(busData);
-        } catch (e) {
-          console.error("[driver] failed bus query", e);
-          toast({ variant: 'destructive', title: 'Error Loading Bus', description: (e as Error).message });
-          return;
-        }
+            const assignedBus = await getAssignedBusForDriver(profile.schoolId, user.uid) as Bus | null;
+            setBus(assignedBus);
 
-        // 2) Load route (if any)
-        try {
-          const assignedRouteId = busData.assignedRouteId;
-          if (assignedRouteId) {
-            const routeRef = doc(db, "routes", assignedRouteId);
-            const routeSnap = await getDoc(routeRef);
-            if (routeSnap.exists()) {
-              setRoute({ id: routeSnap.id, ...routeSnap.data() } as RouteInfo);
-            } else {
-              console.warn("[driver] route not found", assignedRouteId);
-              setRoute(null);
-            }
-          } else {
-            setRoute(null);
-          }
-        } catch (e) {
-          console.error("[driver] failed route get", e);
-          toast({ variant: 'destructive', title: 'Error Loading Route', description: (e as Error).message });
-        }
-        
-        // 3) Check for an active trip for this driver (today)
-        try {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-
-            const tripQuery = query(
-              collection(db, "trips"),
-              where("driverId", "==", user.uid),
-              where("schoolId", "==", profile.schoolId),
-              where("status", "==", "active"),
-              where("startedAt", ">=", Timestamp.fromDate(today)),
-              orderBy("startedAt", "desc"),
-              limit(1)
-            );
-
-            const tripSnapshot = await getDocs(tripQuery);
-
-            const activeTripData = tripSnapshot.docs[0];
-            if (activeTripData) {
-                const trip = { id: activeTripData.id, ...activeTripData.data() } as Trip;
-                setActiveTrip(trip);
-
-                // 4) Fetch supervisor info if trip is active
-                if (trip.supervisorId) {
-                    try {
-                        const supervisorRef = doc(db, "users", trip.supervisorId);
-                        const supervisorSnap = await getDoc(supervisorRef);
-                        if (supervisorSnap.exists()) {
-                            setSupervisor(supervisorSnap.data() as Supervisor);
-                        }
-                    } catch (e) {
-                        console.error("[driver] failed supervisor get", e);
-                        toast({ variant: 'destructive', title: 'Error Loading Supervisor', description: (e as Error).message });
-                    }
-                } else {
-                    setSupervisor(null);
-                }
-            } else {
-                 setActiveTrip(null);
-                 setSupervisor(null);
+            if (!assignedBus) {
+                setIsLoading(false);
+                return;
             }
 
-        } catch (e) {
-          console.error("[driver] failed trips query", e);
-          toast({ variant: 'destructive', title: 'Error Loading Trips', description: 'Could not load active trip status.' });
+            const [assignedRoute, trips, supervisorData] = await Promise.all([
+                getRouteById(assignedBus.assignedRouteId),
+                getActiveOrTodayTripsForDriver(profile.schoolId, user.uid),
+                assignedBus.supervisorId ? getUsersByIds([assignedBus.supervisorId]) : Promise.resolve(null)
+            ]);
+
+            setRoute(assignedRoute as RouteInfo | null);
+            
+            if (supervisorData && assignedBus.supervisorId) {
+                setSupervisor(supervisorData[assignedBus.supervisorId] as Supervisor);
+            }
+
+            const currentActiveTrip = trips.find(t => t.status === 'active') as Trip | null;
+            setActiveTrip(currentActiveTrip ?? null);
+
+        } catch (e: any) {
+            console.error("[driver] failed to fetch data", e);
+            const message = e.code === 'permission-denied'
+                ? "Permission denied. Ask your admin to check your assignment."
+                : e.message || "An unknown error occurred.";
+            setError(message);
+            toast({ variant: 'destructive', title: 'Error Loading Data', description: message });
+        } finally {
+            setIsLoading(false);
         }
     }, [user, profile, toast]);
 
@@ -198,7 +145,7 @@ export default function DriverPage() {
                 allowDriverAsSupervisor: allowDriverAsSupervisor || false,
             };
             const docRef = await addDoc(collection(db, "trips"), newTrip);
-            setActiveTrip({ ...newTrip, id: docRef.id, startedAt: newTrip.startedAt });
+            setActiveTrip({ ...newTrip, id: docRef.id });
             toast({ title: "Trip Started!", description: "Your trip is now active.", className: 'bg-accent text-accent-foreground border-0' });
         } catch (error) {
             console.error("[start trip]", error);
@@ -218,7 +165,8 @@ export default function DriverPage() {
                 status: "ended"
             });
             setActiveTrip(null);
-            setSupervisor(null);
+            setSupervisor(null); // Clear supervisor on trip end
+            fetchData(); // Re-fetch to confirm state
             toast({ title: "Trip Ended", description: "Your trip has been successfully logged." });
         } catch (error) {
             console.error("[end trip]", error);
@@ -301,11 +249,11 @@ export default function DriverPage() {
         )
     }
 
-    if (profileLoading) {
+    if (profileLoading || isLoading) {
         return <LoadingState />;
     }
 
-    if (profileError) {
+    if (error) {
          return (
             <Card className="w-full max-w-2xl mx-auto">
                 <CardHeader>
@@ -315,9 +263,7 @@ export default function DriverPage() {
                     <Alert variant="destructive">
                         <AlertTriangle className="h-4 w-4" />
                         <AlertTitle>Could not load your assignment</AlertTitle>
-                        <AlertDescription>
-                            {profileError.message}
-                        </AlertDescription>
+                        <AlertDescription>{error}</AlertDescription>
                     </Alert>
                 </CardContent>
             </Card>
@@ -396,7 +342,7 @@ export default function DriverPage() {
                         </Alert>
                     )}
                 </CardContent>
-                <CardFooter className="flex flex-col gap-2">
+                <CardFooter className="flex flex-col sm:flex-row gap-2">
                     {activeTrip ? (
                         <>
                             <Button onClick={handleEndTrip} disabled={isSubmitting} className="w-full bg-red-600 hover:bg-red-700 text-white">
@@ -409,7 +355,7 @@ export default function DriverPage() {
                             </Button>
                         </>
                     ) : (
-                        <Button onClick={handleStartTrip} disabled={isSubmitting || !bus || !!activeTrip} className="w-full">
+                        <Button onClick={handleStartTrip} disabled={isSubmitting || !bus} className="w-full">
                             <PlayCircle className="mr-2" />
                             {isSubmitting ? "Starting Trip..." : "Start Trip"}
                         </Button>

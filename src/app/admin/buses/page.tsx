@@ -11,16 +11,13 @@ import {
   updateDoc,
   deleteDoc,
   doc,
-  query,
-  where,
-  onSnapshot,
-  type DocumentData,
-  type QueryDocumentSnapshot,
-  getDocs,
   deleteField,
+  type DocumentData,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
+import { listBusesForSchool, listRoutesForSchool, listUsersForSchool } from "@/lib/firestoreQueries";
+
 
 import { Button } from "@/components/ui/button";
 import {
@@ -79,6 +76,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { PlusCircle, Trash2, Pencil, Search, Route, User, Eye } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const busSchema = z.object({
   busCode: z.string().min(1, { message: "Bus code is required." }),
@@ -90,7 +88,7 @@ const busSchema = z.object({
 
 type BusFormValues = z.infer<typeof busSchema>;
 
-interface Bus {
+interface Bus extends DocumentData {
   id: string;
   busCode: string;
   plate?: string;
@@ -107,7 +105,7 @@ interface Route {
     name: string;
 }
 
-interface UserInfo {
+interface UserInfo extends DocumentData {
     id: string;
     displayName: string;
     email: string;
@@ -139,7 +137,6 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
                 schoolId,
             };
             
-            // Handle optional fields
             if (data.assignedRouteId === NONE_SENTINEL || !data.assignedRouteId) {
                 busData.assignedRouteId = deleteField();
             } else {
@@ -287,6 +284,7 @@ function BusDialog({ children, bus, onComplete, routes, schoolId }: { children: 
 function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh }: { routes: Route[], drivers: UserInfo[], supervisors: UserInfo[], schoolId: string, onDataNeedsRefresh: () => void }) {
   const [buses, setBuses] = useState<Bus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
 
@@ -297,33 +295,19 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
             return;
         }
         setIsLoading(true);
+        setError(null);
         try {
-            const q = query(collection(db, "buses"), where("schoolId", "==", schoolId));
-            const querySnapshot = await getDocs(q);
-            const busesData = querySnapshot.docs.map(doc => {
-                const d = doc.data();
-                return {
-                    id: doc.id,
-                    busCode: d.busCode ?? d.name ?? "",
-                    plate: d.plate ?? "",
-                    capacity: typeof d.capacity === 'number' ? d.capacity : undefined,
-                    assignedRouteId: d.assignedRouteId ?? null,
-                    driverId: d.driverId ?? null,
-                    supervisorId: d.supervisorId ?? null,
-                    schoolId: d.schoolId,
-                    active: d.active ?? true,
-                } as Bus;
-            });
-            setBuses(busesData);
-        } catch (error) {
+            const busesData = await listBusesForSchool(schoolId);
+            setBuses(busesData as Bus[]);
+        } catch (error: any) {
             console.error("Error fetching buses:", error);
-            toast({ variant: "destructive", title: "Error fetching buses", description: (error as Error).message });
+            setError(error.message || "Failed to fetch buses.");
         } finally {
             setIsLoading(false);
         }
     };
     fetchBuses();
-  }, [schoolId, toast, onDataNeedsRefresh]);
+  }, [schoolId, onDataNeedsRefresh]);
 
   const handleDelete = async (busId: string) => {
       try {
@@ -353,7 +337,7 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
             payload[field] = deleteField();
         }
         await updateDoc(busRef, payload);
-        onDataNeedsRefresh();
+        onDataNeedsRefresh(); // This will trigger a re-fetch of all buses
         toast({ title: `${field === 'driverId' ? 'Driver' : 'Supervisor'} updated successfully` });
     } catch(err) {
         console.error(`[bus ${field} update]`, err);
@@ -382,12 +366,12 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
   }
   
   const renderUserSelect = (bus: Bus, userType: 'driver' | 'supervisor', usersList: UserInfo[]) => {
-    const userId = userType === 'driver' ? bus.driverId : bus.supervisorId;
+    const currentUserId = userType === 'driver' ? bus.driverId : bus.supervisorId;
     const Icon = userType === 'driver' ? User : Eye;
 
     return (
       <Select
-        value={userId ?? NONE_SENTINEL}
+        value={currentUserId ?? NONE_SENTINEL}
         onValueChange={(value) => handleAssignUser(bus.id, `${userType}Id`, value === NONE_SENTINEL ? null : value)}
       >
         <SelectTrigger>
@@ -434,6 +418,7 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
                 className="pl-8"
             />
          </div>
+         {error && <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
         <Table>
           <TableHeader>
             <TableRow>
@@ -517,60 +502,38 @@ export default function BusesPage() {
     const [routes, setRoutes] = useState<Route[]>([]);
     const [drivers, setDrivers] = useState<UserInfo[]>([]);
     const [supervisors, setSupervisors] = useState<UserInfo[]>([]);
-    const [key, setKey] = useState(0); // Used to force-refresh child components
+    const [key, setKey] = useState(0); 
+    const [isLoading, setIsLoading] = useState(true);
     const schoolId = profile?.schoolId;
 
     const onDataNeedsRefresh = useCallback(() => setKey(k => k+1), []);
 
-    const fetchUsersByRole = useCallback(async (schId: string, role: 'driver' | 'supervisor') => {
-        try {
-            const usersQuery = query(
-                collection(db, "users"),
-                where("schoolId", "==", schId),
-                where("role", "==", role),
-                where("active", "==", true)
-            );
-            const usersSnapshot = await getDocs(usersQuery);
-            return usersSnapshot.docs.map(doc => {
-                const data = doc.data();
-                return {
-                    id: doc.id,
-                    displayName: data.displayName ?? "",
-                    email: data.email ?? "no-email@example.com",
-                } as UserInfo;
-            });
-        } catch (error) {
-            console.error(`Error fetching ${role}s:`, error);
-            return [];
-        }
-    }, []);
-
     useEffect(() => {
         const fetchData = async () => {
             if (!schoolId) return;
+            setIsLoading(true);
 
-            // Fetch routes
             try {
-                const routesQuery = query(collection(db, "routes"), where("schoolId", "==", schoolId));
-                const routesSnapshot = await getDocs(routesQuery);
-                const routesData = routesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Route));
-                setRoutes(routesData);
-            } catch (error) {
-              console.error("Error fetching routes:", error);
+                const [routesData, driversData, supervisorsData] = await Promise.all([
+                    listRoutesForSchool(schoolId),
+                    listUsersForSchool(schoolId, 'driver'),
+                    listUsersForSchool(schoolId, 'supervisor')
+                ]);
+                setRoutes(routesData as Route[]);
+                setDrivers(driversData as UserInfo[]);
+                setSupervisors(supervisorsData as UserInfo[]);
+            } catch(error) {
+                console.error("Error fetching related data:", error);
+            } finally {
+                setIsLoading(false);
             }
-            
-            // Fetch drivers and supervisors in parallel
-            const [driversData, supervisorsData] = await Promise.all([
-                fetchUsersByRole(schoolId, 'driver'),
-                fetchUsersByRole(schoolId, 'supervisor')
-            ]);
-            setDrivers(driversData);
-            setSupervisors(supervisorsData);
         };
-        fetchData();
-      }, [schoolId, key, fetchUsersByRole]);
+        if (schoolId) {
+          fetchData();
+        }
+      }, [schoolId, key]);
 
-    if (profileLoading) {
+    if (profileLoading || (isLoading && !profileError)) {
         return (
              <Card>
                 <CardHeader>
@@ -585,11 +548,11 @@ export default function BusesPage() {
     }
 
     if (profileError) {
-        return <div className="text-red-500">Error loading profile: {profileError.message}</div>
+        return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{profileError.message}</AlertDescription></Alert>
     }
 
     if (!profile) {
-        return <div>No user profile found. Access denied.</div>
+        return <Alert><AlertTitle>No Profile</AlertTitle><AlertDescription>User profile not found. Access denied.</AlertDescription></Alert>
     }
 
     return (

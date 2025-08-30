@@ -8,19 +8,16 @@ import * as z from "zod";
 import {
   addDoc,
   collection,
-  onSnapshot,
-  query,
-  where,
   updateDoc,
   deleteDoc,
   doc,
-  getDocs,
   writeBatch,
-  limit,
+  type DocumentData,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
+import { listRoutesForSchool } from "@/lib/firestoreQueries";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,7 +71,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { PlusCircle, Trash2, Edit, X, Check, ArrowUpDown, Search, Wrench } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
-type RouteDoc = {
+interface RouteDoc extends DocumentData {
   id: string;
   name: string;
   schoolId?: string;
@@ -180,7 +177,6 @@ function AddRouteForm({ schoolId, onComplete }: { schoolId: string, onComplete: 
 export default function RoutesPage() {
   const { profile, loading: profileLoading, error: profileError } = useProfile();
   const [routes, setRoutes] = useState<RouteDoc[]>([]);
-  const [needsBackfill, setNeedsBackfill] = useState<RouteDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -192,73 +188,31 @@ export default function RoutesPage() {
   
   const schoolId = profile?.schoolId;
 
-  useEffect(() => {
-    if (!schoolId) {
-        if (!profileLoading) setLoading(false);
-        return;
-    };
-    
-    const loadRoutes = async () => {
-        setLoading(true);
-        setErr(null);
-        setNeedsBackfill([]);
-
-        try {
-            // Primary query
-            const q = query(collection(db, "routes"), where("schoolId", "==", schoolId));
-            const mainSnapshot = await getDocs(q);
-            let routesData = mainSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as RouteDoc));
-            setRoutes(routesData);
-
-            // Fallback query if primary is empty
-            if (routesData.length === 0) {
-                console.info("[routes load] Primary query empty, running fallback.");
-                const fallbackQuery = query(collection(db, "routes"), limit(20));
-                const fallbackSnapshot = await getDocs(fallbackQuery);
-                const unassigned = fallbackSnapshot.docs
-                    .map(d => ({ id: d.id, ...d.data() } as RouteDoc))
-                    .filter(r => !r.schoolId);
-                
-                if (unassigned.length > 0) {
-                    console.info(`[routes load] Found ${unassigned.length} routes missing schoolId.`);
-                    setNeedsBackfill(unassigned);
-                }
-            }
-        } catch (e: any) {
-            console.error("[routes load]", e);
-            setErr(e.message ?? String(e));
-            toast({ variant: "destructive", title: "Error fetching routes", description: e.message });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    loadRoutes();
-  }, [schoolId, profileLoading, toast]);
-
-
-  const handleBackfill = async () => {
-    if (!schoolId || needsBackfill.length === 0) return;
-    
-    console.info(`[routes backfill] Starting backfill for ${needsBackfill.length} docs.`);
-    const batch = writeBatch(db);
-    needsBackfill.forEach(route => {
-        const routeRef = doc(db, "routes", route.id);
-        batch.update(routeRef, { schoolId: schoolId });
-    });
-
+  const loadRoutes = async (schId: string) => {
+    setLoading(true);
+    setErr(null);
     try {
-        await batch.commit();
-        toast({ title: "Success!", description: `${needsBackfill.length} routes have been assigned to your school.` });
-        // Refresh data
-        setRoutes(prev => [...prev, ...needsBackfill.map(r => ({...r, schoolId}))]);
-        setNeedsBackfill([]);
+        const routesData = await listRoutesForSchool(schId);
+        setRoutes(routesData as RouteDoc[]);
     } catch (e: any) {
-        console.error("[routes backfill]", e);
-        toast({ variant: "destructive", title: "Backfill Failed", description: e.message });
+        console.error("[routes load]", e);
+        const errorMessage = e.code === 'permission-denied' 
+            ? "You do not have permission to view these routes."
+            : e.message ?? "An unknown error occurred.";
+        setErr(errorMessage);
+        toast({ variant: "destructive", title: "Error fetching routes", description: errorMessage });
+    } finally {
+        setLoading(false);
     }
   };
 
+  useEffect(() => {
+    if (schoolId) {
+      loadRoutes(schoolId);
+    } else if (!profileLoading) {
+      setLoading(false);
+    }
+  }, [schoolId, profileLoading]);
 
   const sortedAndFilteredRoutes = useMemo(() => {
     return routes
@@ -295,14 +249,9 @@ export default function RoutesPage() {
     }
     try {
       const routeRef = doc(db, "routes", id);
-      const updates: { name: string, schoolId?: string } = { name: editingName.trim() };
-      const currentRoute = routes.find(r => r.id === id);
-      if (currentRoute && !currentRoute.schoolId && schoolId) {
-          updates.schoolId = schoolId;
-      }
-      await updateDoc(routeRef, updates);
+      await updateDoc(routeRef, { name: editingName.trim() });
       toast({ title: "Route updated successfully" });
-      setRoutes(routes.map(r => r.id === id ? {...r, ...updates} : r));
+      if (schoolId) await loadRoutes(schoolId);
       handleCancelEdit();
     } catch (e: any) {
       console.error("update name error:", e);
@@ -310,16 +259,12 @@ export default function RoutesPage() {
     }
   };
 
-  async function toggleActive(id: string, currentRoute: RouteDoc, next: boolean) {
+  async function toggleActive(id: string, next: boolean) {
     try {
       const routeRef = doc(db, "routes", id);
-      const updates: { active: boolean, schoolId?: string } = { active: next };
-      if (!currentRoute.schoolId && schoolId) {
-          updates.schoolId = schoolId;
-      }
-      await updateDoc(routeRef, updates);
+      await updateDoc(routeRef, { active: next });
       toast({ title: `Route ${next ? 'activated' : 'deactivated'}` });
-      setRoutes(routes.map(r => r.id === id ? {...r, ...updates} : r));
+      if (schoolId) await loadRoutes(schoolId);
     } catch (e: any) {
       console.error("toggleActive error:", e);
       toast({ variant: "destructive", title: "Failed to update status", description: e.message });
@@ -330,11 +275,16 @@ export default function RoutesPage() {
     try {
       await deleteDoc(doc(db, "routes", id));
       toast({ title: "Route deleted successfully" });
-      setRoutes(routes.filter(r => r.id !== id));
+      if (schoolId) await loadRoutes(schoolId);
     } catch (e: any) {
       console.error("removeRoute error:", e);
       toast({ variant: "destructive", title: "Failed to delete route", description: e.message });
     }
+  }
+  
+  const handleAddComplete = () => {
+    setAddModalOpen(false);
+    if(schoolId) loadRoutes(schoolId);
   }
 
   if (profileLoading) {
@@ -345,18 +295,18 @@ export default function RoutesPage() {
                 <Skeleton className="h-4 w-1/2" />
             </CardHeader>
             <CardContent>
-                <div className="text-center p-8 text-muted-foreground">Loading profile...</div>
+                <Skeleton className="h-40 w-full" />
             </CardContent>
         </Card>
     );
   }
 
   if (profileError) {
-      return <div className="text-red-500 text-center p-8">Error loading profile: {profileError.message}</div>
+      return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{profileError.message}</AlertDescription></Alert>
   }
 
   if (!profile) {
-      return <div className="text-red-500 text-center p-8">No user profile found. Access denied.</div>
+      return <Alert><AlertTitle>Access Denied</AlertTitle><AlertDescription>No user profile found.</AlertDescription></Alert>
   }
 
   return (
@@ -380,24 +330,12 @@ export default function RoutesPage() {
                             Enter the details for your new route.
                         </DialogDescription>
                     </DialogHeader>
-                    <AddRouteForm schoolId={profile.schoolId} onComplete={() => setAddModalOpen(false)} />
+                    <AddRouteForm schoolId={profile.schoolId} onComplete={handleAddComplete} />
                 </DialogContent>
             </Dialog>
         </div>
       </CardHeader>
       <CardContent>
-        {needsBackfill.length > 0 && (
-            <Alert className="mb-4 bg-yellow-50 border-yellow-200 text-yellow-800">
-                <Wrench className="h-4 w-4 !text-yellow-700" />
-                <AlertTitle>Data Inconsistency Found</AlertTitle>
-                <AlertDescription className="flex justify-between items-center">
-                   <p>Found {needsBackfill.length} routes missing a School ID. Assign them to your school to manage them.</p>
-                   <Button onClick={handleBackfill} variant="outline" size="sm" className="bg-yellow-100 hover:bg-yellow-200">
-                     Backfill Routes
-                   </Button>
-                </AlertDescription>
-            </Alert>
-        )}
         <div className="flex justify-between items-center mb-4">
             <div className="relative w-full max-w-sm">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -432,7 +370,7 @@ export default function RoutesPage() {
             ) : err ? (
                 <TableRow>
                     <TableCell colSpan={3} className="h-24 text-center text-red-500">
-                        Error: {err}
+                        <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{err}</AlertDescription></Alert>
                     </TableCell>
                 </TableRow>
             ) : sortedAndFilteredRoutes.length > 0 ? (
@@ -459,7 +397,7 @@ export default function RoutesPage() {
                   <TableCell>
                     <Switch
                       checked={route.active}
-                      onCheckedChange={(next) => toggleActive(route.id, route, next)}
+                      onCheckedChange={(next) => toggleActive(route.id, next)}
                     />
                   </TableCell>
                   <TableCell className="text-right">
@@ -500,4 +438,3 @@ export default function RoutesPage() {
     </Card>
   );
 }
-

@@ -12,16 +12,14 @@ import {
   doc,
   query,
   where,
-  onSnapshot,
   getDocs,
   limit,
   type DocumentData,
-  type QueryDocumentSnapshot,
   Timestamp,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
-
+import { listUsersForSchool } from "@/lib/firestoreQueries";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -70,6 +68,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { UserPlus, Pencil, Shield, CaseSensitive, PersonStanding, Users, Send } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const UserRole = z.enum(["admin", "driver", "supervisor", "parent"]);
 type UserRoleType = z.infer<typeof UserRole>;
@@ -81,7 +80,7 @@ const inviteSchema = z.object({
 
 type InviteFormValues = z.infer<typeof inviteSchema>;
 
-interface User {
+interface User extends DocumentData {
   id: string;
   displayName?: string;
   email: string;
@@ -251,7 +250,7 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
         try {
             await updateDoc(userRef, { 
                 active: newActiveState,
-                pending: false
+                ...(user.pending && newActiveState && { pending: false })
             });
             toast({
                 title: "Success!",
@@ -374,37 +373,31 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
 function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, schoolId: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const { toast } = useToast();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!schoolId) {
-        setIsLoading(false);
-        return;
-    };
-    
     const loadUsers = async () => {
+        if (!schoolId) {
+            setIsLoading(false);
+            return;
+        };
         setIsLoading(true);
+        setError(null);
         try {
-            const q = query(collection(db, "users"), where("schoolId", "==", schoolId));
-            const querySnapshot = await getDocs(q);
-            const usersData = querySnapshot.docs.map(
-                (doc: QueryDocumentSnapshot<DocumentData>) => ({
-                    id: doc.id,
-                    ...(doc.data() as Omit<User, 'id'>),
-                })
-            );
-            setUsers(usersData);
-        } catch (error) {
-            console.error("[users load]", error);
-            toast({ variant: "destructive", title: "Error fetching users", description: (error as Error).message });
+            const usersData = await listUsersForSchool(schoolId);
+            setUsers(usersData as User[]);
+        } catch (e: any) {
+            console.error("[users load]", e);
+            const errorMessage = e.code === 'permission-denied'
+                ? "You do not have permission to view users."
+                : e.message ?? "An unknown error occurred.";
+            setError(errorMessage);
         } finally {
             setIsLoading(false);
         }
     };
-    
     loadUsers();
-
-  }, [schoolId, toast, onUserInvited]);
+  }, [schoolId, onUserInvited]);
   
   return (
     <Card>
@@ -418,6 +411,7 @@ function UsersList({ onUserInvited, schoolId }: { onUserInvited: () => void, sch
         <InviteUserDialog onUserInvited={onUserInvited} schoolId={schoolId} />
       </CardHeader>
       <CardContent>
+        {error && <Alert variant="destructive" className="mb-4"><AlertTitle>Error</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
         <Table>
           <TableHeader>
             <TableRow>
@@ -467,18 +461,18 @@ export default function UsersPage() {
                     <Skeleton className="h-4 w-1/2" />
                 </CardHeader>
                 <CardContent>
-                    <div className="text-center p-8 text-muted-foreground">Loading profile...</div>
+                    <Skeleton className="h-40 w-full" />
                 </CardContent>
             </Card>
         )
     }
 
     if (profileError) {
-        return <div className="text-red-500 text-center p-8">Error loading profile: {profileError.message}</div>
+        return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{profileError.message}</AlertDescription></Alert>
     }
 
     if (!profile) {
-        return <div className="text-red-500 text-center p-8">No user profile found. Access denied.</div>
+        return <Alert><AlertTitle>Access Denied</AlertTitle><AlertDescription>No user profile found.</AlertDescription></Alert>
     }
 
     return (

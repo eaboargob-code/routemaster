@@ -3,18 +3,11 @@
 
 import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  Timestamp,
-  orderBy,
-  limit,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { type DocumentData, Timestamp } from "firebase/firestore";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
+import { getSupervisorTrips, getUsersByIds, listBusesForSchool, listRoutesForSchool } from "@/lib/firestoreQueries";
+
 
 import {
   Card,
@@ -38,7 +31,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Frown, Eye, UserCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-interface Trip {
+interface Trip extends DocumentData {
   id: string;
   driverId: string;
   busId: string;
@@ -56,87 +49,10 @@ interface Trip {
   };
 }
 
-interface User {
-  id: string;
+interface UserInfo {
   displayName: string;
+  email: string;
 }
-
-interface Bus {
-  id:string;
-  busCode: string;
-}
-
-interface Route {
-  id: string;
-  name: string;
-}
-
-interface ReferencedData {
-  users: Map<string, User>;
-  buses: Map<string, Bus>;
-  routes: Map<string, Route>;
-}
-
-async function fetchReferencedDocs<T>(collectionName: string, ids: string[]): Promise<Map<string, T>> {
-    const dataMap = new Map<string, T>();
-    if (ids.length === 0) return dataMap;
-
-    const CHUNK_SIZE = 30;
-    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-        const idChunk = ids.slice(i, i + CHUNK_SIZE);
-        const q = query(collection(db, collectionName), where("__name__", "in", idChunk));
-        const snapshot = await getDocs(q);
-        snapshot.forEach(doc => {
-            dataMap.set(doc.id, { id: doc.id, ...doc.data() } as T);
-        });
-    }
-    return dataMap;
-}
-
-async function loadTripsForSupervisor(userUid: string, schoolId: string): Promise<Trip[]> {
-  const tripsRef = collection(db, "trips");
-  
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayTs = Timestamp.fromDate(today);
-
-  // Query for trips directly assigned to the supervisor
-  const qMine = query(
-    tripsRef,
-    where("schoolId", "==", schoolId),
-    where("supervisorId", "==", userUid),
-    where("startedAt", ">=", todayTs),
-    orderBy("startedAt", "desc"),
-    limit(100)
-  );
-
-  // Query for trips where the driver is acting as supervisor
-  const qDriverAsSup = query(
-    tripsRef,
-    where("schoolId", "==", schoolId),
-    where("allowDriverAsSupervisor", "==", true),
-    where("startedAt", ">=", todayTs),
-    orderBy("startedAt", "desc"),
-    limit(100)
-  );
-
-  const [mineSnapshot, driverAsSupSnapshot] = await Promise.all([
-    getDocs(qMine),
-    getDocs(qDriverAsSup),
-  ]);
-
-  // Merge and de-duplicate results
-  const seen = new Set<string>();
-  const allDocs = [...mineSnapshot.docs, ...driverAsSupSnapshot.docs].filter(d => 
-    !seen.has(d.id) && seen.add(d.id)
-  );
-
-  // Map to Trip objects and sort client-side
-  return allDocs
-    .map(d => ({ id: d.id, ...d.data() } as Trip))
-    .sort((a, b) => b.startedAt.toMillis() - a.startedAt.toMillis());
-}
-
 
 export default function SupervisorPage() {
   const { user, profile, loading: profileLoading, error: profileError } = useProfile();
@@ -144,11 +60,7 @@ export default function SupervisorPage() {
   const { toast } = useToast();
 
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [referencedData, setReferencedData] = useState<ReferencedData>({
-    users: new Map(),
-    buses: new Map(),
-    routes: new Map(),
-  });
+  const [referencedData, setReferencedData] = useState<Record<string, DocumentData>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -157,25 +69,27 @@ export default function SupervisorPage() {
     setError(null);
 
     try {
-      const fetchedTrips = await loadTripsForSupervisor(currentUserUid, currentSchoolId);
+      const fetchedTrips = await getSupervisorTrips(currentSchoolId, currentUserUid) as Trip[];
       setTrips(fetchedTrips);
 
       if (fetchedTrips.length > 0) {
-        const driverIds = [...new Set(fetchedTrips.map(t => t.driverId))];
-        const supervisorIds = [...new Set(fetchedTrips.map(t => t.supervisorId).filter(Boolean) as string[])];
-        const userIds = [...new Set([...driverIds, ...supervisorIds])];
-        const busIds = [...new Set(fetchedTrips.map(t => t.busId))];
-        const routeIds = [...new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[])];
+        const userIds = [...new Set([
+            ...fetchedTrips.map(t => t.driverId),
+            ...fetchedTrips.map(t => t.supervisorId).filter(Boolean) as string[]
+        ])];
 
         const [users, buses, routes] = await Promise.all([
-          fetchReferencedDocs<User>("users", userIds),
-          fetchReferencedDocs<Bus>("buses", busIds),
-          fetchReferencedDocs<Route>("routes", routeIds),
+          getUsersByIds(userIds),
+          listBusesForSchool(currentSchoolId),
+          listRoutesForSchool(currentSchoolId),
         ]);
         
-        setReferencedData({ users, buses, routes });
+        const busMap = new Map(buses.map(b => [b.id, b]));
+        const routeMap = new Map(routes.map(r => [r.id, r]));
+
+        setReferencedData({ users, buses: busMap, routes: routeMap });
       } else {
-        setReferencedData({ users: new Map(), buses: new Map(), routes: new Map() });
+        setReferencedData({ users: {}, buses: new Map(), routes: new Map() });
       }
 
     } catch (err: any) {
@@ -211,8 +125,8 @@ export default function SupervisorPage() {
     return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{profileError.message}</AlertDescription></Alert>;
   }
 
-  if (!schoolId) {
-    return <Alert><AlertTitle>No School ID</AlertTitle><AlertDescription>Your profile is not associated with a school.</AlertDescription></Alert>;
+  if (!schoolId || !user) {
+    return <Alert><AlertTitle>Not Authorized</AlertTitle><AlertDescription>Your profile is not associated with a school or you are not logged in.</AlertDescription></Alert>;
   }
 
   const renderCellContent = (content: string | undefined | null) => {
@@ -229,8 +143,8 @@ export default function SupervisorPage() {
       );
     }
     if (trip.supervisorId) {
-      const supervisor = referencedData.users.get(trip.supervisorId);
-      return renderCellContent(supervisor?.displayName);
+      const supervisor = referencedData.users?.[trip.supervisorId] as UserInfo;
+      return renderCellContent(supervisor?.displayName || supervisor?.email);
     }
     return <span className="text-muted-foreground">No supervisor</span>;
   };
@@ -244,6 +158,7 @@ export default function SupervisorPage() {
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {error && <Alert variant="destructive" className="mb-4"><AlertTitle>Error</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
         <div className="rounded-md border">
           <Table>
             <TableHeader>
@@ -268,25 +183,19 @@ export default function SupervisorPage() {
                     </TableCell>
                   </TableRow>
                 ))
-              ) : error ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center text-destructive py-8">
-                    Error loading trips: {error}
-                  </TableCell>
-                </TableRow>
               ) : trips.length > 0 ? (
                 trips.map(trip => {
-                  const driver = referencedData.users.get(trip.driverId);
-                  const bus = referencedData.buses.get(trip.busId);
-                  const route = trip.routeId ? referencedData.routes.get(trip.routeId) : null;
+                  const driver = referencedData.users?.[trip.driverId] as UserInfo;
+                  const bus = referencedData.buses?.get(trip.busId);
+                  const route = trip.routeId ? referencedData.routes?.get(trip.routeId) : null;
                   return (
                     <TableRow key={trip.id}>
-                      <TableCell>{renderCellContent(driver?.displayName)}</TableCell>
+                      <TableCell>{renderCellContent(driver?.displayName || driver?.email)}</TableCell>
                       <TableCell>{renderCellContent(bus?.busCode)}</TableCell>
                       <TableCell>{renderCellContent(route?.name)}</TableCell>
                        <TableCell>{getSupervisorContent(trip)}</TableCell>
                       <TableCell>
-                        <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800' : ''}>
+                        <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800 border-green-200' : ''}>
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
                         </Badge>
                       </TableCell>

@@ -2,15 +2,15 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { doc, getDoc, type DocumentData } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { type DocumentData } from 'firebase/firestore';
 import { useProfile } from '@/lib/useProfile';
+import { getTripDetails } from '@/lib/firestoreQueries';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from '@/components/ui/skeleton';
 import { TripRoster } from './TripRoster';
-import { ArrowLeft, Bus, Route, Info } from 'lucide-react';
+import { ArrowLeft, Bus, Route } from 'lucide-react';
 import Link from 'next/link';
 
 interface TripDetails {
@@ -20,19 +20,11 @@ interface TripDetails {
     schoolId: string;
 }
 
-interface RouteInfo {
-    name: string;
-}
-
-interface BusInfo {
-    busCode: string;
-}
-
 export default function TripDetailsPage({ params }: { params: { id: string }}) {
     const { profile, loading: profileLoading } = useProfile();
     const [trip, setTrip] = useState<TripDetails | null>(null);
-    const [route, setRoute] = useState<RouteInfo | null>(null);
-    const [bus, setBus] = useState<BusInfo | null>(null);
+    const [route, setRoute] = useState<DocumentData | null>(null);
+    const [bus, setBus] = useState<DocumentData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -43,32 +35,13 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
         setError(null);
 
         try {
-            // 1. Fetch trip document
-            const tripRef = doc(db, "trips", tripId);
-            const tripSnap = await getDoc(tripRef);
-
-            if (!tripSnap.exists() || tripSnap.data().schoolId !== currentSchoolId) {
+            const details = await getTripDetails(tripId, currentSchoolId);
+            if (!details) {
                 throw new Error("Trip not found or access denied.");
             }
-            
-            const tripData = { id: tripSnap.id, ...tripSnap.data() } as TripDetails;
-            setTrip(tripData);
-
-            // 2. Fetch associated route and bus in parallel
-            const promises: Promise<DocumentData | null>[] = [
-                getDoc(doc(db, 'buses', tripData.busId))
-            ];
-            if (tripData.routeId) {
-                promises.push(getDoc(doc(db, 'routes', tripData.routeId)));
-            } else {
-                promises.push(Promise.resolve(null));
-            }
-            
-            const [busSnap, routeSnap] = await Promise.all(promises);
-            
-            if (busSnap && busSnap.exists()) setBus(busSnap.data() as BusInfo);
-            if (routeSnap && routeSnap.exists()) setRoute(routeSnap.data() as RouteInfo);
-
+            setTrip(details.trip as TripDetails);
+            setBus(details.bus);
+            setRoute(details.route);
         } catch (err: any) {
             console.error("Failed to fetch trip details:", err);
             setError(err.message || "An unexpected error occurred.");
@@ -80,8 +53,11 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
     useEffect(() => {
         if (profile?.schoolId) {
             fetchTripData(profile.schoolId);
+        } else if (!profileLoading) {
+            setError("Could not determine your school to fetch data.");
+            setIsLoading(false);
         }
-    }, [profile?.schoolId, fetchTripData]);
+    }, [profile?.schoolId, profileLoading, fetchTripData]);
 
     if (isLoading || profileLoading) {
         return (

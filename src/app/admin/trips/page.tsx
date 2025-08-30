@@ -3,20 +3,13 @@
 
 import { useEffect, useState, useMemo, useCallback } from "react";
 import {
-  collection,
-  query,
-  where,
-  getDocs,
+  type DocumentData,
   Timestamp,
-  doc,
-  getDoc,
-  orderBy,
-  type FirestoreError,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import Link from "next/link";
+import { listTodaysTripsForSchool, getUsersByIds } from "@/lib/firestoreQueries";
 
 import {
   Card,
@@ -44,12 +37,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Search, Frown, Eye, UserCheck } from "lucide-react";
+import { Search, Frown, Eye, UserCheck, User, Route, Bus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 
-// --- Data Interfaces ---
-interface Trip {
+interface Trip extends DocumentData {
   id: string;
   driverId: string;
   busId: string;
@@ -67,59 +59,18 @@ interface Trip {
   };
 }
 
-interface User {
-  id: string;
+interface UserInfo {
   displayName: string;
   email: string;
 }
 
-interface Bus {
-  id:string;
-  busCode: string;
-}
-
-interface Route {
-  id: string;
-  name: string;
-}
-
-interface ReferencedData {
-  users: Map<string, User>;
-  buses: Map<string, Bus>;
-  routes: Map<string, Route>;
-}
-
-// --- Helper Functions ---
-async function fetchReferencedDocs<T>(collectionName: string, ids: string[]): Promise<Map<string, T>> {
-    const dataMap = new Map<string, T>();
-    if (ids.length === 0) return dataMap;
-
-    // Firestore `in` queries are limited to 30 elements.
-    // We chunk the IDs to handle more than 30.
-    const CHUNK_SIZE = 30;
-    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-        const idChunk = ids.slice(i, i + CHUNK_SIZE);
-        const q = query(collection(db, collectionName), where("__name__", "in", idChunk));
-        const snapshot = await getDocs(q);
-        snapshot.forEach(doc => {
-            dataMap.set(doc.id, { id: doc.id, ...doc.data() } as T);
-        });
-    }
-    return dataMap;
-}
-
-// --- Main Component ---
 export default function TripsPage() {
   const { profile, loading: profileLoading, error: profileError } = useProfile();
   const schoolId = profile?.schoolId;
   const { toast } = useToast();
 
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [referencedData, setReferencedData] = useState<ReferencedData>({
-    users: new Map(),
-    buses: new Map(),
-    routes: new Map(),
-  });
+  const [referencedData, setReferencedData] = useState<Record<string, DocumentData>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -131,54 +82,26 @@ export default function TripsPage() {
     setError(null);
 
     try {
-      // 1. Build the base query for today's trips
-      const today = new Date();
-      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(today.setHours(23, 59, 59, 999));
-      
-      const startOfDayTs = Timestamp.fromDate(startOfDay);
-      const endOfDayTs = Timestamp.fromDate(endOfDay);
-      
-      let tripQueryConstraints: any[] = [
-        where("schoolId", "==", currentSchoolId),
-        where("startedAt", ">=", startOfDayTs),
-        where("startedAt", "<=", endOfDayTs),
-      ];
-
-      // Add status filter if not "all"
-      if (statusFilter !== "all") {
-        tripQueryConstraints.push(where("status", "==", statusFilter));
-      }
-      
-      tripQueryConstraints.push(orderBy("startedAt", "desc"));
-      
-      const tripsQuery = query(collection(db, "trips"), ...tripQueryConstraints);
-      const tripsSnapshot = await getDocs(tripsQuery);
-      
-      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip));
+      const fetchedTrips = await listTodaysTripsForSchool(currentSchoolId, { status: statusFilter }) as Trip[];
       setTrips(fetchedTrips);
 
       if (fetchedTrips.length > 0) {
-        // 2. Collect unique IDs for batch fetching
-        const driverIds = [...new Set(fetchedTrips.map(t => t.driverId))];
-        const supervisorIds = [...new Set(fetchedTrips.map(t => t.supervisorId).filter(Boolean) as string[])];
-        const userIds = [...new Set([...driverIds, ...supervisorIds])];
-        const busIds = [...new Set(fetchedTrips.map(t => t.busId))];
-        const routeIds = [...new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[])];
-
-        // 3. Batch fetch referenced documents
-        const [users, buses, routes] = await Promise.all([
-          fetchReferencedDocs<User>("users", userIds),
-          fetchReferencedDocs<Bus>("buses", busIds),
-          fetchReferencedDocs<Route>("routes", routeIds),
-        ]);
+        const userIds = [...new Set([
+          ...fetchedTrips.map(t => t.driverId),
+          ...fetchedTrips.map(t => t.supervisorId).filter(Boolean) as string[]
+        ])];
         
-        setReferencedData({ users, buses, routes });
-      } else {
-        // No trips, so no references to fetch
-        setReferencedData({ users: new Map(), buses: new Map(), routes: new Map() });
-      }
+        const users = await getUsersByIds(userIds);
+        const buses = await listBusesForSchool(currentSchoolId);
+        const routes = await listRoutesForSchool(currentSchoolId);
 
+        const busMap = new Map(buses.map(b => [b.id, b]));
+        const routeMap = new Map(routes.map(r => [r.id, r]));
+
+        setReferencedData({ users, buses: busMap, routes: routeMap });
+      } else {
+        setReferencedData({ users: {}, buses: new Map(), routes: new Map() });
+      }
     } catch (err: any) {
       console.error("Failed to fetch trips:", err);
       if (err.code === "failed-precondition") {
@@ -206,13 +129,14 @@ export default function TripsPage() {
 
 
   const filteredTrips = useMemo(() => {
-    // Search is now client-side on the already server-filtered data
     const lowercasedSearch = searchTerm.toLowerCase();
     if (!lowercasedSearch) return trips;
     
     return trips.filter(trip => {
-        const driverName = referencedData.users.get(trip.driverId)?.displayName.toLowerCase() || "";
-        const busCode = referencedData.buses.get(trip.busId)?.busCode.toLowerCase() || "";
+        const driver = referencedData.users?.[trip.driverId] as UserInfo;
+        const driverName = driver?.displayName?.toLowerCase() || "";
+        const bus = referencedData.buses?.get(trip.busId);
+        const busCode = bus?.busCode?.toLowerCase() || "";
         return driverName.includes(lowercasedSearch) || busCode.includes(lowercasedSearch);
     });
   }, [trips, searchTerm, referencedData]);
@@ -229,21 +153,21 @@ export default function TripsPage() {
     return <Alert><AlertTitle>No School ID</AlertTitle><AlertDescription>Your profile is not associated with a school.</AlertDescription></Alert>;
   }
 
-  const renderCellContent = (content: string | undefined | null) => {
+  const renderCellContent = (content: React.ReactNode) => {
     return content || <span className="text-muted-foreground">N/A</span>;
   };
   
   const getSupervisorContent = (trip: Trip) => {
     if (trip.allowDriverAsSupervisor) {
       return (
-        <Badge variant="outline">
-          <UserCheck className="mr-2 h-3.5 w-3.5 text-blue-600" />
+        <Badge variant="outline" className="flex items-center gap-2">
+          <UserCheck className="h-3.5 w-3.5 text-blue-600" />
           Driver as Supervisor
         </Badge>
       );
     }
     if (trip.supervisorId) {
-      const supervisor = referencedData.users.get(trip.supervisorId);
+      const supervisor = referencedData.users?.[trip.supervisorId] as UserInfo;
       return renderCellContent(supervisor?.displayName || supervisor?.email);
     }
     return <span className="text-muted-foreground">No supervisor</span>;
@@ -280,6 +204,13 @@ export default function TripsPage() {
           </Select>
         </div>
 
+        {error && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertTitle>Error Loading Trips</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+        )}
+
         <div className="rounded-md border">
           <Table>
             <TableHeader>
@@ -304,25 +235,34 @@ export default function TripsPage() {
                     </TableCell>
                   </TableRow>
                 ))
-              ) : error ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center text-destructive py-8">
-                    Error loading trips: {error}
-                  </TableCell>
-                </TableRow>
               ) : filteredTrips.length > 0 ? (
                 filteredTrips.map(trip => {
-                  const driver = referencedData.users.get(trip.driverId);
-                  const bus = referencedData.buses.get(trip.busId);
-                  const route = trip.routeId ? referencedData.routes.get(trip.routeId) : null;
+                  const driver = referencedData.users?.[trip.driverId] as UserInfo;
+                  const bus = referencedData.buses?.get(trip.busId);
+                  const route = trip.routeId ? referencedData.routes?.get(trip.routeId) : null;
                   return (
                     <TableRow key={trip.id}>
-                      <TableCell>{renderCellContent(driver?.displayName)}</TableCell>
-                      <TableCell>{renderCellContent(bus?.busCode)}</TableCell>
-                      <TableCell>{renderCellContent(route?.name)}</TableCell>
+                      <TableCell>{renderCellContent(
+                          <div className="flex items-center gap-2">
+                              <User className="h-4 w-4 text-muted-foreground" />
+                              {driver?.displayName || driver?.email}
+                          </div>
+                      )}</TableCell>
+                      <TableCell>{renderCellContent(
+                          <div className="flex items-center gap-2">
+                              <Bus className="h-4 w-4 text-muted-foreground" />
+                              {bus?.busCode}
+                          </div>
+                      )}</TableCell>
+                      <TableCell>{renderCellContent(
+                          route ? <div className="flex items-center gap-2">
+                              <Route className="h-4 w-4 text-muted-foreground" />
+                              {route.name}
+                          </div> : null
+                      )}</TableCell>
                       <TableCell>{getSupervisorContent(trip)}</TableCell>
                       <TableCell>
-                        <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800' : ''}>
+                        <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800 border-green-200' : ''}>
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
                         </Badge>
                       </TableCell>
