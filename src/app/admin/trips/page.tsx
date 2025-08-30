@@ -116,20 +116,24 @@ export default function TripsPage() {
     setError(null);
 
     try {
-      // 1. Fetch today's trips for the school
+      // 1. Fetch trips for the school
+      const tripsQuery = query(
+        collection(db, "trips"),
+        where("schoolId", "==", currentSchoolId)
+      );
+      const tripsSnapshot = await getDocs(tripsQuery);
+      
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
 
-      const tripsQuery = query(
-        collection(db, "trips"),
-        where("schoolId", "==", currentSchoolId),
-        where("startedAt", ">=", Timestamp.fromDate(todayStart)),
-        where("startedAt", "<=", Timestamp.fromDate(todayEnd))
-      );
-      const tripsSnapshot = await getDocs(tripsQuery);
-      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip));
+      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip))
+        .filter(trip => {
+            const startedAtDate = trip.startedAt.toDate();
+            return startedAtDate >= todayStart && startedAtDate <= todayEnd;
+        });
+
       setTrips(fetchedTrips);
 
       if (fetchedTrips.length > 0) {
