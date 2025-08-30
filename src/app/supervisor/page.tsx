@@ -10,7 +10,7 @@ import {
   getDocs,
   Timestamp,
   orderBy,
-  type FirestoreError,
+  limit,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -35,7 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Frown, Eye } from "lucide-react";
+import { Frown, Eye, UserCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Trip {
@@ -43,6 +43,8 @@ interface Trip {
   driverId: string;
   busId: string;
   routeId: string | null;
+  supervisorId?: string | null;
+  allowDriverAsSupervisor?: boolean;
   status: "active" | "ended";
   startedAt: Timestamp;
   endedAt?: Timestamp;
@@ -91,8 +93,53 @@ async function fetchReferencedDocs<T>(collectionName: string, ids: string[]): Pr
     return dataMap;
 }
 
+async function loadTripsForSupervisor(userUid: string, schoolId: string): Promise<Trip[]> {
+  const tripsRef = collection(db, "trips");
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayTs = Timestamp.fromDate(today);
+
+  // Query for trips directly assigned to the supervisor
+  const qMine = query(
+    tripsRef,
+    where("schoolId", "==", schoolId),
+    where("supervisorId", "==", userUid),
+    where("startedAt", ">=", todayTs),
+    orderBy("startedAt", "desc"),
+    limit(100)
+  );
+
+  // Query for trips where the driver is acting as supervisor
+  const qDriverAsSup = query(
+    tripsRef,
+    where("schoolId", "==", schoolId),
+    where("allowDriverAsSupervisor", "==", true),
+    where("startedAt", ">=", todayTs),
+    orderBy("startedAt", "desc"),
+    limit(100)
+  );
+
+  const [mineSnapshot, driverAsSupSnapshot] = await Promise.all([
+    getDocs(qMine),
+    getDocs(qDriverAsSup),
+  ]);
+
+  // Merge and de-duplicate results
+  const seen = new Set<string>();
+  const allDocs = [...mineSnapshot.docs, ...driverAsSupSnapshot.docs].filter(d => 
+    !seen.has(d.id) && seen.add(d.id)
+  );
+
+  // Map to Trip objects and sort client-side
+  return allDocs
+    .map(d => ({ id: d.id, ...d.data() } as Trip))
+    .sort((a, b) => b.startedAt.toMillis() - a.startedAt.toMillis());
+}
+
+
 export default function SupervisorPage() {
-  const { profile, loading: profileLoading, error: profileError } = useProfile();
+  const { user, profile, loading: profileLoading, error: profileError } = useProfile();
   const schoolId = profile?.schoolId;
   const { toast } = useToast();
 
@@ -105,32 +152,18 @@ export default function SupervisorPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTripsAndReferences = useCallback(async (currentSchoolId: string) => {
+  const fetchTripsAndReferences = useCallback(async (currentSchoolId: string, currentUserUid: string) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const today = new Date();
-      const startOfDay = new Date(today.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(today.setHours(23, 59, 59, 999));
-      
-      const startOfDayTs = Timestamp.fromDate(startOfDay);
-      const endOfDayTs = Timestamp.fromDate(endOfDay);
-
-      const tripsQuery = query(
-        collection(db, "trips"),
-        where("schoolId", "==", currentSchoolId),
-        where("startedAt", ">=", startOfDayTs),
-        where("startedAt", "<=", endOfDayTs),
-        orderBy("startedAt", "desc")
-      );
-      const tripsSnapshot = await getDocs(tripsQuery);
-      
-      const fetchedTrips = tripsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip));
+      const fetchedTrips = await loadTripsForSupervisor(currentUserUid, currentSchoolId);
       setTrips(fetchedTrips);
 
       if (fetchedTrips.length > 0) {
-        const userIds = [...new Set(fetchedTrips.map(t => t.driverId))];
+        const driverIds = [...new Set(fetchedTrips.map(t => t.driverId))];
+        const supervisorIds = [...new Set(fetchedTrips.map(t => t.supervisorId).filter(Boolean) as string[])];
+        const userIds = [...new Set([...driverIds, ...supervisorIds])];
         const busIds = [...new Set(fetchedTrips.map(t => t.busId))];
         const routeIds = [...new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[])];
 
@@ -163,12 +196,12 @@ export default function SupervisorPage() {
   }, [toast]);
 
   useEffect(() => {
-    if (schoolId) {
-      fetchTripsAndReferences(schoolId);
+    if (schoolId && user) {
+      fetchTripsAndReferences(schoolId, user.uid);
     } else if (!profileLoading) {
       setIsLoading(false);
     }
-  }, [schoolId, profileLoading, fetchTripsAndReferences]);
+  }, [schoolId, user, profileLoading, fetchTripsAndReferences]);
 
   if (profileLoading) {
     return <Skeleton className="h-96 w-full" />;
@@ -185,13 +218,29 @@ export default function SupervisorPage() {
   const renderCellContent = (content: string | undefined | null) => {
     return content || <span className="text-muted-foreground">N/A</span>;
   };
+
+  const getSupervisorContent = (trip: Trip) => {
+    if (trip.allowDriverAsSupervisor) {
+      return (
+        <Badge variant="outline">
+          <UserCheck className="mr-2 h-3.5 w-3.5 text-blue-600" />
+          Driver as Supervisor
+        </Badge>
+      );
+    }
+    if (trip.supervisorId) {
+      const supervisor = referencedData.users.get(trip.supervisorId);
+      return renderCellContent(supervisor?.displayName);
+    }
+    return <span className="text-muted-foreground">No supervisor</span>;
+  };
   
   return (
     <Card>
       <CardHeader>
         <CardTitle>Today's Trips</CardTitle>
         <CardDescription>
-          A real-time log of all bus trips for school {schoolId} that occurred today.
+          A real-time log of all bus trips for school {schoolId} that you are supervising.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -202,6 +251,7 @@ export default function SupervisorPage() {
                 <TableHead>Driver</TableHead>
                 <TableHead>Bus</TableHead>
                 <TableHead>Route</TableHead>
+                <TableHead>Supervisor</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Ended</TableHead>
@@ -213,14 +263,14 @@ export default function SupervisorPage() {
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={`skel-${i}`}>
-                    <TableCell colSpan={8}>
+                    <TableCell colSpan={9}>
                       <Skeleton className="h-6 w-full" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : error ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-destructive py-8">
+                  <TableCell colSpan={9} className="text-center text-destructive py-8">
                     Error loading trips: {error}
                   </TableCell>
                 </TableRow>
@@ -234,6 +284,7 @@ export default function SupervisorPage() {
                       <TableCell>{renderCellContent(driver?.displayName)}</TableCell>
                       <TableCell>{renderCellContent(bus?.busCode)}</TableCell>
                       <TableCell>{renderCellContent(route?.name)}</TableCell>
+                       <TableCell>{getSupervisorContent(trip)}</TableCell>
                       <TableCell>
                         <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800' : ''}>
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
@@ -255,10 +306,10 @@ export default function SupervisorPage() {
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     <div className="flex flex-col items-center gap-2">
                        <Frown className="h-8 w-8" />
-                       <span className="font-medium">No trips found for today</span>
+                       <span className="font-medium">No relevant trips found for today</span>
                     </div>
                   </TableCell>
                 </TableRow>
