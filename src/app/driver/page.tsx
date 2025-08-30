@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, updateDoc, Timestamp, limit, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -109,17 +109,25 @@ export default function DriverPage() {
         
         // 3) Load trips
         try {
-          const today = new Date(); today.setHours(0,0,0,0);
-          const tripQuery = query(
-            collection(db, "trips"),
-            where("driverId", "==", user.uid),
-            where("startedAt", ">=", Timestamp.fromDate(today))
-          );
-          const tripSnap = await getDocs(tripQuery);
-          const active = tripSnap.docs
-            .map(d => ({ id: d.id, ...d.data() } as Trip))
-            .find(d => d.status === 'active');
-          setActiveTrip(active || null);
+            // 3) Check for an active trip for this driver (today)
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            const tripQuery = query(
+              collection(db, "trips"),
+              where("driverId", "==", user.uid),
+              where("schoolId", "==", profile.schoolId),   // ← add this to satisfy rules
+              where("status", "==", "active"),             // ← optional: move status filter server-side
+              where("startedAt", ">=", Timestamp.fromDate(today)),
+              orderBy("startedAt", "desc"),
+              limit(1)
+            );
+
+            const tripSnapshot = await getDocs(tripQuery);
+
+            const active = tripSnapshot.docs[0];
+            setActiveTrip(active ? ({ id: active.id, ...active.data() } as Trip) : null);
+
         } catch (e) {
           console.error("[driver] failed trips query", e);
           // don’t throw; we can still render bus/route
