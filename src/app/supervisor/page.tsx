@@ -73,7 +73,7 @@ async function fetchReferencedDocs<T>(collectionName: string, ids: string[]): Pr
     if (ids.length === 0) return dataMap;
 
     const CHUNK_SIZE = 30;
-    for (let i = 0; < ids.length; i += CHUNK_SIZE) {
+    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
         const idChunk = ids.slice(i, i + CHUNK_SIZE);
         const q = query(collection(db, collectionName), where("__name__", "in", idChunk));
         const snapshot = await getDocs(q);
@@ -230,8 +230,8 @@ export default function SupervisorPage() {
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
                         </Badge>
                       </TableCell>
-                      <TableCell>{format(trip.startedAt.toDate(), "p")}</TableCell>
-                      <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "p") : "In Progress"}</TableCell>
+                      <TableCell>{format(trip.startedAt.toDate(), "HH:mm")}</TableCell>
+                      <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "HH:mm") : "In Progress"}</TableCell>
                     </TableRow>
                   );
                 })
@@ -253,4 +253,3 @@ export default function SupervisorPage() {
   );
 }
 
-    

@@ -258,7 +258,7 @@ export default function DriverPage() {
                         <Info className="h-4 w-4 !text-blue-700" />
                         <AlertTitle className="text-blue-800">Trip in Progress</AlertTitle>
                         <AlertDescription className="text-blue-700">
-                            Started at: {format(activeTrip.startedAt.toDate(), "p")}
+                            Started at: {format(activeTrip.startedAt.toDate(), "HH:mm")}
                         </AlertDescription>
                     </Alert>
                 )}

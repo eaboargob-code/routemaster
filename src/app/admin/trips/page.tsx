@@ -182,7 +182,7 @@ export default function TripsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [schoolId, statusFilter, toast]);
+  }, [statusFilter, toast]);
 
   useEffect(() => {
     if (schoolId) {
@@ -294,8 +294,8 @@ export default function TripsPage() {
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
                         </Badge>
                       </TableCell>
-                      <TableCell>{format(trip.startedAt.toDate(), "p")}</TableCell>
-                      <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "p") : "In Progress"}</TableCell>
+                      <TableCell>{format(trip.startedAt.toDate(), "HH:mm")}</TableCell>
+                      <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "HH:mm") : "In Progress"}</TableCell>
                     </TableRow>
                   );
                 })
@@ -318,4 +318,3 @@ export default function TripsPage() {
   );
 }
 
-    
