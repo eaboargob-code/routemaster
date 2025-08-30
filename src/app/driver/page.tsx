@@ -68,6 +68,7 @@ export default function DriverPage() {
           const busQuery = query(
             collection(db, "buses"),
             where("driverId", "==", user.uid),
+            where("schoolId", "==", profile.schoolId),
             limit(1)
           );
           const busSnap = await getDocs(busQuery);
@@ -116,8 +117,8 @@ export default function DriverPage() {
             const tripQuery = query(
               collection(db, "trips"),
               where("driverId", "==", user.uid),
-              where("schoolId", "==", profile.schoolId),   // ← add this to satisfy rules
-              where("status", "==", "active"),             // ← optional: move status filter server-side
+              where("schoolId", "==", profile.schoolId),
+              where("status", "==", "active"),
               where("startedAt", ">=", Timestamp.fromDate(today)),
               orderBy("startedAt", "desc"),
               limit(1)
@@ -269,7 +270,7 @@ export default function DriverPage() {
                         {isSubmitting ? "Ending Trip..." : "End Trip"}
                     </Button>
                 ) : (
-                    <Button onClick={handleStartTrip} disabled={isSubmitting || !bus} className="w-full">
+                    <Button onClick={handleStartTrip} disabled={isSubmitting || !bus || !!activeTrip} className="w-full">
                         <PlayCircle className="mr-2" />
                         {isSubmitting ? "Starting Trip..." : "Start Trip"}
                     </Button>
