@@ -146,7 +146,7 @@ export default function SupervisorPage() {
       } else {
         setUiState({ status: 'ready' });
       }
-
+  
     } catch (err: any) {
       console.error('[supervisor] trip fetch failed', err?.code, err?.message);
       setUiState({ status: 'error', errorMessage: 'Missing or insufficient permissions.' });
@@ -272,3 +272,5 @@ export default function SupervisorPage() {
     </Card>
   );
 }
+
+    
