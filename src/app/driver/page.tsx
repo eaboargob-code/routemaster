@@ -215,11 +215,23 @@ export default function DriverPage() {
             const docRef = await addDoc(collection(db, "trips"), newTripData);
             const fullTrip = { ...newTripData, id: docRef.id };
             
-            // Seed passengers using the secure Genkit flow
-            const seedResult = await seedPassengers({ tripId: docRef.id });
-            
             setActiveTrip(fullTrip);
-            toast({ title: "Trip Started!", description: `Your trip is now active and ${seedResult.passengerCount} passengers are ready.`, className: 'bg-accent text-accent-foreground border-0' });
+            toast({ title: "Trip Started!", description: `Your trip is now active.`, className: 'bg-accent text-accent-foreground border-0' });
+
+            // Seed passengers using the secure Genkit flow in the background
+            seedPassengers({ tripId: docRef.id })
+                .then(seedResult => {
+                     toast({
+                        title: "Roster Ready!",
+                        description: `${seedResult.passengerCount} passengers have been added to your roster.`,
+                        className: 'bg-accent text-accent-foreground border-0',
+                    });
+                })
+                .catch(err => {
+                    console.error("[seed passengers flow]", err);
+                    toast({ variant: 'destructive', title: "Roster Error", description: "Could not create the passenger roster." });
+                });
+
         } catch (error) {
             console.error("[start trip]", error);
             toast({ variant: 'destructive', title: "Error", description: "Could not start a new trip." });
@@ -388,3 +400,5 @@ export default function DriverPage() {
         </div>
     )
 }
+
+    
