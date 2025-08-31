@@ -2,7 +2,11 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { doc, addDoc, updateDoc, Timestamp, serverTimestamp, collection, type DocumentData, query, where, limit, getDocs, getDoc } from 'firebase/firestore';
+import {
+  collection, query, where, getDocs, getDoc, doc,
+  addDoc, updateDoc, Timestamp, limit, orderBy, serverTimestamp,
+  type DocumentData,
+} from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -140,11 +144,11 @@ export default function DriverPage() {
         try {
             const start = new Date(); start.setHours(0,0,0,0);
             const tQ = query(
-            collection(db, "trips"),
-            where("schoolId", "==", profile.schoolId),
-            where("driverId", "==", user.uid),
-            where("startedAt", ">=", Timestamp.fromDate(start)),
-            orderBy("startedAt", "desc")
+                collection(db, "trips"),
+                where("schoolId", "==", profile.schoolId),
+                where("driverId", "==", user.uid),
+                where("startedAt", ">=", Timestamp.fromDate(start)),
+                orderBy("startedAt", "desc")
             );
             const tSnap = await getDocs(tQ);
             const active = tSnap.docs.map(d => ({ id: d.id, ...d.data() } as any))
@@ -424,5 +428,3 @@ export default function DriverPage() {
         </div>
     )
 }
-
-    
