@@ -20,15 +20,13 @@ interface TripDetails {
     schoolId: string;
 }
 
-export default function TripDetailsPage({ params }: { params: { id: string }}) {
+export default function TripDetailsPage({ params: { id: tripId } }: { params: { id: string }}) {
     const { profile, loading: profileLoading } = useProfile();
     const [trip, setTrip] = useState<TripDetails | null>(null);
     const [route, setRoute] = useState<DocumentData | null>(null);
     const [bus, setBus] = useState<DocumentData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-
-    const tripId = params.id;
 
     const fetchTripData = useCallback(async (currentSchoolId: string) => {
         setIsLoading(true);
