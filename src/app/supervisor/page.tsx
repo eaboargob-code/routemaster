@@ -106,6 +106,7 @@ export default function SupervisorPage() {
   
         const [userMap, busMap, routeMap] = await Promise.all([
           (async () => {
+            if (userIds.length === 0) return {};
             const entries = await Promise.all(userIds.map(async (id: string) => {
               try {
                 const s = await getDoc(doc(db, 'users', id));
@@ -115,6 +116,7 @@ export default function SupervisorPage() {
             return Object.fromEntries(entries.filter(e => e[1]));
           })(),
           (async () => {
+             if (busIds.length === 0) return {};
             const entries = await Promise.all(busIds.map(async (id: string) => {
               try {
                 const s = await getDoc(doc(db, 'buses', id));
@@ -124,6 +126,7 @@ export default function SupervisorPage() {
             return Object.fromEntries(entries.filter(e => e[1]));
           })(),
           (async () => {
+            if (routeIds.length === 0) return {};
             const entries = await Promise.all(routeIds.map(async (id: string) => {
               try {
                 const s = await getDoc(doc(db, 'routes', id));
@@ -170,11 +173,7 @@ export default function SupervisorPage() {
   if (!user || !profile) {
     return <Alert><AlertTitle>Not Authorized</AlertTitle><AlertDescription>Your profile is not associated with a school or you are not logged in.</AlertDescription></Alert>;
   }
-
-  const renderCellContent = (content: string | undefined | null) => {
-    return content || <span className="text-muted-foreground">N/A</span>;
-  };
-
+  
   const getSupervisorContent = (trip: Trip) => {
     if (trip.allowDriverAsSupervisor) {
       return (
@@ -184,9 +183,9 @@ export default function SupervisorPage() {
         </Badge>
       );
     }
-    if (trip.supervisorId) {
-      const supervisor = referenceData.userMap?.[trip.supervisorId] as UserInfo;
-      return renderCellContent(supervisor?.displayName || supervisor?.email);
+    const supervisor = referenceData.userMap?.[trip.supervisorId as string] as UserInfo;
+    if (supervisor) {
+      return supervisor.displayName || supervisor.email;
     }
     return <span className="text-muted-foreground">No supervisor</span>;
   };
@@ -232,9 +231,9 @@ export default function SupervisorPage() {
                   const route = trip.routeId ? referenceData.routeMap?.[trip.routeId] : null;
                   return (
                     <TableRow key={trip.id}>
-                      <TableCell>{renderCellContent(driver?.displayName || driver?.email)}</TableCell>
-                      <TableCell>{renderCellContent(bus?.busCode)}</TableCell>
-                      <TableCell>{renderCellContent(route?.name)}</TableCell>
+                      <TableCell>{driver?.displayName ?? driver?.email ?? '—'}</TableCell>
+                      <TableCell>{bus?.busCode ?? '—'}</TableCell>
+                      <TableCell>{route?.name ?? '—'}</TableCell>
                       <TableCell>{getSupervisorContent(trip)}</TableCell>
                       <TableCell>
                         <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800 border-green-200' : ''}>
@@ -260,7 +259,8 @@ export default function SupervisorPage() {
                   <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     <div className="flex flex-col items-center gap-2">
                        <Frown className="h-8 w-8" />
-                       <span className="font-medium">No relevant trips found for today</span>
+                       <span className="font-medium">{uiState.status === 'empty' ? "No trips to supervise" : "No trips found"}</span>
+                       <span>No trips have been assigned to you for today.</span>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -272,5 +272,3 @@ export default function SupervisorPage() {
     </Card>
   );
 }
-
-    
