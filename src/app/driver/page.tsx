@@ -5,12 +5,15 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   collection, query, where, getDocs, getDoc, doc,
   addDoc, updateDoc, Timestamp, limit, orderBy, serverTimestamp,
+  writeBatch,
   type DocumentData,
+  type Firestore,
+  type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
-import { seedPassengers } from '@/ai/flows/seed-passengers';
+
 
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -58,6 +61,65 @@ type UiState = {
     status: 'loading' | 'ready' | 'error' | 'empty';
     errorMessage?: string;
 }
+
+async function seedPassengersForTrip(
+    fs: Firestore, 
+    trip: Trip,
+) {
+
+  const studentsCol = collection(fs, "students");
+  const queries = [];
+
+  // Query by route if it exists
+  if (trip.routeId) {
+    queries.push(query(
+        studentsCol,
+        where("schoolId", "==", trip.schoolId),
+        where("assignedRouteId", "==", trip.routeId)
+    ));
+  }
+
+  // Query by bus if it exists
+  if (trip.busId) {
+    queries.push(query(
+        studentsCol,
+        where("schoolId", "==", trip.schoolId),
+        where("assignedBusId", "==", trip.busId)
+    ));
+  }
+  
+  if (queries.length === 0) return 0;
+
+  const querySnapshots = await Promise.all(queries.map(q => getDocs(q)));
+  
+  const seen = new Set<string>();
+  const batch = writeBatch(fs);
+
+  const addStudentToBatch = (s: QueryDocumentSnapshot<DocumentData>) => {
+    if (seen.has(s.id)) return;
+    seen.add(s.id);
+    const pRef = doc(fs, `trips/${trip.id}/passengers/${s.id}`);
+    const data = s.data();
+    batch.set(pRef, {
+      studentId: s.id,
+      name: data.name ?? "",
+      schoolId: trip.schoolId,
+      routeId: trip.routeId || null,
+      busId: trip.busId,
+      status: "pending",
+      boardedAt: null,
+      droppedAt: null,
+      updatedBy: trip.driverId, // Attributed to the driver who started the trip
+      updatedAt: serverTimestamp(),
+    });
+  };
+
+  querySnapshots.forEach(snap => snap.forEach(addStudentToBatch));
+
+  await batch.commit();
+  return seen.size;
+}
+
 
 function LoadingState() {
     return (
@@ -218,18 +280,18 @@ export default function DriverPage() {
             setActiveTrip(fullTrip);
             toast({ title: "Trip Started!", description: `Your trip is now active.`, className: 'bg-accent text-accent-foreground border-0' });
 
-            // Seed passengers using the secure Genkit flow in the background
-            seedPassengers({ tripId: docRef.id })
-                .then(seedResult => {
-                     toast({
+            // Seed passengers in the background
+            seedPassengersForTrip(db, fullTrip)
+                .then(count => {
+                    toast({
                         title: "Roster Ready!",
-                        description: `${seedResult.passengerCount} passengers have been added to your roster.`,
+                        description: `${count} passengers have been added to your roster.`,
                         className: 'bg-accent text-accent-foreground border-0',
                     });
                 })
                 .catch(err => {
-                    console.error("[seed passengers flow]", err);
-                    toast({ variant: 'destructive', title: "Roster Error", description: "Could not create the passenger roster." });
+                    console.error("[seed passengers]", err);
+                    toast({ variant: 'destructive', title: "Roster Error", description: "Could not create the passenger roster. Check permissions to read 'students'." });
                 });
 
         } catch (error) {
@@ -400,5 +462,3 @@ export default function DriverPage() {
         </div>
     )
 }
-
-    
