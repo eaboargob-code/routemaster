@@ -4,6 +4,7 @@
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { SupervisorGuard } from "./SupervisorGuard";
+import { SharedAccessGuard } from "./SharedAccessGuard";
 
 export default function SupervisorLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -12,7 +13,11 @@ export default function SupervisorLayout({ children }: { children: ReactNode }) 
     return <>{children}</>;
   }
 
-  // All other routes under /supervisor are protected.
-  // Note: The details page will also be wrapped by this guard.
+  // The trip detail page is shared between admins and supervisors
+  if (pathname?.startsWith('/supervisor/trips/')) {
+    return <SharedAccessGuard>{children}</SharedAccessGuard>;
+  }
+
+  // All other routes under /supervisor are for supervisors only.
   return <SupervisorGuard>{children}</SupervisorGuard>;
 }
