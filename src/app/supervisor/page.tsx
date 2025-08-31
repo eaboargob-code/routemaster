@@ -5,7 +5,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   collection, query, where, getDocs, getDoc, doc,
-  Timestamp, orderBy, limit, type DocumentData
+  Timestamp, type DocumentData
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -92,14 +92,17 @@ export default function SupervisorPage() {
       );
   
       const tripsSnap = await getDocs(tripsQ);
-      const trips = tripsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-      setTrips(trips);
+      const fetchedTrips = tripsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      
+      // Sort in memory as a fallback since orderBy is removed
+      fetchedTrips.sort((a,b) => b.startedAt.toMillis() - a.startedAt.toMillis());
+      setTrips(fetchedTrips);
   
       // 2) fetch referenced docs, but NEVER block the trips table if these fail
       try {
-        const userIds = Array.from(new Set(trips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
-        const busIds  = Array.from(new Set(trips.map(t => t.busId).filter(Boolean)));
-        const routeIds= Array.from(new Set(trips.map(t => t.routeId).filter(Boolean) as string[]));
+        const userIds = Array.from(new Set(fetchedTrips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
+        const busIds  = Array.from(new Set(fetchedTrips.map(t => t.busId).filter(Boolean)));
+        const routeIds= Array.from(new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[]));
   
         const [userMap, busMap, routeMap] = await Promise.all([
           (async () => {
@@ -138,7 +141,7 @@ export default function SupervisorPage() {
         setReferenceData({ userMap: {}, busMap: {}, routeMap: {} });
       }
   
-      if (trips.length === 0) {
+      if (fetchedTrips.length === 0) {
         setUiState({ status: 'empty' });
       } else {
         setUiState({ status: 'ready' });
@@ -269,5 +272,3 @@ export default function SupervisorPage() {
     </Card>
   );
 }
-
-    
