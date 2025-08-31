@@ -284,7 +284,3 @@ export default function SupervisorPage() {
     </Card>
   );
 }
-
-    
-
-    
