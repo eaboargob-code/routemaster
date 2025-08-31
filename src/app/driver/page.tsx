@@ -140,23 +140,30 @@ export default function DriverPage() {
             setSupervisor(null); // continue
         }
 
-        // TRIPS
+        // 3) Check for an active trip for this driver (today)
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
         try {
-            const start = new Date(); start.setHours(0,0,0,0);
-            const tQ = query(
-                collection(db, "trips"),
-                where("schoolId", "==", profile.schoolId),
-                where("driverId", "==", user.uid),
-                where("startedAt", ">=", Timestamp.fromDate(start)),
-                orderBy("startedAt", "desc")
-            );
-            const tSnap = await getDocs(tQ);
-            const active = tSnap.docs.map(d => ({ id: d.id, ...d.data() } as any))
-                        .find(t => t.status === "active") || null;
-            setActiveTrip(active);
-        } catch (e:any) {
-            console.error("[driver] TRIPS query failed", e);
-            setActiveTrip(null); // continue
+          const tripQ = query(
+            collection(db, 'trips'),
+            where('schoolId', '==', profile.schoolId),
+            where('driverId', '==', user.uid),
+            where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
+            orderBy('startedAt', 'desc'),
+            limit(10)
+          );
+
+          const tripSnap = await getDocs(tripQ);
+
+          const active = tripSnap.docs
+            .map(d => ({ id: d.id, ...(d.data() as any) }))
+            .find(t => t.status === 'active') || null;
+
+          setActiveTrip(active || null);
+        } catch (e) {
+          console.error('[driver] TRIPS query failed', e);
+          setActiveTrip(null); // don’t block the page
         }
 
         setUiState({ status: 'ready' });
@@ -428,3 +435,5 @@ export default function DriverPage() {
         </div>
     )
 }
+
+    
