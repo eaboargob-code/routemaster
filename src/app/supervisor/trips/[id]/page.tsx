@@ -49,13 +49,12 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
             setBus(details.bus);
             setRoute(details.route);
             
-            // Determine edit permissions
-            if (profile?.role === 'admin') {
-                setCanEdit(true);
-            } else if (profile?.role === 'supervisor' && user?.uid === fetchedTrip.supervisorId) {
-                setCanEdit(true);
-            } else if (profile?.role === 'driver' && user?.uid === fetchedTrip.driverId && fetchedTrip.allowDriverAsSupervisor) {
-                 setCanEdit(true);
+            // Determine edit permissions based on the new logic
+            if (profile && user) {
+                const isAdmin = profile.role === 'admin';
+                const isSupervisor = profile.role === 'supervisor' && user.uid === fetchedTrip.supervisorId;
+                const isDriverSupervising = profile.role === 'driver' && user.uid === fetchedTrip.driverId && !!fetchedTrip.allowDriverAsSupervisor;
+                setCanEdit(isAdmin || isSupervisor || isDriverSupervising);
             } else {
                 setCanEdit(false);
             }
