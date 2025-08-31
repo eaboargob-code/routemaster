@@ -128,9 +128,9 @@ export default function DriverPage() {
         // SUPERVISOR (optional)
         try {
             if (foundBus?.supervisorId) {
-                const supervisorData = await getUsersByIds([foundBus.supervisorId]);
-                if (supervisorData && foundBus.supervisorId) {
-                    setSupervisor(supervisorData[foundBus.supervisorId] as Supervisor);
+                const supSnap = await getDoc(doc(db, 'users', foundBus.supervisorId));
+                if (supSnap.exists()) {
+                    setSupervisor({id: supSnap.id, ...supSnap.data()} as Supervisor);
                 }
             } else {
                 setSupervisor(null);
@@ -452,5 +452,3 @@ export default function DriverPage() {
         </div>
     )
 }
-
-    
