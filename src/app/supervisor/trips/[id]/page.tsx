@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState, useCallback, use } from 'react';
+import React, { useEffect, useState, useCallback, use } from 'react';
 import { type DocumentData } from 'firebase/firestore';
 import { useProfile } from '@/lib/useProfile';
 import { getTripDetails } from '@/lib/firestoreQueries';
@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Roster } from './TripRoster';
 import { ArrowLeft, Bus, Route } from 'lucide-react';
 import Link from 'next/link';
-import React from 'react';
+import { AdminTripActions } from './AdminTripActions';
 
 interface TripDetails extends DocumentData {
     id: string;
@@ -22,6 +22,7 @@ interface TripDetails extends DocumentData {
     supervisorId?: string;
     driverId: string;
     allowDriverAsSupervisor?: boolean;
+    status: 'active' | 'ended';
 }
 
 export default function TripDetailsPage({ params }: { params: { id: string }}) {
@@ -75,6 +76,12 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
             setIsLoading(false);
         }
     }, [profile?.schoolId, profileLoading, fetchTripData]);
+    
+    const onTripUpdate = () => {
+        if (profile?.schoolId) {
+            fetchTripData(profile.schoolId);
+        }
+    }
 
     if (isLoading || profileLoading) {
         return (
@@ -98,10 +105,17 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
 
     return (
         <div className="grid gap-8">
-            <Link href={backUrl} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-                <ArrowLeft className="h-4 w-4" />
-                Back to All Trips
-            </Link>
+            <div className="flex justify-between items-center">
+                <Link href={backUrl} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                    <ArrowLeft className="h-4 w-4" />
+                    Back to All Trips
+                </Link>
+            </div>
+            
+            {profile?.role === 'admin' && (
+                <AdminTripActions trip={trip} onTripUpdate={onTripUpdate} />
+            )}
+            
             <Card>
                 <CardHeader>
                     <CardTitle>Trip Roster</CardTitle>
@@ -121,7 +135,7 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
                 <CardContent>
                     <Roster 
                         tripId={trip.id} 
-                        canEdit={canEdit}
+                        canEdit={canEdit && trip.status === 'active'}
                     />
                 </CardContent>
             </Card>
