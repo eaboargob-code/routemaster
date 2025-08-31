@@ -42,7 +42,6 @@ async function updatePassengerStatus(
 ) {
     const passengerRef = doc(db, `trips/${tripId}/passengers`, studentId);
     const tripRef = doc(db, `trips`, tripId);
-    const eventRef = doc(collection(db, `trips/${tripId}/events`)); // Auto-generates an ID
 
     const passengerSnap = await getDoc(passengerRef);
     if (!passengerSnap.exists()) {
@@ -69,15 +68,6 @@ async function updatePassengerStatus(
     counterUpdate[`counts.${oldStatus}`] = increment(-1);
     counterUpdate[`counts.${newStatus}`] = increment(1);
     batch.update(tripRef, counterUpdate);
-    
-    // 3. Create an audit log event
-    batch.set(eventRef, {
-      who: actor.uid,
-      role: actor.role,
-      action: newStatus,
-      studentId: studentId,
-      ts: serverTimestamp(),
-    });
 
     await batch.commit();
 }
