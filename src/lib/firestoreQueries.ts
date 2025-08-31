@@ -75,14 +75,22 @@ export async function listTodaysTripsForSchool(schoolId: string, filters: { stat
     ];
 
     if (filters.status && filters.status !== 'all') {
-        constraints.push(where("status", "==", filters.status));
+        // This filter is now applied client-side to avoid index requirement
+        // constraints.push(where("status", "==", filters.status));
     }
     
     constraints.push(orderBy("startedAt", "desc"));
 
     const q = query(collection(db, "trips"), ...constraints);
-    const s = await getDocs(q);
-    return s.docs.map(d => ({ id: d.id, ...d.data() }));
+    let s = await getDocs(q);
+    
+    let docs = s.docs;
+    
+    if (filters.status && filters.status !== 'all') {
+        docs = docs.filter(doc => doc.data().status === filters.status);
+    }
+
+    return docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 

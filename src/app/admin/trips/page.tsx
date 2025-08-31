@@ -141,16 +141,19 @@ export default function TripsPage() {
 
   const filteredTrips = useMemo(() => {
     const lowercasedSearch = searchTerm.toLowerCase();
-    if (!lowercasedSearch) return trips;
     
     return trips.filter(trip => {
         const driver = referencedData.users?.[trip.driverId] as UserInfo;
         const driverName = driver?.displayName?.toLowerCase() || driver?.email?.toLowerCase() || "";
         const bus = referencedData.buses?.get(trip.busId);
         const busCode = bus?.busCode?.toLowerCase() || "";
-        return driverName.includes(lowercasedSearch) || busCode.includes(lowercasedSearch);
+        
+        const searchMatch = !lowercasedSearch || driverName.includes(lowercasedSearch) || busCode.includes(lowercasedSearch);
+        const statusMatch = statusFilter === 'all' || trip.status === statusFilter;
+        
+        return searchMatch && statusMatch;
     });
-  }, [trips, searchTerm, referencedData]);
+  }, [trips, searchTerm, referencedData, statusFilter]);
 
   if (profileLoading) {
     return <Skeleton className="h-96 w-full" />;
@@ -297,7 +300,7 @@ export default function TripsPage() {
                     <div className="flex flex-col items-center gap-2">
                        <Frown className="h-8 w-8" />
                        <span className="font-medium">No trips found</span>
-                       <span>No trips have been recorded for today.</span>
+                       <span>No trips have been recorded for today with the selected filters.</span>
                     </div>
                   </TableCell>
                 </TableRow>
