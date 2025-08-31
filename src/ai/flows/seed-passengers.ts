@@ -12,10 +12,7 @@ import * as admin from 'firebase-admin';
 
 // Initialize Firebase Admin SDK if not already done.
 if (admin.apps.length === 0) {
-    admin.initializeApp({
-        credential: admin.credential.applicationDefault(),
-        projectId: process.env.GCLOUD_PROJECT,
-    });
+    admin.initializeApp();
 }
 const db = admin.firestore();
 
