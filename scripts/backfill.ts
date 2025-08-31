@@ -91,8 +91,11 @@ async function main() {
   try {
     const usersCounters = await backfillUsers(db, bulkWriter, isDryRun);
     const routesCounters = await backfillRoutes(db, bulkWriter, isDryRun);
+    const passengersCounters = await backfillPassengers(db, bulkWriter, isDryRun);
 
-    if (!isDryRun && (usersCounters.updated > 0 || routesCounters.updated > 0)) {
+    const totalUpdated = usersCounters.updated + routesCounters.updated + passengersCounters.updated;
+
+    if (!isDryRun && totalUpdated > 0) {
         await bulkWriter.close();
         console.log('\nAll batched writes have been committed.');
     } else if (!isDryRun) {
@@ -100,8 +103,9 @@ async function main() {
     }
 
     console.log('\n--- Summary ---');
-    console.log(`Users:  ${usersCounters.scanned} scanned, ${usersCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
-    console.log(`Routes: ${routesCounters.scanned} scanned, ${routesCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
+    console.log(`Users:      ${usersCounters.scanned} scanned, ${usersCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
+    console.log(`Routes:     ${routesCounters.scanned} scanned, ${routesCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
+    console.log(`Passengers: ${passengersCounters.scanned} scanned, ${passengersCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
     console.log('----------------\n');
   } catch (error) {
     console.error('An unexpected error occurred during the backfill process:', error);
@@ -129,44 +133,10 @@ async function backfillUsers(
     const data = doc.data();
     const updates: { [key: string]: any } = {};
 
-    // 0. Rename 'schoolid' to 'schoolId'
-    if (data.schoolid !== undefined) {
-      updates.schoolId = data.schoolid;
-      updates.schoolid = admin.firestore.FieldValue.delete();
-    }
-
-    // 1. Set default for 'displayName' if missing
-    if (data.displayName === undefined) {
-      updates.displayName = 'Invited User';
-    }
-
-    // 2. Set default for 'email' if missing
-    if (data.email === undefined) {
-        updates.email = '<unknown>';
-    }
-
-    // 3. Set default for 'role' if missing, and normalize to lowercase
-    if (data.role === undefined) {
-      updates.role = 'driver';
-    } else if (typeof data.role === 'string' && data.role !== data.role.toLowerCase()) {
-      updates.role = data.role.toLowerCase();
-    }
-    
-    // 4. Set default for 'schoolId' if missing
     if (data.schoolId === undefined && data.schoolid === undefined) {
       updates.schoolId = SCHOOL_ID_TO_BACKFILL;
     }
     
-    // 5. Set default for 'active' if missing
-    if (data.active === undefined) {
-      updates.active = true;
-    }
-    
-    // 6. Set default for 'pending' if missing
-    if (data.pending === undefined) {
-      updates.pending = false;
-    }
-
     if (Object.keys(updates).length > 0) {
       counters.updated++;
       console.log(` -> [users/${doc.id}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
@@ -197,28 +167,11 @@ async function backfillRoutes(
     counters.scanned++;
     const data = doc.data();
     const updates: { [key: string]: any } = {};
-
-    // 0. Rename 'schoolid' to 'schoolId'
-    if (data.schoolid !== undefined) {
-      updates.schoolId = data.schoolid;
-      updates.schoolid = admin.firestore.FieldValue.delete();
-    }
     
-    // 1. Set default for 'schoolId' if missing
     if (data.schoolId === undefined && data.schoolid === undefined) {
       updates.schoolId = SCHOOL_ID_TO_BACKFILL;
     }
     
-    // 2. Set default for 'active' if missing
-    if (data.active === undefined) {
-      updates.active = true;
-    }
-    
-    // 3. Set default for 'name' if missing
-    if (data.name === undefined) {
-        updates.name = 'Unnamed Route';
-    }
-
     if (Object.keys(updates).length > 0) {
         counters.updated++;
         console.log(` -> [routes/${doc.id}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
@@ -231,6 +184,50 @@ async function backfillRoutes(
   console.log(`"routes" collection scan complete.`);
   return counters;
 }
+
+
+/**
+ * Backfills the 'passengers' subcollection for recent trips.
+ */
+async function backfillPassengers(
+  db: admin.firestore.Firestore,
+  writer: admin.firestore.BulkWriter,
+  isDryRun: boolean
+): Promise<Counters> {
+  console.log('\nStarting backfill for "passengers" subcollections...');
+  const counters: Counters = { scanned: 0, updated: 0 };
+
+  const tripsSnapshot = await db.collection('trips')
+      .where('schoolId', '==', SCHOOL_ID_TO_BACKFILL)
+      .get();
+      
+  console.log(`Found ${tripsSnapshot.docs.length} trips for school ${SCHOOL_ID_TO_BACKFILL}. Checking passenger subcollections...`);
+
+  for (const tripDoc of tripsSnapshot.docs) {
+    const tripData = tripDoc.data();
+    if (!tripData.schoolId) continue;
+
+    const passengersSnapshot = await tripDoc.ref.collection('passengers').get();
+    
+    for (const passengerDoc of passengersSnapshot.docs) {
+      counters.scanned++;
+      const passengerData = passengerDoc.data();
+      
+      if (passengerData.schoolId === undefined) {
+        const updates = { schoolId: tripData.schoolId };
+        counters.updated++;
+        console.log(` -> [${passengerDoc.ref.path}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
+        if (!isDryRun) {
+          writer.update(passengerDoc.ref, updates);
+        }
+      }
+    }
+  }
+
+  console.log(`"passengers" subcollection scan complete.`);
+  return counters;
+}
+
 
 // --- Script Entry Point ---
 

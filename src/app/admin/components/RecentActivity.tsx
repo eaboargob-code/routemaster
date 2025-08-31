@@ -22,6 +22,8 @@ import { formatDistanceToNow } from 'date-fns';
 import { getUsersByIds } from "@/lib/firestoreQueries";
 import type { DocumentData, Timestamp } from "firebase/firestore";
 import { AlertCircle, FileText } from "lucide-react";
+import { collectionGroup, query, where, orderBy, limit, getDocs } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 interface Event extends DocumentData {
     action: 'boarded' | 'dropped' | 'absent';
@@ -33,25 +35,51 @@ interface Event extends DocumentData {
 }
 
 interface RecentActivityProps {
-    events: Event[];
     schoolId: string;
 }
 
-export function RecentActivity({ events, schoolId }: RecentActivityProps) {
+export function RecentActivity({ schoolId }: RecentActivityProps) {
+    const [events, setEvents] = useState<Event[]>([]);
     const [users, setUsers] = useState<Record<string, DocumentData>>({});
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const uids = [...new Set(events.map(e => e.who).filter(Boolean))];
-        if (uids.length > 0) {
-            getUsersByIds(uids).then(userMap => {
-                setUsers(userMap);
-                setLoading(false);
-            });
-        } else {
-            setLoading(false);
+      const fetchRecentActivity = async () => {
+        if (!schoolId) {
+          setLoading(false);
+          return;
         }
-    }, [events]);
+        setLoading(true);
+
+        try {
+          // Use a collectionGroup query to get events across all trips for the school
+          const eventsQuery = query(
+            collectionGroup(db, 'events'),
+            where('schoolId', '==', schoolId),
+            orderBy('ts', 'desc'),
+            limit(10)
+          );
+
+          const eventsSnapshot = await getDocs(eventsQuery);
+          const fetchedEvents = eventsSnapshot.docs.map(doc => doc.data() as Event);
+          setEvents(fetchedEvents);
+
+          const uids = [...new Set(fetchedEvents.map(e => e.who).filter(Boolean))];
+          if (uids.length > 0) {
+              getUsersByIds(uids).then(userMap => {
+                  setUsers(userMap);
+              });
+          }
+        } catch (error) {
+          console.error("Error fetching recent activity:", error);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      fetchRecentActivity();
+    }, [schoolId]);
+
 
     const renderAction = (event: Event) => {
         const user = users[event.who] || { displayName: 'Unknown User' };

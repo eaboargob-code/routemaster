@@ -43,8 +43,7 @@ export function Dashboard({ schoolId }: DashboardProps) {
   const [routes, setRoutes] = useState<DocumentData[]>([]);
   const [students, setStudents] = useState<DocumentData[]>([]);
   const [allTrips, setAllTrips] = useState<Trip[]>([]);
-  const [events, setEvents] = useState<DocumentData[]>([]);
-
+  
   useEffect(() => {
     if (!schoolId) return;
 
@@ -56,31 +55,6 @@ export function Dashboard({ schoolId }: DashboardProps) {
       onSnapshot(query(collection(db, "trips"), where("schoolId", "==", schoolId)), (snap) => setAllTrips(snap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)))),
     ];
     
-     const fetchEvents = async () => {
-        const tripsQuery = query(
-            collection(db, "trips"), 
-            where("schoolId", "==", schoolId),
-            // This query requires an index, so we will sort client side for now
-            // orderBy("startedAt", "desc"),
-            limit(10)
-        );
-        const tripsSnap = await getDocs(tripsQuery);
-        
-        const sortedTrips = tripsSnap.docs.sort((a, b) => b.data().startedAt.toMillis() - a.data().startedAt.toMillis()).slice(0, 5);
-
-        const eventPromises = sortedTrips.map(tripDoc => {
-            const eventsQuery = query(collection(db, `trips/${tripDoc.id}/events`), orderBy('ts', 'desc'), limit(10));
-            return getDocs(eventsQuery);
-        });
-
-        const eventSnapshots = await Promise.all(eventPromises);
-        const allEvents = eventSnapshots.flatMap(snap => snap.docs.map(d => ({...d.data(), tripId: d.ref.parent.parent?.id })));
-        allEvents.sort((a, b) => b.ts.toMillis() - a.ts.toMillis());
-        setEvents(allEvents.slice(0, 10));
-    };
-
-    fetchEvents();
-
     const timer = setTimeout(() => setLoading(false), 1500);
 
     return () => {
@@ -119,7 +93,7 @@ export function Dashboard({ schoolId }: DashboardProps) {
             {loading ? <DailyTripsChartLoading /> : <DailyTripsChart trips={tripsLast7Days} />}
         </div>
         <div className="grid gap-6">
-            {loading ? <RecentActivityLoading /> : <RecentActivity events={events} schoolId={schoolId} />}
+             {loading ? <RecentActivityLoading /> : <RecentActivity schoolId={schoolId} />}
         </div>
     </div>
   );

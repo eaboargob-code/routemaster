@@ -110,7 +110,7 @@ async function seedPassengersForTrip(
     batch.set(pRef, {
       studentId: s.id,
       name: data.name ?? "",
-      schoolId: trip.schoolId,
+      schoolId: trip.schoolId, // Denormalize schoolId
       routeId: trip.routeId || null,
       busId: trip.busId,
       status: "pending",
