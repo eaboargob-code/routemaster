@@ -67,7 +67,7 @@ export function Dashboard({ schoolId }: DashboardProps) {
         const tripsQuery = query(
             collection(db, "trips"), 
             where("schoolId", "==", schoolId),
-            orderBy("startedAt", "desc"),
+            // orderBy("startedAt", "desc"), // This causes a missing index error, so we sort client-side
             limit(5)
         );
         const tripsSnap = await getDocs(tripsQuery);
