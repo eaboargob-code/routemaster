@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import React, { useEffect, useState, useCallback, use } from 'react';
@@ -26,7 +27,7 @@ interface TripDetails extends DocumentData {
 }
 
 export default function TripDetailsPage({ params }: { params: { id: string }}) {
-    const { id: tripId } = use(params);
+    const tripId = params.id;
     const { user, profile, loading: profileLoading } = useProfile();
     const [trip, setTrip] = useState<TripDetails | null>(null);
     const [route, setRoute] = useState<DocumentData | null>(null);
