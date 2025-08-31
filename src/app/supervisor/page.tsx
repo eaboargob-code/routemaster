@@ -75,95 +75,80 @@ export default function SupervisorPage() {
 
   const fetchTripsAndReferences = useCallback(async () => {
     if (!user || !profile) return;
-
     setUiState({ status: 'loading' });
+  
+    // 1) fetch just the trips you’re allowed to see
     try {
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-        
-        const qMine = query(
-            collection(db, 'trips'),
-            where('schoolId', '==', profile.schoolId),
-            where('supervisorId', '==', user.uid),
-            where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
-            orderBy('startedAt', 'desc'),
-            limit(100)
-        );
-
-        const qDriverAsSup = query(
-            collection(db, 'trips'),
-            where('schoolId', '==', profile.schoolId),
-            where('allowDriverAsSupervisor', '==', true),
-            where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
-            orderBy('startedAt', 'desc'),
-            limit(100)
-        );
-        
-        const [mineSnapshot, driverAsSupSnapshot] = await Promise.all([
-            getDocs(qMine),
-            getDocs(qDriverAsSup),
-        ]);
-
-        const seen = new Set<string>();
-        const tripsData = [...mineSnapshot.docs, ...driverAsSupSnapshot.docs]
-            .filter(d => !seen.has(d.id) && seen.add(d.id))
-            .map(d => ({ id: d.id, ...d.data() } as Trip))
-            .sort((a, b) => b.startedAt.toMillis() - a.startedAt.toMillis());
-
-
-        if (tripsData.length === 0) {
-            setTrips([]);
-            setUiState({ status: 'empty' });
-            return;
-        }
-
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+  
+      // *** MINIMAL, RULE-SAFE TRIP QUERY ***
+      const tripsQ = query(
+        collection(db, 'trips'),
+        where('schoolId', '==', profile.schoolId),
+        where('supervisorId', '==', user.uid),
+        where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
+        // ⛔️ no orderBy/limit until we confirm it’s indexed and working
+      );
+  
+      const tripsSnap = await getDocs(tripsQ);
+      const trips = tripsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      setTrips(trips);
+  
+      // 2) fetch referenced docs, but NEVER block the trips table if these fail
+      try {
+        const userIds = Array.from(new Set(trips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
+        const busIds  = Array.from(new Set(trips.map(t => t.busId).filter(Boolean)));
+        const routeIds= Array.from(new Set(trips.map(t => t.routeId).filter(Boolean) as string[]));
+  
         const [userMap, busMap, routeMap] = await Promise.all([
-        (async () => {
-            const ids = Array.from(new Set(tripsData.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
-            const entries = await Promise.all(ids.map(async (id: string) => {
-            try {
-                const snap = await getDoc(doc(db, 'users', id));
-                return [id, snap.exists() ? snap.data() : null] as const;
-            } catch {
-                return [id, null] as const;
-            }
+          (async () => {
+            const entries = await Promise.all(userIds.map(async (id: string) => {
+              try {
+                const s = await getDoc(doc(db, 'users', id));
+                return [id, s.exists() ? s.data() : null] as const;
+              } catch { return [id, null] as const; }
             }));
-            return Object.fromEntries(entries.filter(entry => entry[1]));
-        })(),
-        (async () => {
-            const ids = Array.from(new Set(tripsData.map(t => t.busId).filter(Boolean)));
-            const entries = await Promise.all(ids.map(async (id: string) => {
-            try {
-                const snap = await getDoc(doc(db, 'buses', id));
-                return [id, snap.exists() ? snap.data() : null] as const;
-            } catch {
-                return [id, null] as const;
-            }
+            return Object.fromEntries(entries.filter(e => e[1]));
+          })(),
+          (async () => {
+            const entries = await Promise.all(busIds.map(async (id: string) => {
+              try {
+                const s = await getDoc(doc(db, 'buses', id));
+                return [id, s.exists() ? s.data() : null] as const;
+              } catch { return [id, null] as const; }
             }));
-            return Object.fromEntries(entries.filter(entry => entry[1]));
-        })(),
-        (async () => {
-            const ids = Array.from(new Set(tripsData.map(t => t.routeId).filter(Boolean) as string[]));
-            const entries = await Promise.all(ids.map(async (id: string) => {
-            try {
-                const snap = await getDoc(doc(db, 'routes', id));
-                return [id, snap.exists() ? snap.data() : null] as const;
-            } catch {
-                return [id, null] as const;
-            }
+            return Object.fromEntries(entries.filter(e => e[1]));
+          })(),
+          (async () => {
+            const entries = await Promise.all(routeIds.map(async (id: string) => {
+              try {
+                const s = await getDoc(doc(db, 'routes', id));
+                return [id, s.exists() ? s.data() : null] as const;
+              } catch { return [id, null] as const; }
             }));
-            return Object.fromEntries(entries.filter(entry => entry[1]));
-        })()
+            return Object.fromEntries(entries.filter(e => e[1]));
+          })(),
         ]);
-
+  
         setReferenceData({ userMap, busMap, routeMap });
-        setTrips(tripsData);
+      } catch (e) {
+        console.warn('[supervisor] refs fetch failed (non-blocking):', e);
+        // still show trips even if names couldn't be fetched
+        setReferenceData({ userMap: {}, busMap: {}, routeMap: {} });
+      }
+  
+      if (trips.length === 0) {
+        setUiState({ status: 'empty' });
+      } else {
         setUiState({ status: 'ready' });
-    } catch (err) {
-        console.error('[supervisor] trip fetch failed', err);
-        setUiState({ status: 'error', errorMessage: 'Missing or insufficient permissions.' });
+      }
+
+    } catch (err: any) {
+      console.error('[supervisor] trip fetch failed', err?.code, err?.message);
+      setUiState({ status: 'error', errorMessage: 'Missing or insufficient permissions.' });
     }
-    }, [user, profile]);
+  }, [user, profile]);
 
   useEffect(() => {
     if (!profileLoading && user && profile) {
@@ -284,3 +269,5 @@ export default function SupervisorPage() {
     </Card>
   );
 }
+
+    
