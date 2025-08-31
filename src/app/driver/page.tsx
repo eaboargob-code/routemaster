@@ -49,6 +49,7 @@ interface Trip extends DocumentData {
     status: 'active' | 'ended';
     supervisorId?: string | null;
     allowDriverAsSupervisor?: boolean;
+    driverSupervisionLocked?: boolean;
     schoolId: string;
     counts?: {
         pending: number;
@@ -288,6 +289,7 @@ export default function DriverPage() {
                 status: "active",
                 supervisorId: bus.supervisorId || null,
                 allowDriverAsSupervisor: false,
+                driverSupervisionLocked: false,
                 counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 }
             };
             const docRef = await addDoc(collection(db, "trips"), newTripData);
@@ -463,7 +465,12 @@ export default function DriverPage() {
                                 Trip Roster
                             </div>
                             <div className="flex items-center space-x-2">
-                                <Switch id="driver-supervisor-mode" checked={!!activeTrip.allowDriverAsSupervisor} onCheckedChange={handleSetActingAsSupervisor} />
+                                <Switch 
+                                    id="driver-supervisor-mode" 
+                                    checked={!!activeTrip.allowDriverAsSupervisor} 
+                                    onCheckedChange={handleSetActingAsSupervisor}
+                                    disabled={activeTrip.driverSupervisionLocked}
+                                />
                                 <Label htmlFor="driver-supervisor-mode">Supervise</Label>
                             </div>
                         </CardTitle>

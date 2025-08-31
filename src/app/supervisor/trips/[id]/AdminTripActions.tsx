@@ -30,6 +30,7 @@ interface AdminTripActionsProps {
         schoolId: string;
         supervisorId?: string | null;
         allowDriverAsSupervisor?: boolean;
+        driverSupervisionLocked?: boolean;
         status: 'active' | 'ended';
     };
     onTripUpdate: () => void;
@@ -63,11 +64,11 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
         fetchSupervisors();
     }, [trip.schoolId]);
 
-    const handleUpdate = async (field: string, value: any, successMessage: string) => {
+    const handleUpdate = async (updateData: Record<string, any>, successMessage: string) => {
         setIsSubmitting(true);
         try {
             const tripRef = doc(db, "trips", trip.id);
-            await updateDoc(tripRef, { [field]: value });
+            await updateDoc(tripRef, updateData);
             toast({
                 title: "Success",
                 description: successMessage,
@@ -75,7 +76,7 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
             });
             onTripUpdate(); // Trigger a refresh on the parent page
         } catch (error) {
-            console.error(`[Admin Update Error: ${field}]`, error);
+            console.error(`[Admin Update Error]`, error);
             toast({ variant: "destructive", title: "Update Failed", description: (error as Error).message });
         } finally {
             setIsSubmitting(false);
@@ -83,7 +84,7 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
     };
     
     const handleEndTrip = async () => {
-         setIsSubmitting(true);
+        setIsSubmitting(true);
         try {
             const tripRef = doc(db, "trips", trip.id);
             await updateDoc(tripRef, { status: "ended", endedAt: Timestamp.now() });
@@ -99,11 +100,16 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
 
     const handleSupervisorChange = (newSupervisorId: string) => {
         const value = newSupervisorId === NONE_SENTINEL ? null : newSupervisorId;
-        handleUpdate("supervisorId", value, "Supervisor has been reassigned.");
+        handleUpdate({ supervisorId: value }, "Supervisor has been reassigned.");
     };
     
     const handleToggleDriverSupervision = (canSupervise: boolean) => {
-        handleUpdate("allowDriverAsSupervisor", canSupervise, `Driver supervision has been ${canSupervise ? 'enabled' : 'disabled'}.`);
+        const updateData: Record<string, any> = { allowDriverAsSupervisor: canSupervise };
+        if (!canSupervise) {
+            // If admin turns it off, lock it.
+            updateData.driverSupervisionLocked = true;
+        }
+        handleUpdate(updateData, `Driver supervision has been ${canSupervise ? 'enabled' : 'disabled'}.`);
     };
 
     return (
@@ -195,4 +201,3 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
         </Card>
     );
 }
-
