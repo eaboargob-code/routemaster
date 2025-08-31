@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Roster } from './TripRoster';
 import { ArrowLeft, Bus, Route } from 'lucide-react';
 import Link from 'next/link';
+import React from 'react';
 
 interface TripDetails {
     id: string;
@@ -21,7 +22,7 @@ interface TripDetails {
 }
 
 export default function TripDetailsPage({ params }: { params: { id: string }}) {
-    const { id: tripId } = params;
+    const { id: tripId } = use(params);
     const { profile, loading: profileLoading } = useProfile();
     const [trip, setTrip] = useState<TripDetails | null>(null);
     const [route, setRoute] = useState<DocumentData | null>(null);
