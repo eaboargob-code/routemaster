@@ -9,7 +9,7 @@ import {
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import Link from "next/link";
-import { listTodaysTripsForSchool, getUsersByIds } from "@/lib/firestoreQueries";
+import { listTodaysTripsForSchool, getUsersByIds, listBusesForSchool, listRoutesForSchool } from "@/lib/firestoreQueries";
 
 import {
   Card,
@@ -70,7 +70,11 @@ export default function TripsPage() {
   const { toast } = useToast();
 
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [referencedData, setReferencedData] = useState<Record<string, DocumentData>>({});
+  const [referencedData, setReferencedData] = useState<Record<string, any>>({
+    users: {},
+    buses: new Map(),
+    routes: new Map(),
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,6 +115,13 @@ export default function TripsPage() {
           description: "A required index for this query is still being created. Please wait a moment and try again.",
           variant: "destructive"
         });
+      } else if (err.code === "permission-denied") {
+          setError("Permission denied. You do not have access to view these trips.");
+          toast({
+            title: "Access Denied",
+            description: "You do not have permission to view trips for this school.",
+            variant: "destructive"
+          });
       } else {
          setError(err.message || "An unexpected error occurred.");
       }
@@ -134,7 +145,7 @@ export default function TripsPage() {
     
     return trips.filter(trip => {
         const driver = referencedData.users?.[trip.driverId] as UserInfo;
-        const driverName = driver?.displayName?.toLowerCase() || "";
+        const driverName = driver?.displayName?.toLowerCase() || driver?.email?.toLowerCase() || "";
         const bus = referencedData.buses?.get(trip.busId);
         const busCode = bus?.busCode?.toLowerCase() || "";
         return driverName.includes(lowercasedSearch) || busCode.includes(lowercasedSearch);
@@ -286,7 +297,7 @@ export default function TripsPage() {
                     <div className="flex flex-col items-center gap-2">
                        <Frown className="h-8 w-8" />
                        <span className="font-medium">No trips found</span>
-                       <span>No trips match your current filters.</span>
+                       <span>No trips have been recorded for today.</span>
                     </div>
                   </TableCell>
                 </TableRow>
