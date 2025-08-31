@@ -1,8 +1,8 @@
 
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import { collection, query, where, getDocs, doc, writeBatch, onSnapshot, serverTimestamp, setDoc, deleteDoc } from 'firebase/firestore';
+import { useEffect, useState, useMemo } from 'react';
+import { collection, onSnapshot, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -18,116 +18,100 @@ import {
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Frown, LogIn, LogOut } from 'lucide-react';
+import { Frown, LogIn, LogOut, XCircle, CheckCircle, MinusCircle, UserX, QrCode } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 
-interface TripRosterProps {
+interface RosterProps {
     tripId: string;
-    schoolId: string;
-    routeId?: string | null;
-    busId: string;
+    canEdit: boolean;
 }
 
-interface Student {
+interface Passenger {
     id: string;
     name: string;
+    status: 'pending' | 'boarded' | 'absent' | 'dropped';
 }
 
-interface PassengerStatus {
-    studentId: string;
-    status: 'IN' | 'OUT';
+async function updatePassengerStatus(
+    tripId: string, 
+    studentId: string, 
+    status: Passenger['status'],
+    uid: string
+) {
+    const passengerRef = doc(db, `trips/${tripId}/passengers`, studentId);
+    const data: any = {
+        status,
+        updatedBy: uid,
+        updatedAt: serverTimestamp(),
+    };
+    if (status === 'boarded') data.boardedAt = serverTimestamp();
+    if (status === 'dropped') data.droppedAt = serverTimestamp();
+
+    await setDoc(passengerRef, data, { merge: true });
 }
 
-export function TripRoster({ tripId, schoolId, routeId, busId }: TripRosterProps) {
+export function Roster({ tripId, canEdit }: RosterProps) {
     const { user } = useProfile();
     const { toast } = useToast();
-    const [students, setStudents] = useState<Student[]>([]);
-    const [passengerStatuses, setPassengerStatuses] = useState<Map<string, PassengerStatus>>(new Map());
+    const [passengers, setPassengers] = useState<Passenger[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [qrValue, setQrValue] = useState("");
 
-    // Fetch the list of students for the route/bus
     useEffect(() => {
-        const fetchStudents = async () => {
-            if (!schoolId || (!routeId && !busId)) {
-                setIsLoading(false);
-                return;
-            }
-            setIsLoading(true);
-            setError(null);
-            
-            try {
-                let studentQuery;
-                if (routeId) {
-                    studentQuery = query(
-                        collection(db, "students"),
-                        where("schoolId", "==", schoolId),
-                        where("assignedRouteId", "==", routeId)
-                    );
-                } else {
-                     studentQuery = query(
-                        collection(db, "students"),
-                        where("schoolId", "==", schoolId),
-                        where("assignedBusId", "==", busId)
-                    );
-                }
-
-                const studentSnapshot = await getDocs(studentQuery);
-                const studentData = studentSnapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name })) as Student[];
-                setStudents(studentData);
-            } catch (e: any) {
-                console.error("Failed to fetch students for roster:", e);
-                setError(e.message || "Could not load student list.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        fetchStudents();
-    }, [schoolId, routeId, busId]);
-
-    // Listen for real-time updates to passenger statuses
-    useEffect(() => {
+        setIsLoading(true);
         const passengersRef = collection(db, "trips", tripId, "passengers");
         const unsubscribe = onSnapshot(passengersRef, (snapshot) => {
-            const statuses = new Map<string, PassengerStatus>();
-            snapshot.forEach(doc => {
-                statuses.set(doc.id, doc.data() as PassengerStatus);
-            });
-            setPassengerStatuses(statuses);
+            const passengerData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Passenger));
+            setPassengers(passengerData);
+            setIsLoading(false);
         }, (err) => {
             console.error("Failed to listen to passenger statuses:", err);
             setError("Could not load real-time passenger data.");
+            setIsLoading(false);
         });
 
         return () => unsubscribe();
     }, [tripId]);
 
-    const handleStatusToggle = async (studentId: string, currentStatus: 'IN' | 'OUT' | undefined) => {
+    const handleAction = async (studentId: string, status: Passenger['status']) => {
         if (!user) return;
-
-        const newStatus = currentStatus === 'IN' ? 'OUT' : 'IN';
-        const passengerRef = doc(db, "trips", tripId, "passengers", studentId);
-
         try {
-            await setDoc(passengerRef, {
-                studentId: studentId,
-                status: newStatus,
-                lastActionAt: serverTimestamp(),
-                lastActionBy: user.uid,
-            });
-             toast({
-                title: `Student marked as ${newStatus}`,
+            await updatePassengerStatus(tripId, studentId, status, user.uid);
+            toast({
+                title: `Student marked as ${status}`,
                 className: 'bg-accent text-accent-foreground border-0',
             });
         } catch (e: any) {
             console.error("Failed to update passenger status:", e);
-            toast({
-                variant: 'destructive',
-                title: 'Update Failed',
-                description: e.message,
-            });
+            toast({ variant: 'destructive', title: 'Update Failed', description: e.message });
         }
     };
+
+    const handleQrScan = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!user || !qrValue.trim()) return;
+        const studentId = qrValue.trim();
+
+        // Check if student exists in the current roster
+        const studentExists = passengers.some(p => p.id === studentId);
+        if (!studentExists) {
+            toast({ variant: 'destructive', title: 'Student Not Found', description: 'This student is not on the roster for this trip.' });
+            setQrValue("");
+            return;
+        }
+
+        await handleAction(studentId, 'boarded');
+        setQrValue("");
+    };
+
+    const counters = useMemo(() => {
+        return passengers.reduce((acc, p) => {
+            acc[p.status] = (acc[p.status] || 0) + 1;
+            return acc;
+        }, {} as Record<Passenger['status'], number>);
+    }, [passengers]);
     
     if (isLoading) {
         return <Skeleton className="h-48 w-full" />;
@@ -137,7 +121,7 @@ export function TripRoster({ tripId, schoolId, routeId, busId }: TripRosterProps
         return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>;
     }
     
-    if (students.length === 0) {
+    if (passengers.length === 0) {
         return (
             <Alert>
                 <Frown className="h-4 w-4" />
@@ -146,45 +130,59 @@ export function TripRoster({ tripId, schoolId, routeId, busId }: TripRosterProps
             </Alert>
         )
     }
+    
+    const getStatusBadge = (status: Passenger['status']) => {
+        switch(status) {
+            case 'boarded': return <Badge className="bg-green-100 text-green-800 hover:bg-green-100/80 border-green-200"><CheckCircle className="mr-1 h-3 w-3" /> Boarded</Badge>;
+            case 'absent': return <Badge variant="destructive"><UserX className="mr-1 h-3 w-3" /> Absent</Badge>;
+            case 'dropped': return <Badge variant="secondary"><LogOut className="mr-1 h-3 w-3" /> Dropped</Badge>;
+            case 'pending':
+            default:
+                return <Badge variant="outline"><MinusCircle className="mr-1 h-3 w-3" /> Pending</Badge>;
+        }
+    }
+
 
     return (
-         <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Student Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-                {students.map(student => {
-                    const passengerInfo = passengerStatuses.get(student.id);
-                    const status = passengerInfo?.status;
-                    const isCheckedIn = status === 'IN';
-                    return (
-                        <TableRow key={student.id}>
-                            <TableCell className="font-medium">{student.name}</TableCell>
-                            <TableCell>
-                                <span className={`font-semibold ${isCheckedIn ? 'text-green-600' : 'text-red-600'}`}>
-                                    {status || 'OUT'}
-                                </span>
-                            </TableCell>
-                            <TableCell className="text-right">
-                                 <Button 
-                                    variant={isCheckedIn ? 'destructive' : 'default'} 
-                                    size="sm"
-                                    onClick={() => handleStatusToggle(student.id, status)}
-                                    className="w-28"
-                                >
-                                    {isCheckedIn ? <><LogOut className="mr-2 h-4 w-4"/>Check Out</> : <><LogIn className="mr-2 h-4 w-4"/>Check In</>}
-                                </Button>
-                            </TableCell>
-                        </TableRow>
-                    )
-                })}
-            </TableBody>
-          </Table>
+         <div className="space-y-4">
+            <div className="flex flex-wrap gap-2 text-sm">
+                <span>Total: <strong>{passengers.length}</strong></span>
+                <span>Pending: <strong>{counters.pending || 0}</strong></span>
+                <span>Boarded: <strong>{counters.boarded || 0}</strong></span>
+                <span>Absent: <strong>{counters.absent || 0}</strong></span>
+                <span>Dropped: <strong>{counters.dropped || 0}</strong></span>
+            </div>
+            {canEdit && (
+                <form onSubmit={handleQrScan} className="flex gap-2">
+                    <QrCode className="h-10 w-10 text-muted-foreground p-2 border rounded-md" />
+                    <Input 
+                        placeholder="Scan Student QR Code..." 
+                        value={qrValue}
+                        onChange={(e) => setQrValue(e.target.value)}
+                    />
+                    <Button type="submit">Scan</Button>
+                </form>
+            )}
+             <div className="rounded-md border">
+                <Table>
+                    <TableHeader><TableRow><TableHead>Student</TableHead><TableHead>Status</TableHead>{canEdit && <TableHead className="text-right">Actions</TableHead>}</TableRow></TableHeader>
+                    <TableBody>
+                        {passengers.map(p => (
+                            <TableRow key={p.id}>
+                                <TableCell className="font-medium">{p.name}</TableCell>
+                                <TableCell>{getStatusBadge(p.status)}</TableCell>
+                                {canEdit && (
+                                    <TableCell className="text-right space-x-1">
+                                         <Button variant="ghost" size="sm" onClick={() => handleAction(p.id, 'boarded')} disabled={p.status === 'boarded'}>Board</Button>
+                                         <Button variant="ghost" size="sm" onClick={() => handleAction(p.id, 'absent')} disabled={p.status === 'absent'}>Absent</Button>
+                                         <Button variant="ghost" size="sm" onClick={() => handleAction(p.id, 'dropped')} disabled={p.status !== 'boarded'}>Drop</Button>
+                                    </TableCell>
+                                )}
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </div>
         </div>
     )
 }

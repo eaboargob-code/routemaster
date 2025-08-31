@@ -77,28 +77,23 @@ export default function SupervisorPage() {
     if (!user || !profile) return;
     setUiState({ status: 'loading' });
   
-    // 1) fetch just the trips you’re allowed to see
     try {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
   
-      // *** MINIMAL, RULE-SAFE TRIP QUERY ***
       const tripsQ = query(
         collection(db, 'trips'),
         where('schoolId', '==', profile.schoolId),
         where('supervisorId', '==', user.uid),
-        where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
-        // ⛔️ no orderBy/limit until we confirm it’s indexed and working
+        where('startedAt', '>=', Timestamp.fromDate(startOfDay))
       );
   
       const tripsSnap = await getDocs(tripsQ);
       const fetchedTrips = tripsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
       
-      // Sort in memory as a fallback since orderBy is removed
       fetchedTrips.sort((a,b) => b.startedAt.toMillis() - a.startedAt.toMillis());
       setTrips(fetchedTrips);
   
-      // 2) fetch referenced docs, but NEVER block the trips table if these fail
       try {
         const userIds = Array.from(new Set(fetchedTrips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
         const busIds  = Array.from(new Set(fetchedTrips.map(t => t.busId).filter(Boolean)));
@@ -140,7 +135,6 @@ export default function SupervisorPage() {
         setReferenceData({ userMap, busMap, routeMap });
       } catch (e) {
         console.warn('[supervisor] refs fetch failed (non-blocking):', e);
-        // still show trips even if names couldn't be fetched
         setReferenceData({ userMap: {}, busMap: {}, routeMap: {} });
       }
   

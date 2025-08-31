@@ -9,7 +9,7 @@ import { getTripDetails } from '@/lib/firestoreQueries';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from '@/components/ui/skeleton';
-import { TripRoster } from './TripRoster';
+import { Roster } from './TripRoster';
 import { ArrowLeft, Bus, Route } from 'lucide-react';
 import Link from 'next/link';
 
@@ -100,11 +100,9 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <TripRoster 
+                    <Roster 
                         tripId={trip.id} 
-                        schoolId={trip.schoolId} 
-                        routeId={trip.routeId} 
-                        busId={trip.busId} 
+                        canEdit={true}
                     />
                 </CardContent>
             </Card>

@@ -5,12 +5,15 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   collection, query, where, getDocs, getDoc, doc,
   addDoc, updateDoc, Timestamp, limit, orderBy, serverTimestamp,
+  writeBatch,
   type DocumentData,
+  setDoc,
+  type Firestore,
+  type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
-import { getUsersByIds } from '@/lib/firestoreQueries';
 
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -18,7 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Bus, Route, PlayCircle, StopCircle, Info, AlertTriangle, Send, Users, UserCheck, Eye } from 'lucide-react';
 import { format } from 'date-fns';
-import { TripRoster } from '../supervisor/trips/[id]/TripRoster';
+import { Roster } from '@/app/supervisor/trips/[id]/TripRoster';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 
@@ -37,6 +40,9 @@ interface RouteInfo extends DocumentData {
 
 interface Trip extends DocumentData {
     id: string;
+    busId: string;
+    routeId: string;
+    driverId: string;
     startedAt: Timestamp;
     endedAt?: Timestamp;
     status: 'active' | 'ended';
@@ -54,6 +60,58 @@ type UiState = {
     status: 'loading' | 'ready' | 'error' | 'empty';
     errorMessage?: string;
 }
+
+async function seedPassengersForTrip(
+    db: Firestore, 
+    trip: Trip,
+    currentUid: string
+) {
+    const studentsCol = collection(db, "students");
+
+    const qByRoute = query(
+        studentsCol,
+        where("schoolId", "==", trip.schoolId),
+        where("assignedRouteId", "==", trip.routeId)
+    );
+
+    const qByBus = query(
+        studentsCol,
+        where("schoolId", "==", trip.schoolId),
+        where("assignedBusId", "==", trip.busId)
+    );
+
+    const [rSnap, bSnap] = await Promise.all([
+        trip.routeId ? getDocs(qByRoute) : Promise.resolve({ docs: [] }), 
+        getDocs(qByBus)
+    ]);
+    const seen = new Set<string>();
+    const batch = writeBatch(db);
+
+    const addStudent = (s: QueryDocumentSnapshot<DocumentData>) => {
+        if (seen.has(s.id)) return;
+        seen.add(s.id);
+        const pRef = doc(db, `trips/${trip.id}/passengers/${s.id}`);
+        const data = s.data();
+        batch.set(pRef, {
+            studentId: s.id,
+            name: data.name ?? "",
+            schoolId: trip.schoolId,
+            routeId: trip.routeId,
+            busId: trip.busId,
+            status: "pending",
+            boardedAt: null,
+            droppedAt: null,
+            updatedBy: currentUid,
+            updatedAt: serverTimestamp(),
+        });
+    };
+
+    rSnap.docs.forEach(addStudent);
+    bSnap.docs.forEach(addStudent);
+
+    await batch.commit();
+}
+
 
 function LoadingState() {
     return (
@@ -84,7 +142,6 @@ export default function DriverPage() {
     const [uiState, setUiState] = useState<UiState>({ status: 'loading' });
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSendingLocation, setIsSendingLocation] = useState(false);
-    const [allowDriverAsSupervisor, setAllowDriverAsSupervisor] = useState(false);
     
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
@@ -92,7 +149,6 @@ export default function DriverPage() {
 
         let foundBus: Bus | null = null;
 
-        // BUS
         try {
             const busQ = query(
             collection(db, "buses"),
@@ -102,48 +158,31 @@ export default function DriverPage() {
             );
             const s = await getDocs(busQ);
             if (s.empty) {
-            console.warn("[driver] No bus assigned for uid", user.uid);
-            setBus(null); setRoute(null); setUiState({ status: 'empty' }); return;
+                setBus(null); setRoute(null); setUiState({ status: 'empty' }); return;
             }
             foundBus = { id: s.docs[0].id, ...s.docs[0].data() } as Bus;
             setBus(foundBus);
         } catch (e:any) {
-            console.error("[driver] BUS read failed", e);
             setUiState({ status: 'error', errorMessage: "Permission denied reading your bus." });
             return;
         }
 
-        // ROUTE (optional)
-        try {
-            if (foundBus?.assignedRouteId) {
+        if (foundBus?.assignedRouteId) {
             const rSnap = await getDoc(doc(db, "routes", foundBus.assignedRouteId));
             if (rSnap.exists()) setRoute({ id: rSnap.id, ...rSnap.data() } as RouteInfo);
-            else setRoute(null);
-            } else setRoute(null);
-        } catch (e:any) {
-            console.error("[driver] ROUTE get failed", e);
-            setRoute(null); // continue
+        } else {
+            setRoute(null);
         }
         
-        // SUPERVISOR (optional)
-        try {
-            if (foundBus?.supervisorId) {
-                const supSnap = await getDoc(doc(db, 'users', foundBus.supervisorId));
-                if (supSnap.exists()) {
-                    setSupervisor({id: supSnap.id, ...supSnap.data()} as Supervisor);
-                }
-            } else {
-                setSupervisor(null);
+        if (foundBus?.supervisorId) {
+            const supSnap = await getDoc(doc(db, 'users', foundBus.supervisorId));
+            if (supSnap.exists()) {
+                setSupervisor({id: supSnap.id, ...supSnap.data()} as Supervisor);
             }
-        } catch(e: any) {
-            console.error("[driver] SUPERVISOR get failed", e);
-            setSupervisor(null); // continue
         }
 
-        // 3) Check for an active trip for this driver (today)
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
-
         try {
           const tripQ = query(
             collection(db, 'trips'),
@@ -153,19 +192,15 @@ export default function DriverPage() {
             orderBy('startedAt', 'desc'),
             limit(10)
           );
-
           const tripSnap = await getDocs(tripQ);
-
           const active = tripSnap.docs
             .map(d => ({ id: d.id, ...(d.data() as any) }))
             .find(t => t.status === 'active') || null;
-
-          setActiveTrip(active || null);
+          setActiveTrip(active as Trip | null);
         } catch (e) {
           console.error('[driver] TRIPS query failed', e);
-          setActiveTrip(null); // don’t block the page
+          setActiveTrip(null);
         }
-
         setUiState({ status: 'ready' });
     }, [user, profile]);
 
@@ -175,13 +210,26 @@ export default function DriverPage() {
             fetchData();
         }
     }, [profileLoading, user, profile, fetchData]);
+    
+    const handleSetActingAsSupervisor = async (actingAsSupervisor: boolean) => {
+        if (!activeTrip) return;
+        try {
+            await updateDoc(doc(db, "trips", activeTrip.id), { allowDriverAsSupervisor: actingAsSupervisor });
+            setActiveTrip(prev => prev ? ({ ...prev, allowDriverAsSupervisor: actingAsSupervisor }) : null);
+             toast({
+                title: `Supervising mode ${actingAsSupervisor ? 'enabled' : 'disabled'}.`,
+                className: 'bg-accent text-accent-foreground border-0',
+            });
+        } catch(e:any) {
+             toast({ variant: "destructive", title: "Update failed", description: e.message });
+        }
+    }
+
 
     const handleStartTrip = async () => {
         if (!user || !profile || !bus) return;
-
         setIsSubmitting(true);
         try {
-             // Prevent duplicate active trips
             const existingQ = query(
                 collection(db, 'trips'),
                 where('schoolId', '==', profile.schoolId),
@@ -191,30 +239,29 @@ export default function DriverPage() {
             );
             const existing = await getDocs(existingQ);
             if (!existing.empty) {
-                const doc0 = existing.docs[0];
-                setActiveTrip({ id: doc0.id, ...(doc0.data() as any) });
-                toast({
-                    variant: 'destructive',
-                    title: "Active trip exists",
-                    description: "You already have an active trip."
-                });
+                setActiveTrip({ id: existing.docs[0].id, ...(existing.docs[0].data() as any) });
+                toast({ variant: 'destructive', title: "Active trip exists", description: "You already have an active trip." });
                 setIsSubmitting(false);
                 return;
             }
 
-            const newTrip = {
+            const newTripData: Omit<Trip, 'id'> = {
                 driverId: user.uid,
                 busId: bus.id,
-                routeId: route?.id || null,
+                routeId: route?.id || '',
                 schoolId: profile.schoolId,
                 startedAt: Timestamp.now(),
-                status: "active" as const,
+                status: "active",
                 supervisorId: bus.supervisorId || null,
-                allowDriverAsSupervisor: allowDriverAsSupervisor || false,
+                allowDriverAsSupervisor: false,
             };
-            const docRef = await addDoc(collection(db, "trips"), newTrip);
-            setActiveTrip({ ...newTrip, id: docRef.id });
-            toast({ title: "Trip Started!", description: "Your trip is now active.", className: 'bg-accent text-accent-foreground border-0' });
+            const docRef = await addDoc(collection(db, "trips"), newTripData);
+            const fullTrip = { ...newTripData, id: docRef.id };
+            setActiveTrip(fullTrip);
+
+            await seedPassengersForTrip(db, fullTrip, user.uid);
+            
+            toast({ title: "Trip Started!", description: "Your trip is now active and passengers are seeded.", className: 'bg-accent text-accent-foreground border-0' });
         } catch (error) {
             console.error("[start trip]", error);
             toast({ variant: 'destructive', title: "Error", description: "Could not start a new trip." });
@@ -233,8 +280,7 @@ export default function DriverPage() {
                 status: "ended"
             });
             setActiveTrip(null);
-            setSupervisor(null); // Clear supervisor on trip end
-            fetchData(); // Re-fetch to confirm state
+            fetchData();
             toast({ title: "Trip Ended", description: "Your trip has been successfully logged." });
         } catch (error) {
             console.error("[end trip]", error);
@@ -250,18 +296,12 @@ export default function DriverPage() {
             return;
         }
         setIsSendingLocation(true);
-
         navigator.geolocation.getCurrentPosition(
             async (position) => {
                 const { latitude, longitude } = position.coords;
-                const tripRef = doc(db, "trips", activeTrip.id);
                 try {
-                    await updateDoc(tripRef, {
-                        lastLocation: {
-                            lat: latitude,
-                            lng: longitude,
-                            at: serverTimestamp(),
-                        }
+                    await updateDoc(doc(db, "trips", activeTrip.id), {
+                        lastLocation: { lat: latitude, lng: longitude, at: serverTimestamp() }
                     });
                     toast({
                         title: "Location Sent!",
@@ -269,14 +309,12 @@ export default function DriverPage() {
                         className: 'bg-accent text-accent-foreground border-0',
                     });
                 } catch (error) {
-                    console.error("[send location]", error);
                     toast({ variant: "destructive", title: "Failed to Send Location", description: (error as Error).message });
                 } finally {
                     setIsSendingLocation(false);
                 }
             },
             (error) => {
-                console.error("Geolocation error:", error);
                 toast({ variant: "destructive", title: "Geolocation Error", description: error.message });
                 setIsSendingLocation(false);
             },
@@ -289,9 +327,7 @@ export default function DriverPage() {
             return (
                 <div className="flex items-center gap-2">
                     <UserCheck className="h-5 w-5 text-primary" />
-                    <div>
-                        <h3 className="font-semibold">You are acting as supervisor</h3>
-                    </div>
+                    <h3 className="font-semibold">You are acting as supervisor</h3>
                 </div>
             );
         }
@@ -323,128 +359,70 @@ export default function DriverPage() {
 
     if (uiState.status === 'error') {
          return (
-            <Card className="w-full max-w-2xl mx-auto">
-                <CardHeader>
-                    <CardTitle>Error Loading Data</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <Alert variant="destructive">
-                        <AlertTriangle className="h-4 w-4" />
-                        <AlertTitle>Could not load your assignment</AlertTitle>
-                        <AlertDescription>{uiState.errorMessage}</AlertDescription>
-                    </Alert>
-                </CardContent>
+            <Card className="w-full max-w-2xl mx-auto"><CardHeader><CardTitle>Error Loading Data</CardTitle></CardHeader>
+                <CardContent><Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertTitle>Could not load your assignment</AlertTitle><AlertDescription>{uiState.errorMessage}</AlertDescription></Alert></CardContent>
             </Card>
         );
     }
     
     if (uiState.status === 'empty') {
         return (
-            <Card className="w-full max-w-2xl mx-auto">
-                <CardHeader>
-                    <CardTitle>No Assignment Found</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <Alert>
-                        <Info className="h-4 w-4" />
-                        <AlertTitle>No Assigned Bus</AlertTitle>
-                        <AlertDescription>
-                            You have not been assigned to a bus yet. Please contact your administrator.
-                        </AlertDescription>
-                    </Alert>
-                </CardContent>
+            <Card className="w-full max-w-2xl mx-auto"><CardHeader><CardTitle>No Assignment Found</CardTitle></CardHeader>
+                <CardContent><Alert><Info className="h-4 w-4" /><AlertTitle>No Assigned Bus</AlertTitle><AlertDescription>You have not been assigned to a bus yet. Please contact your administrator.</AlertDescription></Alert></CardContent>
             </Card>
         );
     }
-
-    const showRoster = activeTrip && activeTrip.allowDriverAsSupervisor;
     
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-            <Card className="w-full max-w-2xl mx-auto lg:col-span-2">
-                <CardHeader>
-                    <CardTitle>Welcome, {profile?.displayName || 'Driver'}!</CardTitle>
-                    <CardDescription>Here is your assignment for today.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="border p-4 rounded-lg space-y-2">
-                        <h3 className="font-semibold flex items-center gap-2"><Bus className="h-5 w-5 text-primary" /> Your Bus</h3>
-                        <p className="pl-7"><strong>Code:</strong> {bus?.busCode}</p>
-                        {bus?.plate && <p className="pl-7"><strong>Plate:</strong> {bus.plate}</p>}
-                    </div>
-
-                    <div className="border p-4 rounded-lg space-y-2">
-                        <h3 className="font-semibold flex items-center gap-2"><Route className="h-5 w-5 text-primary" /> Your Route</h3>
-                        {route ? (
-                            <p className="pl-7"><strong>Name:</strong> {route.name}</p>
-                        ) : (
-                            <p className="pl-7 text-muted-foreground">No route assigned to this bus.</p>
+            <div className="lg:col-span-2 space-y-8">
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Welcome, {profile?.displayName || 'Driver'}!</CardTitle>
+                        <CardDescription>Here is your assignment for today.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="border p-4 rounded-lg space-y-2"><h3 className="font-semibold flex items-center gap-2"><Bus className="h-5 w-5 text-primary" /> Your Bus</h3><p className="pl-7"><strong>Code:</strong> {bus?.busCode}</p>{bus?.plate && <p className="pl-7"><strong>Plate:</strong> {bus.plate}</p>}</div>
+                        <div className="border p-4 rounded-lg space-y-2"><h3 className="font-semibold flex items-center gap-2"><Route className="h-5 w-5 text-primary" /> Your Route</h3>{route ? <p className="pl-7"><strong>Name:</strong> {route.name}</p> : <p className="pl-7 text-muted-foreground">No route assigned.</p>}</div>
+                        {activeTrip && <div className="border p-4 rounded-lg space-y-2">{getSupervisorContent()}</div>}
+                        {activeTrip && (
+                            <Alert variant="default" className="bg-blue-50 border-blue-200">
+                                <Info className="h-4 w-4 !text-blue-700" /><AlertTitle className="text-blue-800">Trip in Progress</AlertTitle><AlertDescription className="text-blue-700">Started at: {format(activeTrip.startedAt.toDate(), "HH:mm")}</AlertDescription>
+                            </Alert>
                         )}
-                    </div>
+                    </CardContent>
+                    <CardFooter className="flex flex-col sm:flex-row gap-2">
+                        {activeTrip ? (
+                            <>
+                                <Button onClick={handleEndTrip} disabled={isSubmitting} className="w-full bg-red-600 hover:bg-red-700 text-white"><StopCircle className="mr-2" />{isSubmitting ? "Ending Trip..." : "End Trip"}</Button>
+                                <Button onClick={handleSendLocation} disabled={isSendingLocation} className="w-full" variant="outline"><Send className="mr-2" />{isSendingLocation ? "Sending..." : "Send Location"}</Button>
+                            </>
+                        ) : (
+                            <Button onClick={handleStartTrip} disabled={isSubmitting || !bus} className="w-full"><PlayCircle className="mr-2" />{isSubmitting ? "Starting Trip..." : "Start Trip"}</Button>
+                        )}
+                    </CardFooter>
+                </Card>
+            </div>
 
-                    {activeTrip && (
-                         <div className="border p-4 rounded-lg space-y-2">
-                           {getSupervisorContent()}
-                        </div>
-                    )}
-
-
-                    {!activeTrip && (
-                        <div className="flex items-center space-x-2 border p-4 rounded-lg">
-                            <Switch 
-                                id="driver-supervisor-mode" 
-                                checked={allowDriverAsSupervisor} 
-                                onCheckedChange={setAllowDriverAsSupervisor}
-                            />
-                            <Label htmlFor="driver-supervisor-mode">Act as Supervisor?</Label>
-                        </div>
-                    )}
-
-                    {activeTrip && (
-                        <Alert variant="default" className="bg-blue-50 border-blue-200">
-                            <Info className="h-4 w-4 !text-blue-700" />
-                            <AlertTitle className="text-blue-800">Trip in Progress</AlertTitle>
-                            <AlertDescription className="text-blue-700">
-                                Started at: {format(activeTrip.startedAt.toDate(), "HH:mm")}
-                            </AlertDescription>
-                        </Alert>
-                    )}
-                </CardContent>
-                <CardFooter className="flex flex-col sm:flex-row gap-2">
-                    {activeTrip ? (
-                        <>
-                            <Button onClick={handleEndTrip} disabled={isSubmitting} className="w-full bg-red-600 hover:bg-red-700 text-white">
-                                <StopCircle className="mr-2" />
-                                {isSubmitting ? "Ending Trip..." : "End Trip"}
-                            </Button>
-                            <Button onClick={handleSendLocation} disabled={isSendingLocation} className="w-full" variant="outline">
-                                <Send className="mr-2" />
-                                {isSendingLocation ? "Sending..." : "Send Location"}
-                            </Button>
-                        </>
-                    ) : (
-                        <Button onClick={handleStartTrip} disabled={isSubmitting || !bus} className="w-full">
-                            <PlayCircle className="mr-2" />
-                            {isSubmitting ? "Starting Trip..." : "Start Trip"}
-                        </Button>
-                    )}
-                </CardFooter>
-            </Card>
-
-            {showRoster && activeTrip && profile && bus && (
+            {activeTrip && (
                  <Card className="lg:col-span-1">
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Users className="h-5 w-5 text-primary" />
-                            Trip Roster
+                        <CardTitle className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <Users className="h-5 w-5 text-primary" />
+                                Trip Roster
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <Switch id="driver-supervisor-mode" checked={!!activeTrip.allowDriverAsSupervisor} onCheckedChange={handleSetActingAsSupervisor} />
+                                <Label htmlFor="driver-supervisor-mode">Supervise</Label>
+                            </div>
                         </CardTitle>
+                        <CardDescription>Manage student check-ins and check-outs.</CardDescription>
                     </CardHeader>
                     <CardContent>
-                        <TripRoster 
-                            tripId={activeTrip.id} 
-                            schoolId={profile.schoolId} 
-                            routeId={route?.id} 
-                            busId={bus.id} 
+                        <Roster 
+                            tripId={activeTrip.id}
+                            canEdit={!!activeTrip.allowDriverAsSupervisor}
                         />
                     </CardContent>
                 </Card>
