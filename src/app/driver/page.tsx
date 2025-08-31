@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
@@ -49,6 +50,12 @@ interface Trip extends DocumentData {
     supervisorId?: string | null;
     allowDriverAsSupervisor?: boolean;
     schoolId: string;
+    counts?: {
+        pending: number;
+        boarded: number;
+        absent: number;
+        dropped: number;
+    }
 }
 
 interface Supervisor extends DocumentData {
@@ -66,7 +73,6 @@ async function seedPassengersForTrip(
     fs: Firestore, 
     trip: Trip,
 ) {
-
   const studentsCol = collection(fs, "students");
   const queries = [];
 
@@ -117,6 +123,14 @@ async function seedPassengersForTrip(
   querySnapshots.forEach(snap => snap.forEach(addStudentToBatch));
 
   await batch.commit();
+
+  // After seeding, update the trip's pending count
+  if (seen.size > 0) {
+      await updateDoc(doc(fs, 'trips', trip.id), {
+          'counts.pending': seen.size,
+      });
+  }
+
   return seen.size;
 }
 
@@ -274,6 +288,7 @@ export default function DriverPage() {
                 status: "active",
                 supervisorId: bus.supervisorId || null,
                 allowDriverAsSupervisor: false,
+                counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 }
             };
             const docRef = await addDoc(collection(db, "trips"), newTripData);
             const fullTrip = { ...newTripData, id: docRef.id };

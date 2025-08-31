@@ -1,8 +1,9 @@
 
+
 "use client";
 
 import { useEffect, useState, useMemo } from 'react';
-import { collection, onSnapshot, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, serverTimestamp, getDoc, writeBatch, increment, type DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -36,19 +37,39 @@ interface Passenger {
 async function updatePassengerStatus(
     tripId: string, 
     studentId: string, 
-    status: Passenger['status'],
+    newStatus: Passenger['status'],
     uid: string
 ) {
     const passengerRef = doc(db, `trips/${tripId}/passengers`, studentId);
-    const data: any = {
-        status,
+    const tripRef = doc(db, `trips`, tripId);
+
+    const passengerSnap = await getDoc(passengerRef);
+    if (!passengerSnap.exists()) {
+        throw new Error("Passenger not found in roster.");
+    }
+    const oldStatus = passengerSnap.data().status as Passenger['status'];
+    
+    if (oldStatus === newStatus) return; // No change needed
+
+    const batch = writeBatch(db);
+
+    // 1. Update passenger document
+    const passengerUpdate: any = {
+        status: newStatus,
         updatedBy: uid,
         updatedAt: serverTimestamp(),
     };
-    if (status === 'boarded') data.boardedAt = serverTimestamp();
-    if (status === 'dropped') data.droppedAt = serverTimestamp();
+    if (newStatus === 'boarded') passengerUpdate.boardedAt = serverTimestamp();
+    if (newStatus === 'dropped') passengerUpdate.droppedAt = serverTimestamp();
+    batch.set(passengerRef, passengerUpdate, { merge: true });
 
-    await setDoc(passengerRef, data, { merge: true });
+    // 2. Atomically update counters on the trip document
+    const counterUpdate: Record<string, any> = {};
+    counterUpdate[`counts.${oldStatus}`] = increment(-1);
+    counterUpdate[`counts.${newStatus}`] = increment(1);
+    batch.update(tripRef, counterUpdate);
+
+    await batch.commit();
 }
 
 export function Roster({ tripId, canEdit }: RosterProps) {
