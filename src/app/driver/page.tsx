@@ -178,13 +178,30 @@ export default function DriverPage() {
 
     const handleStartTrip = async () => {
         if (!user || !profile || !bus) return;
-        if (activeTrip) {
-            toast({ variant: 'destructive', title: "Active trip exists", description: "You already have an active trip." });
-            return;
-        }
 
         setIsSubmitting(true);
         try {
+             // Prevent duplicate active trips
+            const existingQ = query(
+                collection(db, 'trips'),
+                where('schoolId', '==', profile.schoolId),
+                where('driverId', '==', user.uid),
+                where('status', '==', 'active'),
+                limit(1)
+            );
+            const existing = await getDocs(existingQ);
+            if (!existing.empty) {
+                const doc0 = existing.docs[0];
+                setActiveTrip({ id: doc0.id, ...(doc0.data() as any) });
+                toast({
+                    variant: 'destructive',
+                    title: "Active trip exists",
+                    description: "You already have an active trip."
+                });
+                setIsSubmitting(false);
+                return;
+            }
+
             const newTrip = {
                 driverId: user.uid,
                 busId: bus.id,
