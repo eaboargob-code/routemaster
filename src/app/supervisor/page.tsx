@@ -3,7 +3,18 @@
 
 import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { type DocumentData, Timestamp } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  getDoc,
+  doc,
+  Timestamp,
+  orderBy,
+  limit,
+  type DocumentData,
+} from "firebase/firestore";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import { getSupervisorTrips, getUsersByIds, listBusesForSchool, listRoutesForSchool } from "@/lib/firestoreQueries";
