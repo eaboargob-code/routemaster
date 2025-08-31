@@ -111,7 +111,7 @@ async function seedPassengersForTrip(
       droppedAt: null,
       updatedBy: trip.driverId, // Attributed to the driver who started the trip
       updatedAt: serverTimestamp(),
-    });
+    }, { merge: true });
   };
 
   querySnapshots.forEach(snap => snap.forEach(addStudentToBatch));
@@ -284,11 +284,13 @@ export default function DriverPage() {
             // Seed passengers in the background
             seedPassengersForTrip(db, fullTrip)
                 .then(count => {
-                    toast({
-                        title: "Roster Ready!",
-                        description: `${count} passengers have been added to your roster.`,
-                        className: 'bg-accent text-accent-foreground border-0',
-                    });
+                    if (count > 0) {
+                        toast({
+                            title: "Roster Ready!",
+                            description: `${count} passengers have been added to your roster.`,
+                            className: 'bg-accent text-accent-foreground border-0',
+                        });
+                    }
                 })
                 .catch(err => {
                     console.error("[seed passengers]", err);
@@ -463,5 +465,3 @@ export default function DriverPage() {
         </div>
     )
 }
-
-    
