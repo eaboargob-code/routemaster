@@ -2,11 +2,11 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { doc, addDoc, updateDoc, Timestamp, serverTimestamp, collection, type DocumentData } from 'firebase/firestore';
+import { doc, addDoc, updateDoc, Timestamp, serverTimestamp, collection, type DocumentData, query, where, limit, getDocs, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
-import { getAssignedBusForDriver, getRouteById, getActiveOrTodayTripsForDriver, getUsersByIds } from '@/lib/firestoreQueries';
+import { getUsersByIds } from '@/lib/firestoreQueries';
 
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -46,6 +46,11 @@ interface Supervisor extends DocumentData {
     email: string;
 }
 
+type UiState = {
+    status: 'loading' | 'ready' | 'error' | 'empty';
+    errorMessage?: string;
+}
+
 function LoadingState() {
     return (
         <Card className="w-full max-w-2xl mx-auto">
@@ -72,52 +77,87 @@ export default function DriverPage() {
     const [route, setRoute] = useState<RouteInfo | null>(null);
     const [supervisor, setSupervisor] = useState<Supervisor | null>(null);
     const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [uiState, setUiState] = useState<UiState>({ status: 'loading' });
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSendingLocation, setIsSendingLocation] = useState(false);
     const [allowDriverAsSupervisor, setAllowDriverAsSupervisor] = useState(false);
     
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
-        setIsLoading(true);
-        setError(null);
+        setUiState({ status: 'loading' });
 
+        let foundBus: Bus | null = null;
+
+        // BUS
         try {
-            const assignedBus = await getAssignedBusForDriver(profile.schoolId, user.uid) as Bus | null;
-            setBus(assignedBus);
-
-            if (!assignedBus) {
-                setIsLoading(false);
-                return;
+            const busQ = query(
+            collection(db, "buses"),
+            where("schoolId", "==", profile.schoolId),
+            where("driverId", "==", user.uid),
+            limit(1)
+            );
+            const s = await getDocs(busQ);
+            if (s.empty) {
+            console.warn("[driver] No bus assigned for uid", user.uid);
+            setBus(null); setRoute(null); setUiState({ status: 'empty' }); return;
             }
-
-            const [assignedRoute, trips, supervisorData] = await Promise.all([
-                getRouteById(assignedBus.assignedRouteId),
-                getActiveOrTodayTripsForDriver(profile.schoolId, user.uid),
-                assignedBus.supervisorId ? getUsersByIds([assignedBus.supervisorId]) : Promise.resolve(null)
-            ]);
-
-            setRoute(assignedRoute as RouteInfo | null);
-            
-            if (supervisorData && assignedBus.supervisorId) {
-                setSupervisor(supervisorData[assignedBus.supervisorId] as Supervisor);
-            }
-
-            const currentActiveTrip = trips.find(t => t.status === 'active') as Trip | null;
-            setActiveTrip(currentActiveTrip ?? null);
-
-        } catch (e: any) {
-            console.error("[driver] failed to fetch data", e);
-            const message = e.code === 'permission-denied'
-                ? "Permission denied. Ask your admin to check your assignment."
-                : e.message || "An unknown error occurred.";
-            setError(message);
-            toast({ variant: 'destructive', title: 'Error Loading Data', description: message });
-        } finally {
-            setIsLoading(false);
+            foundBus = { id: s.docs[0].id, ...s.docs[0].data() } as Bus;
+            setBus(foundBus);
+        } catch (e:any) {
+            console.error("[driver] BUS read failed", e);
+            setUiState({ status: 'error', errorMessage: "Permission denied reading your bus." });
+            return;
         }
-    }, [user, profile, toast]);
+
+        // ROUTE (optional)
+        try {
+            if (foundBus?.assignedRouteId) {
+            const rSnap = await getDoc(doc(db, "routes", foundBus.assignedRouteId));
+            if (rSnap.exists()) setRoute({ id: rSnap.id, ...rSnap.data() } as RouteInfo);
+            else setRoute(null);
+            } else setRoute(null);
+        } catch (e:any) {
+            console.error("[driver] ROUTE get failed", e);
+            setRoute(null); // continue
+        }
+        
+        // SUPERVISOR (optional)
+        try {
+            if (foundBus?.supervisorId) {
+                const supervisorData = await getUsersByIds([foundBus.supervisorId]);
+                if (supervisorData && foundBus.supervisorId) {
+                    setSupervisor(supervisorData[foundBus.supervisorId] as Supervisor);
+                }
+            } else {
+                setSupervisor(null);
+            }
+        } catch(e: any) {
+            console.error("[driver] SUPERVISOR get failed", e);
+            setSupervisor(null); // continue
+        }
+
+        // TRIPS
+        try {
+            const start = new Date(); start.setHours(0,0,0,0);
+            const tQ = query(
+            collection(db, "trips"),
+            where("schoolId", "==", profile.schoolId),
+            where("driverId", "==", user.uid),
+            where("startedAt", ">=", Timestamp.fromDate(start)),
+            orderBy("startedAt", "desc")
+            );
+            const tSnap = await getDocs(tQ);
+            const active = tSnap.docs.map(d => ({ id: d.id, ...d.data() } as any))
+                        .find(t => t.status === "active") || null;
+            setActiveTrip(active);
+        } catch (e:any) {
+            console.error("[driver] TRIPS query failed", e);
+            setActiveTrip(null); // continue
+        }
+
+        setUiState({ status: 'ready' });
+    }, [user, profile]);
+
 
     useEffect(() => {
         if (!profileLoading && user && profile) {
@@ -249,11 +289,11 @@ export default function DriverPage() {
         )
     }
 
-    if (profileLoading || isLoading) {
+    if (profileLoading || uiState.status === 'loading') {
         return <LoadingState />;
     }
 
-    if (error) {
+    if (uiState.status === 'error') {
          return (
             <Card className="w-full max-w-2xl mx-auto">
                 <CardHeader>
@@ -263,14 +303,14 @@ export default function DriverPage() {
                     <Alert variant="destructive">
                         <AlertTriangle className="h-4 w-4" />
                         <AlertTitle>Could not load your assignment</AlertTitle>
-                        <AlertDescription>{error}</AlertDescription>
+                        <AlertDescription>{uiState.errorMessage}</AlertDescription>
                     </Alert>
                 </CardContent>
             </Card>
         );
     }
     
-    if (!bus) {
+    if (uiState.status === 'empty') {
         return (
             <Card className="w-full max-w-2xl mx-auto">
                 <CardHeader>
@@ -301,8 +341,8 @@ export default function DriverPage() {
                 <CardContent className="space-y-4">
                     <div className="border p-4 rounded-lg space-y-2">
                         <h3 className="font-semibold flex items-center gap-2"><Bus className="h-5 w-5 text-primary" /> Your Bus</h3>
-                        <p className="pl-7"><strong>Code:</strong> {bus.busCode}</p>
-                        {bus.plate && <p className="pl-7"><strong>Plate:</strong> {bus.plate}</p>}
+                        <p className="pl-7"><strong>Code:</strong> {bus?.busCode}</p>
+                        {bus?.plate && <p className="pl-7"><strong>Plate:</strong> {bus.plate}</p>}
                     </div>
 
                     <div className="border p-4 rounded-lg space-y-2">
@@ -363,7 +403,7 @@ export default function DriverPage() {
                 </CardFooter>
             </Card>
 
-            {showRoster && activeTrip && profile && (
+            {showRoster && activeTrip && profile && bus && (
                  <Card className="lg:col-span-1">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
