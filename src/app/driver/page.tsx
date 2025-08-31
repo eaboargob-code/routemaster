@@ -48,6 +48,7 @@ interface Trip extends DocumentData {
     status: 'active' | 'ended';
     supervisorId?: string | null;
     allowDriverAsSupervisor?: boolean;
+    schoolId: string;
 }
 
 interface Supervisor extends DocumentData {
@@ -181,8 +182,10 @@ export default function DriverPage() {
             }
         }
 
+        // Check for an active trip for this driver (today)
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
+
         try {
           const tripQ = query(
             collection(db, 'trips'),
@@ -192,14 +195,17 @@ export default function DriverPage() {
             orderBy('startedAt', 'desc'),
             limit(10)
           );
+
           const tripSnap = await getDocs(tripQ);
+
           const active = tripSnap.docs
             .map(d => ({ id: d.id, ...(d.data() as any) }))
             .find(t => t.status === 'active') || null;
+
           setActiveTrip(active as Trip | null);
         } catch (e) {
           console.error('[driver] TRIPS query failed', e);
-          setActiveTrip(null);
+          setActiveTrip(null); // don’t block the page
         }
         setUiState({ status: 'ready' });
     }, [user, profile]);
@@ -230,6 +236,7 @@ export default function DriverPage() {
         if (!user || !profile || !bus) return;
         setIsSubmitting(true);
         try {
+            // Prevent duplicate active trips
             const existingQ = query(
                 collection(db, 'trips'),
                 where('schoolId', '==', profile.schoolId),
@@ -239,8 +246,13 @@ export default function DriverPage() {
             );
             const existing = await getDocs(existingQ);
             if (!existing.empty) {
-                setActiveTrip({ id: existing.docs[0].id, ...(existing.docs[0].data() as any) });
-                toast({ variant: 'destructive', title: "Active trip exists", description: "You already have an active trip." });
+                const doc0 = existing.docs[0];
+                setActiveTrip({ id: doc0.id, ...(doc0.data() as any) });
+                toast({
+                    variant: 'destructive',
+                    title: 'Active trip exists',
+                    description: 'You already have an active trip.'
+                });
                 setIsSubmitting(false);
                 return;
             }
@@ -257,10 +269,10 @@ export default function DriverPage() {
             };
             const docRef = await addDoc(collection(db, "trips"), newTripData);
             const fullTrip = { ...newTripData, id: docRef.id };
-            setActiveTrip(fullTrip);
-
+            
             await seedPassengersForTrip(db, fullTrip, user.uid);
             
+            setActiveTrip(fullTrip);
             toast({ title: "Trip Started!", description: "Your trip is now active and passengers are seeded.", className: 'bg-accent text-accent-foreground border-0' });
         } catch (error) {
             console.error("[start trip]", error);
