@@ -5,7 +5,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { collection, onSnapshot, doc, setDoc, serverTimestamp, getDoc, writeBatch, increment, type DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { useProfile } from '@/lib/useProfile';
+import { useProfile, type UserProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
 
 import {
@@ -38,10 +38,11 @@ async function updatePassengerStatus(
     tripId: string, 
     studentId: string, 
     newStatus: Passenger['status'],
-    uid: string
+    actor: { uid: string, role: UserProfile['role'] }
 ) {
     const passengerRef = doc(db, `trips/${tripId}/passengers`, studentId);
     const tripRef = doc(db, `trips`, tripId);
+    const eventRef = doc(collection(db, `trips/${tripId}/events`)); // Auto-generates an ID
 
     const passengerSnap = await getDoc(passengerRef);
     if (!passengerSnap.exists()) {
@@ -56,7 +57,7 @@ async function updatePassengerStatus(
     // 1. Update passenger document
     const passengerUpdate: any = {
         status: newStatus,
-        updatedBy: uid,
+        updatedBy: actor.uid,
         updatedAt: serverTimestamp(),
     };
     if (newStatus === 'boarded') passengerUpdate.boardedAt = serverTimestamp();
@@ -68,12 +69,21 @@ async function updatePassengerStatus(
     counterUpdate[`counts.${oldStatus}`] = increment(-1);
     counterUpdate[`counts.${newStatus}`] = increment(1);
     batch.update(tripRef, counterUpdate);
+    
+    // 3. Create an audit log event
+    batch.set(eventRef, {
+      who: actor.uid,
+      role: actor.role,
+      action: newStatus,
+      studentId: studentId,
+      ts: serverTimestamp(),
+    });
 
     await batch.commit();
 }
 
 export function Roster({ tripId, canEdit }: RosterProps) {
-    const { user } = useProfile();
+    const { user, profile } = useProfile();
     const { toast } = useToast();
     const [passengers, setPassengers] = useState<Passenger[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -97,9 +107,9 @@ export function Roster({ tripId, canEdit }: RosterProps) {
     }, [tripId]);
 
     const handleAction = async (studentId: string, status: Passenger['status']) => {
-        if (!user) return;
+        if (!user || !profile) return;
         try {
-            await updatePassengerStatus(tripId, studentId, status, user.uid);
+            await updatePassengerStatus(tripId, studentId, status, { uid: user.uid, role: profile.role });
             toast({
                 title: `Student marked as ${status}`,
                 className: 'bg-accent text-accent-foreground border-0',
