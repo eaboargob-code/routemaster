@@ -80,7 +80,12 @@ export function Dashboard({ schoolId }: DashboardProps) {
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-5">
             {loading ? Array.from({length: 5}).map((_, i) => <MetricCardLoading key={i}/>) :
             <>
-                <MetricCard title="Total Users" value={users.length} icon={Users} description={`${userCounts.admin || 0} Admins, ${userCounts.driver || 0} Drivers`}/>
+                <MetricCard 
+                    title="Total Users" 
+                    value={users.length} 
+                    icon={Users} 
+                    description={`${userCounts.admin || 0} Admins, ${userCounts.driver || 0} Drivers, ${userCounts.supervisor || 0} Supervisors`}
+                />
                 <MetricCard title="Total Buses" value={buses.length} icon={Bus}/>
                 <MetricCard title="Total Routes" value={routes.length} icon={Route}/>
                 <MetricCard title="Active Trips" value={activeTrips.length} icon={Activity} />
