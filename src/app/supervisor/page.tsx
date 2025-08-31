@@ -78,22 +78,38 @@ export default function SupervisorPage() {
 
     setUiState({ status: 'loading' });
     try {
-        // today
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
-
-        // 1) trips I supervise (rule-compliant)
-        const tripsQ = query(
-        collection(db, 'trips'),
-        where('schoolId', '==', profile.schoolId),
-        where('supervisorId', '==', user.uid),
-        where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
-        orderBy('startedAt', 'desc'),
-        limit(50)
+        
+        const qMine = query(
+            collection(db, 'trips'),
+            where('schoolId', '==', profile.schoolId),
+            where('supervisorId', '==', user.uid),
+            where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
+            orderBy('startedAt', 'desc'),
+            limit(100)
         );
 
-        const tripsSnap = await getDocs(tripsQ);
-        const tripsData = tripsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+        const qDriverAsSup = query(
+            collection(db, 'trips'),
+            where('schoolId', '==', profile.schoolId),
+            where('allowDriverAsSupervisor', '==', true),
+            where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
+            orderBy('startedAt', 'desc'),
+            limit(100)
+        );
+        
+        const [mineSnapshot, driverAsSupSnapshot] = await Promise.all([
+            getDocs(qMine),
+            getDocs(qDriverAsSup),
+        ]);
+
+        const seen = new Set<string>();
+        const tripsData = [...mineSnapshot.docs, ...driverAsSupSnapshot.docs]
+            .filter(d => !seen.has(d.id) && seen.add(d.id))
+            .map(d => ({ id: d.id, ...d.data() } as Trip))
+            .sort((a, b) => b.startedAt.toMillis() - a.startedAt.toMillis());
+
 
         if (tripsData.length === 0) {
             setTrips([]);
@@ -101,10 +117,9 @@ export default function SupervisorPage() {
             return;
         }
 
-        // 2) batch-fetch referenced docs for table display (each is a single GET)
         const [userMap, busMap, routeMap] = await Promise.all([
         (async () => {
-            const ids = Array.from(new Set(tripsData.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean))));
+            const ids = Array.from(new Set(tripsData.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
             const entries = await Promise.all(ids.map(async (id: string) => {
             try {
                 const snap = await getDoc(doc(db, 'users', id));
@@ -128,7 +143,7 @@ export default function SupervisorPage() {
             return Object.fromEntries(entries.filter(entry => entry[1]));
         })(),
         (async () => {
-            const ids = Array.from(new Set(tripsData.map(t => t.routeId).filter(Boolean)));
+            const ids = Array.from(new Set(tripsData.map(t => t.routeId).filter(Boolean) as string[]));
             const entries = await Promise.all(ids.map(async (id: string) => {
             try {
                 const snap = await getDoc(doc(db, 'routes', id));
@@ -232,7 +247,7 @@ export default function SupervisorPage() {
                       <TableCell>{renderCellContent(driver?.displayName || driver?.email)}</TableCell>
                       <TableCell>{renderCellContent(bus?.busCode)}</TableCell>
                       <TableCell>{renderCellContent(route?.name)}</TableCell>
-                       <TableCell>{getSupervisorContent(trip)}</TableCell>
+                      <TableCell>{getSupervisorContent(trip)}</TableCell>
                       <TableCell>
                         <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800 border-green-200' : ''}>
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
@@ -269,3 +284,5 @@ export default function SupervisorPage() {
     </Card>
   );
 }
+
+    
