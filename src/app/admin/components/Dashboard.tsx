@@ -18,7 +18,6 @@ import { BarChart, Bus, Route, Users, GraduationCap, Activity, UserCog, PersonSt
 import { MetricCard, MetricCardLoading } from "./MetricCard";
 import { TripsByRouteChart, TripsByRouteChartLoading } from "./TripsByRouteChart";
 import { DailyTripsChart, DailyTripsChartLoading } from "./DailyTripsChart";
-import { RecentActivity, RecentActivityLoading } from "./RecentActivity";
 
 interface DashboardProps {
   schoolId: string;
@@ -91,9 +90,6 @@ export function Dashboard({ schoolId }: DashboardProps) {
         <div className="grid gap-6 lg:grid-cols-2">
             {loading ? <TripsByRouteChartLoading /> : <TripsByRouteChart activeTrips={activeTrips} routes={routes} />}
             {loading ? <DailyTripsChartLoading /> : <DailyTripsChart trips={tripsLast7Days} />}
-        </div>
-        <div className="grid gap-6">
-             {loading ? <RecentActivityLoading /> : <RecentActivity schoolId={schoolId} />}
         </div>
     </div>
   );
