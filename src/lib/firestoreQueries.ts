@@ -72,7 +72,6 @@ export async function listTodaysTripsForSchool(schoolId: string, filters: { stat
     const constraints = [
         where("schoolId", "==", schoolId),
         where("startedAt", ">=", startOfToday()),
-        where("startedAt", "<=", endOfToday()),
     ];
 
     if (filters.status && filters.status !== 'all') {
