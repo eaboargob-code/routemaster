@@ -256,9 +256,10 @@ export default function DriverPage() {
                 const doc0 = existing.docs[0];
                 setActiveTrip({ id: doc0.id, ...(doc0.data() as any) });
                 toast({
-                    variant: 'destructive',
-                    title: 'Active trip exists',
-                    description: 'You already have an active trip.'
+                    variant: 'default',
+                    title: 'Active Trip Found',
+                    description: 'Your existing active trip has been loaded.',
+                    className: 'bg-accent text-accent-foreground border-0',
                 });
                 setIsSubmitting(false);
                 return;
@@ -462,3 +463,5 @@ export default function DriverPage() {
         </div>
     )
 }
+
+    
