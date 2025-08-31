@@ -84,7 +84,7 @@ export function Dashboard({ schoolId }: DashboardProps) {
                     title="Total Users" 
                     value={users.length} 
                     icon={Users} 
-                    description={`${userCounts.admin || 0} Admins, ${userCounts.driver || 0} Drivers, ${userCounts.supervisor || 0} Supervisors`}
+                    description={`${userCounts.admin || 0} Admins, ${userCounts.driver || 0} Drivers, ${userCounts.supervisor || 0} Supervisors, ${userCounts.parent || 0} Parents`}
                 />
                 <MetricCard title="Total Buses" value={buses.length} icon={Bus}/>
                 <MetricCard title="Total Routes" value={routes.length} icon={Route}/>
