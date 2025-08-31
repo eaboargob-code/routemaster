@@ -41,37 +41,34 @@ export function Dashboard({ schoolId }: DashboardProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [buses, setBuses] = useState<DocumentData[]>([]);
   const [routes, setRoutes] = useState<DocumentData[]>([]);
-  const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
   const [students, setStudents] = useState<DocumentData[]>([]);
-  const [tripsLast7Days, setTripsLast7Days] = useState<Trip[]>([]);
+  const [allTrips, setAllTrips] = useState<Trip[]>([]);
   const [events, setEvents] = useState<DocumentData[]>([]);
 
   useEffect(() => {
     if (!schoolId) return;
-
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const sevenDaysAgoTimestamp = Timestamp.fromDate(sevenDaysAgo);
 
     const subscriptions = [
       onSnapshot(query(collection(db, "users"), where("schoolId", "==", schoolId)), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as User)))),
       onSnapshot(query(collection(db, "buses"), where("schoolId", "==", schoolId)), (snap) => setBuses(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(query(collection(db, "routes"), where("schoolId", "==", schoolId)), (snap) => setRoutes(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(query(collection(db, "students"), where("schoolId", "==", schoolId)), (snap) => setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(query(collection(db, "trips"), where("schoolId", "==", schoolId), where("status", "==", "active")), (snap) => setActiveTrips(snap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)))),
-      onSnapshot(query(collection(db, "trips"), where("schoolId", "==", schoolId), where("startedAt", ">=", sevenDaysAgoTimestamp)), (snap) => setTripsLast7Days(snap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)))),
+      onSnapshot(query(collection(db, "trips"), where("schoolId", "==", schoolId)), (snap) => setAllTrips(snap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)))),
     ];
     
-    // Fetch events once initially for simplicity, can be converted to onSnapshot if high-frequency updates are needed
      const fetchEvents = async () => {
         const tripsQuery = query(
             collection(db, "trips"), 
             where("schoolId", "==", schoolId),
-            // orderBy("startedAt", "desc"), // This causes a missing index error, so we sort client-side
-            limit(5)
+            // This query requires an index, so we will sort client side for now
+            // orderBy("startedAt", "desc"),
+            limit(10)
         );
         const tripsSnap = await getDocs(tripsQuery);
-        const eventPromises = tripsSnap.docs.map(tripDoc => {
+        
+        const sortedTrips = tripsSnap.docs.sort((a, b) => b.data().startedAt.toMillis() - a.data().startedAt.toMillis()).slice(0, 5);
+
+        const eventPromises = sortedTrips.map(tripDoc => {
             const eventsQuery = query(collection(db, `trips/${tripDoc.id}/events`), orderBy('ts', 'desc'), limit(10));
             return getDocs(eventsQuery);
         });
@@ -84,17 +81,25 @@ export function Dashboard({ schoolId }: DashboardProps) {
 
     fetchEvents();
 
-    Promise.all(subscriptions.map(unsub => new Promise(resolve => setTimeout(resolve, 0)))).then(() => {
-        setLoading(false);
-    });
+    const timer = setTimeout(() => setLoading(false), 1500);
 
-    return () => subscriptions.forEach((unsub) => unsub());
+    return () => {
+        subscriptions.forEach((unsub) => unsub());
+        clearTimeout(timer);
+    };
   }, [schoolId]);
 
   const userCounts = users.reduce((acc, user) => {
     acc[user.role] = (acc[user.role] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  const activeTrips = allTrips.filter(trip => trip.status === 'active');
+  
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const sevenDaysAgoTimestamp = Timestamp.fromDate(sevenDaysAgo);
+  const tripsLast7Days = allTrips.filter(trip => trip.startedAt >= sevenDaysAgoTimestamp);
 
   return (
     <div className="grid gap-6">

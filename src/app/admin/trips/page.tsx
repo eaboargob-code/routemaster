@@ -5,11 +5,16 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import {
   type DocumentData,
   Timestamp,
+  collection,
+  query,
+  where,
+  onSnapshot,
 } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import Link from "next/link";
-import { listTodaysTripsForSchool, getUsersByIds, listBusesForSchool, listRoutesForSchool } from "@/lib/firestoreQueries";
+import { getUsersByIds, listBusesForSchool, listRoutesForSchool, listTodaysTripsForSchool } from "@/lib/firestoreQueries";
 
 import {
   Card,
@@ -81,62 +86,60 @@ export default function TripsPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "ended">("all");
   const [searchTerm, setSearchTerm] = useState("");
 
-  const fetchTripsAndReferences = useCallback(async (currentSchoolId: string) => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const fetchedTrips = await listTodaysTripsForSchool(currentSchoolId, { status: statusFilter }) as Trip[];
-      setTrips(fetchedTrips);
-
-      if (fetchedTrips.length > 0) {
-        const userIds = [...new Set([
-          ...fetchedTrips.map(t => t.driverId),
-          ...fetchedTrips.map(t => t.supervisorId).filter(Boolean) as string[]
-        ])];
-        
-        const users = await getUsersByIds(userIds);
-        const buses = await listBusesForSchool(currentSchoolId);
-        const routes = await listRoutesForSchool(currentSchoolId);
-
-        const busMap = new Map(buses.map(b => [b.id, b]));
-        const routeMap = new Map(routes.map(r => [r.id, r]));
-
-        setReferencedData({ users, buses: busMap, routes: routeMap });
-      } else {
-        setReferencedData({ users: {}, buses: new Map(), routes: new Map() });
-      }
-    } catch (err: any) {
-      console.error("Failed to fetch trips:", err);
-      if (err.code === "failed-precondition") {
-        setError("A required database index is still building. Please try again in a minute.");
-        toast({
-          title: "Database Index Building",
-          description: "A required index for this query is still being created. Please wait a moment and try again.",
-          variant: "destructive"
-        });
-      } else if (err.code === "permission-denied") {
-          setError("Permission denied. You do not have access to view these trips.");
-          toast({
-            title: "Access Denied",
-            description: "You do not have permission to view trips for this school.",
-            variant: "destructive"
-          });
-      } else {
-         setError(err.message || "An unexpected error occurred.");
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [statusFilter, toast]);
-
   useEffect(() => {
-    if (schoolId) {
-      fetchTripsAndReferences(schoolId);
-    } else if (!profileLoading) {
-      setIsLoading(false);
+    if (!schoolId) {
+        if (!profileLoading) setIsLoading(false);
+        return;
     }
-  }, [schoolId, profileLoading, fetchTripsAndReferences]);
+
+    setIsLoading(true);
+    
+    // Set up real-time listeners
+    const tripsQuery = query(collection(db, "trips"), where("schoolId", "==", schoolId));
+    const usersQuery = query(collection(db, "users"), where("schoolId", "==", schoolId));
+    const busesQuery = query(collection(db, "buses"), where("schoolId", "==", schoolId));
+    const routesQuery = query(collection(db, "routes"), where("schoolId", "==", schoolId));
+
+    const unsubTrips = onSnapshot(tripsQuery, 
+        (snapshot) => {
+            const allTrips = snapshot.docs.map(d => ({ id: d.id, ...d.data() }) as Trip);
+            const startOfDay = new Date();
+            startOfDay.setHours(0,0,0,0);
+            const todayTimestamp = Timestamp.fromDate(startOfDay);
+            const todaysTrips = allTrips.filter(t => t.startedAt >= todayTimestamp);
+            setTrips(todaysTrips.sort((a, b) => b.startedAt.toMillis() - a.startedAt.toMillis()));
+            setIsLoading(false);
+        }, 
+        (err) => {
+            console.error("Trips listener error:", err);
+            setError("Failed to load trips.");
+            setIsLoading(false);
+        }
+    );
+
+    const unsubUsers = onSnapshot(usersQuery, (snapshot) => {
+        const userMap = Object.fromEntries(snapshot.docs.map(doc => [doc.id, doc.data()]));
+        setReferencedData(prev => ({ ...prev, users: userMap }));
+    });
+    
+    const unsubBuses = onSnapshot(busesQuery, (snapshot) => {
+        const busMap = new Map(snapshot.docs.map(doc => [doc.id, doc.data()]));
+        setReferencedData(prev => ({ ...prev, buses: busMap }));
+    });
+
+    const unsubRoutes = onSnapshot(routesQuery, (snapshot) => {
+        const routeMap = new Map(snapshot.docs.map(doc => [doc.id, doc.data()]));
+        setReferencedData(prev => ({ ...prev, routes: routeMap }));
+    });
+
+    return () => {
+        unsubTrips();
+        unsubUsers();
+        unsubBuses();
+        unsubRoutes();
+    };
+
+  }, [schoolId, profileLoading]);
 
 
   const filteredTrips = useMemo(() => {
