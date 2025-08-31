@@ -7,7 +7,7 @@ import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 
 import { Button } from "@/components/ui/button";
-import { Bus, LayoutDashboard, LogOut, Route, Users, MapPin, GraduationCap, HeartHandshake } from "lucide-react";
+import { Bus, LayoutDashboard, LogOut, Route, Users, MapPin, GraduationCap, HeartHandshake, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AdminHeader() {
@@ -27,6 +27,7 @@ export function AdminHeader() {
     { href: "/admin/students", label: "Students", icon: GraduationCap },
     { href: "/admin/parents", label: "Parents", icon: HeartHandshake },
     { href: "/admin/trips", label: "Trips", icon: MapPin },
+    { href: "/admin/reports", label: "Reports", icon: FileText },
   ];
 
   return (
