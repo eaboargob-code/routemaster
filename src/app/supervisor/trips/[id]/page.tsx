@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, use } from 'react';
 import { type DocumentData } from 'firebase/firestore';
 import { useProfile } from '@/lib/useProfile';
 import { getTripDetails } from '@/lib/firestoreQueries';
@@ -20,7 +20,8 @@ interface TripDetails {
     schoolId: string;
 }
 
-export default function TripDetailsPage({ params: { id: tripId } }: { params: { id: string }}) {
+export default function TripDetailsPage({ params }: { params: { id: string }}) {
+    const { id: tripId } = params;
     const { profile, loading: profileLoading } = useProfile();
     const [trip, setTrip] = useState<TripDetails | null>(null);
     const [route, setRoute] = useState<DocumentData | null>(null);
