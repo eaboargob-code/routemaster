@@ -1,15 +1,34 @@
+
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode, useCallback }from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
-import { LogOut, ShieldAlert, HeartHandshake } from "lucide-react";
+import { LogOut, ShieldAlert, HeartHandshake, Bell, CheckCheck } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
+import { onForegroundNotification } from "@/lib/notifications";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Badge } from "@/components/ui/badge";
+import { formatDistanceToNow } from 'date-fns';
 
-function Header() {
+interface Notification {
+    id: string;
+    title: string;
+    body: string;
+    timestamp: Date;
+}
+
+function Header({ notifications, onClearNotifications }: { notifications: Notification[], onClearNotifications: () => void }) {
     const router = useRouter();
     const handleLogout = async () => {
         await signOut(auth);
@@ -26,6 +45,40 @@ function Header() {
             </nav>
              <div className="flex w-full items-center gap-4 md:ml-auto md:gap-2 lg:gap-4">
                 <div className="ml-auto flex-1 sm:flex-initial" />
+                 <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="relative">
+                            <Bell className="h-5 w-5" />
+                            {notifications.length > 0 && (
+                                <Badge className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0 text-xs">
+                                    {notifications.length}
+                                </Badge>
+                            )}
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-80">
+                        <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {notifications.length > 0 ? (
+                            <>
+                                {notifications.map(n => (
+                                     <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
+                                        <div className="font-semibold">{n.title}</div>
+                                        <div className="text-xs text-muted-foreground">{n.body}</div>
+                                        <div className="text-xs text-muted-foreground/80 mt-1">{formatDistanceToNow(n.timestamp, { addSuffix: true })}</div>
+                                    </DropdownMenuItem>
+                                ))}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={onClearNotifications} className="justify-center text-sm text-primary hover:!bg-primary/10 hover:!text-primary">
+                                    <CheckCheck className="mr-2 h-4 w-4" />
+                                    Clear All
+                                </DropdownMenuItem>
+                            </>
+                        ) : (
+                            <DropdownMenuItem disabled>No new notifications</DropdownMenuItem>
+                        )}
+                    </DropdownMenuContent>
+                </DropdownMenu>
                 <Button onClick={handleLogout} variant="outline" size="sm">
                     <LogOut className="mr-2 h-4 w-4" />
                     Logout
@@ -71,12 +124,35 @@ function AccessDeniedScreen({ message, details }: { message: string, details?: s
 export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, profile, loading, error } = useProfile();
+  const [notifications, setNotifications] = useState<Notification[]>([]);
 
   useEffect(() => {
     if (!loading && !user) {
         router.replace("/parent/login");
     }
+    
+    // Set up foreground notification listener
+    const unsubscribe = onForegroundNotification((payload) => {
+        const { notification } = payload;
+        if (notification) {
+             setNotifications(prev => [
+                {
+                    id: payload.messageId || new Date().toISOString(),
+                    title: notification.title || "New Notification",
+                    body: notification.body || "",
+                    timestamp: new Date(),
+                },
+                ...prev
+            ]);
+        }
+    });
+
+    return () => unsubscribe();
   }, [user, loading, router]);
+
+  const handleClearNotifications = useCallback(() => {
+    setNotifications([]);
+  }, []);
 
   if (loading) {
     return <LoadingScreen />;
@@ -100,7 +176,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full flex-col">
-      <Header />
+      <Header notifications={notifications} onClearNotifications={handleClearNotifications} />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
         {children}
       </main>
