@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useProfile } from '@/lib/useProfile';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, onSnapshot, DocumentData, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, onSnapshot, DocumentData, Timestamp, documentId } from 'firebase/firestore';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from '@/components/ui/skeleton';
@@ -18,6 +18,7 @@ interface Student {
     name: string;
     assignedRouteId?: string;
     assignedBusId?: string;
+    schoolId: string;
 }
 
 interface TripPassenger extends DocumentData {
@@ -57,9 +58,9 @@ function StudentCard({ student }: { student: ChildStatus }) {
             <CardHeader className="flex flex-row items-start justify-between">
                 <div>
                     <CardTitle>{student.name}</CardTitle>
-                    <CardDescription>
-                        {student.busCode && <span className="flex items-center gap-1"><Bus className="h-4 w-4"/> {student.busCode}</span>}
-                        {student.routeName && <span className="flex items-center gap-1"><Route className="h-4 w-4"/> {student.routeName}</span>}
+                    <CardDescription className="flex flex-col gap-1 mt-2">
+                        {student.busCode && <span className="flex items-center gap-2"><Bus className="h-4 w-4"/> {student.busCode}</span>}
+                        {student.routeName && <span className="flex items-center gap-2"><Route className="h-4 w-4"/> {student.routeName}</span>}
                     </CardDescription>
                 </div>
                 {getStatusBadge()}
@@ -92,7 +93,6 @@ function LoadingState() {
     )
 }
 
-
 export default function ParentDashboardPage() {
     const { user, profile } = useProfile();
     const [children, setChildren] = useState<ChildStatus[]>([]);
@@ -105,19 +105,23 @@ export default function ParentDashboardPage() {
         setError(null);
         
         try {
-            // 1. Find linked students
-            const parentLinksQuery = query(collection(db, "parentStudents"), where("parentId", "==", user.uid));
-            const linksSnapshot = await getDocs(parentLinksQuery);
-            const studentIds = linksSnapshot.docs.map(d => d.data().studentId);
+            // 1. Find linked students via direct GET, which is allowed by rules.
+            const parentLinkRef = doc(db, "parentStudents", user.uid);
+            const linkDoc = await getDoc(parentLinkRef);
 
-            if (studentIds.length === 0) {
+            if (!linkDoc.exists() || !linkDoc.data().studentIds || linkDoc.data().studentIds.length === 0) {
                 setChildren([]);
                 setIsLoading(false);
                 return;
             }
+            const studentIds = linkDoc.data().studentIds;
 
-            // 2. Fetch student details
-            const studentsQuery = query(collection(db, "students"), where("__name__", "in", studentIds));
+            // 2. Fetch only the specific student documents.
+            const studentsQuery = query(
+                collection(db, "students"), 
+                where(documentId(), "in", studentIds),
+                where("schoolId", "==", profile.schoolId)
+            );
             const studentsSnapshot = await getDocs(studentsQuery);
             const studentData = studentsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Student));
 
@@ -139,7 +143,7 @@ export default function ParentDashboardPage() {
                 trips = tripsSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
             }
             
-             // 4. Create initial child status objects
+             // 4. Create initial child status objects with bus/route names
             const initialChildrenStatus = await Promise.all(studentData.map(async (s) => {
                 let busCode: string | undefined;
                 let routeName: string | undefined;
@@ -187,14 +191,16 @@ export default function ParentDashboardPage() {
 
         } catch (e: any) {
             console.error("Failed to fetch parent data:", e);
-            setError(e.message || "An unknown error occurred.");
+            setError(e.message || "An unknown error occurred. The security rules may be too restrictive.");
             setIsLoading(false);
         }
     }, [user, profile]);
 
     useEffect(() => {
-        fetchChildrenData();
-    }, [fetchChildrenData]);
+        if(profile && user) {
+            fetchChildrenData();
+        }
+    }, [fetchChildrenData, profile, user]);
 
     if (isLoading) {
         return <LoadingState />;
