@@ -16,6 +16,7 @@ import {
   limit,
   type DocumentData,
   Timestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -134,7 +135,10 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
         });
 
       } else {
-        await addDoc(collection(db, "users"), {
+        const batch = writeBatch(db);
+        const newUserRef = doc(collection(db, "users")); // create a new doc ref with auto-id
+        
+        batch.set(newUserRef, {
             email: data.email,
             role: data.role,
             schoolId: schoolId,
@@ -143,6 +147,15 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
             displayName: "Invited User",
             invitedAt: Timestamp.now(),
         });
+        
+        // If the new user is a parent, also create their parentStudents doc
+        if (data.role === 'parent') {
+            const parentLinkRef = doc(db, "parentStudents", newUserRef.id);
+            batch.set(parentLinkRef, { schoolId: schoolId, studentIds: [] });
+        }
+        
+        await batch.commit();
+
         toast({
             title: "Invitation Sent!",
             description: `An invitation has been sent to ${data.email}.`,
