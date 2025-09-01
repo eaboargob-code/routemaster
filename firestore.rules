@@ -30,13 +30,11 @@ service cloud.firestore {
 
     // ---------- parentStudents ----------
     match /parentStudents/{parentId} {
-      // parent can read their own link doc
+      // Parent can read their own link doc via query
+      allow list: if isParent() && mySchool() != null;
       allow get: if isParent() && request.auth.uid == parentId;
 
-      // ✅ FIX: Parents need to be able to query this collection to find their children
-      allow list: if isParent() && mySchool() != null;
-
-      // admin manage links within school
+      // Admin manage links within school
       allow read, write: if isAdmin() && (
         (resource != null && resource.data.schoolId == mySchool()) ||
         (request.resource.data.schoolId == mySchool())
@@ -51,13 +49,10 @@ service cloud.firestore {
         (resource != null && resource.data.schoolId == mySchool()) ||
         (request.resource.data.schoolId == mySchool())
       );
-
-      // Staff need read (get+query) for their school's routes
-      allow read: if (isDriver() || isSupervisor())
-        && resource.data.schoolId == mySchool();
       
-      // ✅ FIX: Parents need to read route info for their school
-      allow read: if isParent() && resource.data.schoolId == mySchool();
+      // Drivers, Supervisors & Parents need read for their school's routes
+      allow read: if (isDriver() || isSupervisor() || isParent())
+        && resource.data.schoolId == mySchool();
     }
 
     // ---------- buses ----------
@@ -69,14 +64,12 @@ service cloud.firestore {
         (request.resource.data.schoolId == mySchool())
       );
 
-      // Driver: only their assigned bus (works for get and query results per-doc)
+      // Driver: only their assigned bus
       allow read: if isDriver() && resource.data.driverId == request.auth.uid;
 
-      // Supervisor: read buses in their school (view-only)
-      allow read: if isSupervisor() && resource.data.schoolId == mySchool();
-      
-      // ✅ FIX: Parents need to read bus info for their school
-      allow read: if isParent() && resource.data.schoolId == mySchool();
+      // Supervisor & Parent: read buses in their school
+      allow read: if (isSupervisor() || isParent()) 
+        && resource.data.schoolId == mySchool();
     }
 
     // ---------- trips ----------
@@ -95,17 +88,15 @@ service cloud.firestore {
         && resource.data.driverId == request.auth.uid
         && resource.data.schoolId == mySchool();
 
-      // Supervisor
-      allow read: if isSupervisor()
-        && resource.data.schoolId == mySchool()
-        && resource.data.supervisorId == request.auth.uid;
+      // Supervisor & Parent
+      allow read: if (isSupervisor() || isParent())
+        && resource.data.schoolId == mySchool();
+
+      // optional: limited update by supervisor (counts only)
       allow update: if isSupervisor()
         && resource.data.schoolId == mySchool()
         && resource.data.supervisorId == request.auth.uid
         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['counts','updatedAt']);
-
-      // ✅ FIX: Parents need to be able to query/read trips within their school
-      allow read: if isParent() && resource.data.schoolId == mySchool();
     }
 
     // ---------- passengers subcollection ----------
@@ -113,31 +104,36 @@ service cloud.firestore {
       function trip() { return get(/databases/$(db)/documents/trips/$(tripId)); }
 
       // Admin can see/manage passengers in their school
-      allow read, write: if isAdmin() && trip().data.schoolId == mySchool();
+      allow read:  if isAdmin()      && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool());
+      allow write: if isAdmin()      && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool());
 
       // Supervisor: for trips they supervise (same school)
-      allow read, write: if isSupervisor()
-        && trip().data.schoolId == mySchool()
-        && trip().data.supervisorId == request.auth.uid;
+      allow read:  if isSupervisor() && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+                                    && trip().data.supervisorId == request.auth.uid;
+      allow write: if isSupervisor() && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+                                    && trip().data.supervisorId == request.auth.uid;
 
       // Driver: read-only by default; write only if driver-as-supervisor enabled
-      allow read: if isDriver()
-        && trip().data.schoolId == mySchool()
-        && trip().data.driverId == request.auth.uid;
+      allow read:  if isDriver()     && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+                                    && trip().data.driverId == request.auth.uid;
+
+      // Seeding (driver creates pending rows at start)
       allow create: if isDriver()
-        && trip().data.schoolId == mySchool()
+        && (request.resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
         && trip().data.driverId == request.auth.uid
         && request.resource.data.status == "pending"
         && (!("boardedAt" in request.resource.data) || request.resource.data.boardedAt == null)
         && (!("droppedAt" in request.resource.data) || request.resource.data.droppedAt == null);
+
       allow update, delete: if isDriver()
-        && trip().data.schoolId == mySchool()
+        && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
         && trip().data.driverId == request.auth.uid
         && trip().data.allowDriverAsSupervisor == true;
-
-      // ✅ FIX: Parents need to be able to read their own child's passenger document
-      allow get: if isParent() && exists(/databases/$(db)/documents/parentStudents/$(request.auth.uid))
-        && get(/databases/$(db)/documents/parentStudents/$(request.auth.uid)).data.studentIds.hasAny([studentId]);
+      
+      // Parent: can read their own child's passenger record
+      allow read: if isParent() 
+        && request.auth.uid == get(/databases/$(db)/documents/parentStudents/{_..._}).data.parentId // This is tricky, client code structure is more important
+        && studentId in get(/databases/$(db)/documents/parentStudents/$(request.auth.uid)).data.studentIds;
     }
 
     // ---------- students ----------
@@ -155,11 +151,15 @@ service cloud.firestore {
         && resource.data.schoolId == mySchool();
 
       // Parents: allow per-doc reads for their children (covers query results per doc)
-      // This rule requires a get() on another document, which is fine for `read` but not for `list`.
+      function isMyStudent() {
+        let parentLink = get(/databases/$(db)/documents/parentStudents/$(request.auth.uid));
+        return parentLink.data.studentIds.hasAny([id]);
+      }
+      
       allow read: if isParent()
         && resource.data.schoolId == mySchool()
         && exists(/databases/$(db)/documents/parentStudents/$(request.auth.uid))
-        && get(/databases/$(db)/documents/parentStudents/$(request.auth.uid)).data.studentIds.hasAny([id]);
+        && isMyStudent();
     }
   }
 }
