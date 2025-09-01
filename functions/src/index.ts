@@ -1,3 +1,4 @@
+
 import * as admin from "firebase-admin";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { getMessaging } from "firebase-admin/messaging";
@@ -10,16 +11,26 @@ export const notifyPassengerStatus = onDocumentWritten(
   async (event) => {
     const before = event.data?.before.data() as any | undefined;
     const after = event.data?.after.data() as any | undefined;
-    if (!after) return; // deleted
+    if (!after) {
+        console.log("Document deleted, skipping notification.");
+        return; 
+    }
     const prev = before?.status;
     const curr = after?.status;
-    if (!curr || prev === curr) return;
+    if (!curr || prev === curr) {
+        console.log(`Status unchanged or missing ('${prev}' -> '${curr}'), skipping.`);
+        return;
+    }
 
     const tripId = event.params.tripId as string;
     const studentId = event.params.studentId as string;
+    console.log(`Status changed for student ${studentId} in trip ${tripId} to ${curr}.`);
 
     const tripSnap = await db.doc(`trips/${tripId}`).get();
-    if (!tripSnap.exists) return;
+    if (!tripSnap.exists) {
+        console.log(`Trip document ${tripId} not found.`);
+        return;
+    }
     const trip = tripSnap.data() as any;
     const schoolId = trip.schoolId;
 
@@ -29,7 +40,10 @@ export const notifyPassengerStatus = onDocumentWritten(
       .where("studentIds", "array-contains", studentId)
       .get();
 
-    if (parentsSnap.empty) return;
+    if (parentsSnap.empty) {
+        console.log(`No parents found for student ${studentId} in school ${schoolId}.`);
+        return;
+    }
 
     // Load tokens
     const tokens: string[] = [];
@@ -37,6 +51,7 @@ export const notifyPassengerStatus = onDocumentWritten(
     for (const d of parentsSnap.docs) {
       parentUids.push(d.id);
     }
+    console.log(`Found ${parentUids.length} parent(s): ${parentUids.join(', ')}`);
     
     if (parentUids.length === 0) return;
 
@@ -45,7 +60,11 @@ export const notifyPassengerStatus = onDocumentWritten(
       const t = (u.get("fcmTokens") as string[] | undefined) ?? [];
       tokens.push(...t);
     });
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) {
+        console.log("No FCM tokens found for the parent(s).");
+        return;
+    }
+    console.log(`Found ${tokens.length} tokens to send to.`);
 
     // Enrich with student name
     const studentSnap = await db.doc(`students/${studentId}`).get();
@@ -73,18 +92,23 @@ export const notifyPassengerStatus = onDocumentWritten(
       tokens,
     };
 
+    console.log("Sending notification payload:", JSON.stringify({ notification: message.notification, data: message.data }));
     const resp = await getMessaging().sendEachForMulticast(message);
+    console.log(`Successfully sent ${resp.successCount} messages, ${resp.failureCount} failed.`);
+    
     // Cleanup invalid tokens
     const invalid: string[] = [];
     resp.responses.forEach((r, i) => {
       if (!r.success) {
         const err = (r.error?.message || "").toLowerCase();
+        console.error(`Failed to send to token ${tokens[i]}:`, r.error);
         if (err.includes("unregistered") || err.includes("invalid")) {
           invalid.push(tokens[i]);
         }
       }
     });
     if (invalid.length) {
+      console.log(`Cleaning up ${invalid.length} invalid tokens.`);
       await Promise.all(
         parentUids.map(async (uid) =>
           db.doc(`users/${uid}`).update({
