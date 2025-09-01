@@ -89,15 +89,13 @@ service cloud.firestore {
     // -------- trips --------
     match /trips/{id} {
       // Admin
-      allow list: if isAdmin() && mySchool() != null;
-      allow read, update, delete: if isAdmin() && resource.data.schoolId == mySchool();
+      allow list, get, update, delete: if isAdmin() && resource.data.schoolId == mySchool();
       allow create: if isAdmin() && request.resource.data.schoolId == mySchool();
 
       // Driver
       allow create: if isDriver()
         && request.resource.data.driverId == request.auth.uid
         && request.resource.data.schoolId == mySchool();
-
       allow read, update: if isDriver()
         && resource.data.driverId == request.auth.uid
         && resource.data.schoolId == mySchool();
@@ -171,3 +169,4 @@ service cloud.firestore {
     }
   }
 }
+    

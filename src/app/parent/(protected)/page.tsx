@@ -105,11 +105,11 @@ export default function ParentDashboardPage() {
         setError(null);
         
         try {
-            // 1. Find linked students via direct GET, which is allowed by rules.
+            // 1. Find linked students via direct GET
             const parentLinkRef = doc(db, "parentStudents", user.uid);
             const linkDoc = await getDoc(parentLinkRef);
 
-            if (!linkDoc.exists() || !linkDoc.data().studentIds || linkDoc.data().studentIds.length === 0) {
+            if (!linkDoc.exists() || !linkDoc.data()?.studentIds || linkDoc.data().studentIds.length === 0) {
                 setChildren([]);
                 setIsLoading(false);
                 return;
@@ -164,20 +164,23 @@ export default function ParentDashboardPage() {
             setIsLoading(false);
             
             // 5. Set up listeners for each student on their respective trip
+            const tripListeners: (()=>void)[] = [];
+            
             studentData.forEach(student => {
                 const relevantTrip = trips.find(t => t.routeId === student.assignedRouteId || t.busId === student.assignedBusId);
                 if (relevantTrip) {
                     // Listen to the passenger subcollection
                     const passengerRef = doc(db, `trips/${relevantTrip.id}/passengers`, student.id);
-                    onSnapshot(passengerRef, (snap) => {
-                        setChildren(prev => prev.map(c => c.id === student.id ? { ...c, tripStatus: snap.data() as TripPassenger, lastLocationUpdate: relevantTrip.lastLocation?.at } : c));
+                    const passengerUnsub = onSnapshot(passengerRef, (snap) => {
+                        setChildren(prev => prev.map(c => c.id === student.id ? { ...c, tripStatus: snap.data() as TripPassenger } : c));
                     });
-                     // Listen to the trip for location updates
+                    
+                    // Listen to the trip for location updates
                     const tripRef = doc(db, 'trips', relevantTrip.id);
-                    onSnapshot(tripRef, (snap) => {
+                    const tripUnsub = onSnapshot(tripRef, (snap) => {
                         const tripData = snap.data();
                         if (tripData?.lastLocation?.at) {
-                            setChildren(prev => prev.map(c => {
+                             setChildren(prev => prev.map(c => {
                                  const associatedTrip = trips.find(t => t.routeId === c.assignedRouteId || t.busId === c.assignedBusId);
                                  if(associatedTrip?.id === snap.id) {
                                      return {...c, lastLocationUpdate: tripData.lastLocation.at }
@@ -186,20 +189,37 @@ export default function ParentDashboardPage() {
                             }));
                         }
                     });
+                    tripListeners.push(passengerUnsub, tripUnsub);
                 }
             });
+            
+            return () => tripListeners.forEach(unsub => unsub());
 
         } catch (e: any) {
             console.error("Failed to fetch parent data:", e);
-            setError(e.message || "An unknown error occurred. The security rules may be too restrictive.");
+            if (e.code === 'permission-denied') {
+                setError("Missing or insufficient permissions. Please check Firestore rules for parents.");
+            } else {
+                setError(e.message || "An unknown error occurred.");
+            }
             setIsLoading(false);
         }
     }, [user, profile]);
 
     useEffect(() => {
+        let unsub: (() => void) | undefined;
         if(profile && user) {
-            fetchChildrenData();
+            fetchChildrenData().then(cleanup => {
+                if (typeof cleanup === 'function') {
+                    unsub = cleanup;
+                }
+            });
         }
+        return () => {
+            if (unsub) {
+                unsub();
+            }
+        };
     }, [fetchChildrenData, profile, user]);
 
     if (isLoading) {
@@ -232,3 +252,5 @@ export default function ParentDashboardPage() {
         </div>
     )
 }
+
+    
