@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import React, { useEffect, useState, useCallback, use } from 'react';
@@ -26,8 +25,11 @@ interface TripDetails extends DocumentData {
     status: 'active' | 'ended';
 }
 
-export default function TripDetailsPage({ params }: { params: { id: string }}) {
-    const { id: tripId } = params;
+interface TripDetailsClientPageProps {
+    tripId: string;
+}
+
+function TripDetailsClientPage({ tripId }: TripDetailsClientPageProps) {
     const { user, profile, loading: profileLoading } = useProfile();
     const [trip, setTrip] = useState<TripDetails | null>(null);
     const [route, setRoute] = useState<DocumentData | null>(null);
@@ -141,4 +143,10 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
             </Card>
         </div>
     )
+}
+
+// This is a server component wrapper to handle the params promise
+export default function TripDetailsPage({ params }: { params: { id: string }}) {
+    const { id } = use(params);
+    return <TripDetailsClientPage tripId={id} />;
 }
