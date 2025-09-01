@@ -9,8 +9,6 @@ import {
   getDocs,
   doc,
   writeBatch,
-  addDoc,
-  deleteDoc,
   updateDoc,
   setDoc,
   getDoc,
@@ -47,16 +45,11 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LinkIcon, Link2Off, UserPlus, GraduationCap, X } from "lucide-react";
+import { LinkIcon, UserPlus, GraduationCap, X } from "lucide-react";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 
@@ -80,7 +73,7 @@ interface ParentStudentLink {
 
 function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { parent: Parent, students: Student[], existingStudentIds: string[], onLink: () => void }) {
     const [isOpen, setIsOpen] = useState(false);
-    const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+    const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
     const [isSubmitting, setIsSubmitting] = useState(false);
     const { toast } = useToast();
 
@@ -88,38 +81,48 @@ function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { p
         const linkedStudentIds = new Set(existingStudentIds);
         return students.filter(s => !linkedStudentIds.has(s.id));
     }, [students, existingStudentIds]);
+    
+    const handleToggleStudent = (studentId: string) => {
+        setSelectedStudentIds(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(studentId)) {
+                newSet.delete(studentId);
+            } else {
+                newSet.add(studentId);
+            }
+            return newSet;
+        });
+    }
 
     const handleLink = async () => {
-        if (!selectedStudentId) {
-            toast({ variant: "destructive", title: "No student selected" });
+        if (selectedStudentIds.size === 0) {
+            toast({ variant: "destructive", title: "No students selected" });
             return;
         }
         setIsSubmitting(true);
+        const studentIdsToLink = Array.from(selectedStudentIds);
         try {
             const parentLinkRef = doc(db, "parentStudents", parent.id);
-            const linkSnap = await getDoc(parentLinkRef);
+            const batch = writeBatch(db);
 
-            if (!linkSnap.exists()) {
-                await setDoc(parentLinkRef, { 
-                    schoolId: parent.schoolId, 
-                    studentIds: [selectedStudentId] 
-                });
-            } else {
-                await updateDoc(parentLinkRef, { 
-                    studentIds: arrayUnion(selectedStudentId)
-                });
-            }
+            // Use set with merge:true to create doc if it doesn't exist, without overwriting if it does.
+            batch.set(parentLinkRef, { schoolId: parent.schoolId, studentIds: [] }, { merge: true });
+
+            // Then, union all the new children.
+            batch.update(parentLinkRef, { studentIds: arrayUnion(...studentIdsToLink) });
+
+            await batch.commit();
 
             toast({
-                title: "Student Linked!",
-                description: "The student has been successfully linked to the parent.",
+                title: "Students Linked!",
+                description: `${studentIdsToLink.length} student(s) have been successfully linked.`,
                 className: 'bg-accent text-accent-foreground border-0',
             });
-            setSelectedStudentId(null);
+            setSelectedStudentIds(new Set());
             onLink();
             setIsOpen(false);
         } catch (error) {
-            console.error("[link student]", error);
+            console.error("[link students batch]", error);
             toast({ variant: "destructive", title: "Linking failed", description: (error as Error).message });
         } finally {
             setIsSubmitting(false);
@@ -131,25 +134,37 @@ function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { p
             <DialogTrigger asChild>
                 <Button variant="outline" size="sm">
                     <LinkIcon className="mr-2 h-4 w-4" />
-                    Link Student
+                    Link Students
                 </Button>
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Link Student to {parent.email}</DialogTitle>
+                    <DialogTitle>Link Students to {parent.email}</DialogTitle>
                 </DialogHeader>
                 <div className="py-4 space-y-4">
                     {availableStudents.length > 0 ? (
-                        <Select onValueChange={setSelectedStudentId} value={selectedStudentId ?? ""}>
-                            <SelectTrigger>
-                                <SelectValue placeholder="Select a student to link..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {availableStudents.map(student => (
-                                    <SelectItem key={student.id} value={student.id}>{student.name}</SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                        <>
+                            <p className="text-sm text-muted-foreground">Select one or more students to link.</p>
+                             <ScrollArea className="h-64 border rounded-md p-4">
+                                <div className="space-y-4">
+                                    {availableStudents.map(student => (
+                                        <div key={student.id} className="flex items-center space-x-2">
+                                            <Checkbox
+                                                id={`student-${student.id}`}
+                                                checked={selectedStudentIds.has(student.id)}
+                                                onCheckedChange={() => handleToggleStudent(student.id)}
+                                            />
+                                            <label
+                                                htmlFor={`student-${student.id}`}
+                                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                            >
+                                                {student.name}
+                                            </label>
+                                        </div>
+                                    ))}
+                                </div>
+                            </ScrollArea>
+                        </>
                     ) : (
                        <Alert>
                             <GraduationCap className="h-4 w-4" />
@@ -164,8 +179,8 @@ function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { p
                     <DialogClose asChild>
                         <Button type="button" variant="ghost">Cancel</Button>
                     </DialogClose>
-                    <Button onClick={handleLink} disabled={isSubmitting || !selectedStudentId}>
-                        {isSubmitting ? "Linking..." : "Link Student"}
+                    <Button onClick={handleLink} disabled={isSubmitting || selectedStudentIds.size === 0}>
+                        {isSubmitting ? "Linking..." : `Link ${selectedStudentIds.size} Student(s)`}
                     </Button>
                 </DialogFooter>
             </DialogContent>
@@ -207,13 +222,19 @@ function ParentsList({ schoolId }: { schoolId: string }) {
             if (parentsData.length > 0) {
                 const parentIds = parentsData.map(p => p.id);
                 const parentLinksMap = new Map<string, ParentStudentLink>();
-                // Firestore `in` query is limited to 30 items, but we should be fine here.
-                // For very large schools, this might need chunking.
-                const linksQuery = query(collection(db, "parentStudents"), where("__name__", "in", parentIds));
-                const linksSnapshot = await getDocs(linksQuery);
-                linksSnapshot.forEach(doc => {
-                    parentLinksMap.set(doc.id, doc.data() as ParentStudentLink);
-                });
+                
+                // Firestore `in` query is limited to 30 items, chunking is safer for large schools.
+                const CHUNK_SIZE = 30;
+                for (let i = 0; i < parentIds.length; i += CHUNK_SIZE) {
+                    const chunk = parentIds.slice(i, i + CHUNK_SIZE);
+                    if (chunk.length === 0) continue;
+
+                    const linksQuery = query(collection(db, "parentStudents"), where("__name__", "in", chunk));
+                    const linksSnapshot = await getDocs(linksQuery);
+                    linksSnapshot.forEach(doc => {
+                        parentLinksMap.set(doc.id, doc.data() as ParentStudentLink);
+                    });
+                }
                 setLinks(parentLinksMap);
             } else {
                 setLinks(new Map());
