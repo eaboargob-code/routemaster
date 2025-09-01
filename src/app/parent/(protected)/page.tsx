@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useProfile } from '@/lib/useProfile';
 import { db } from '@/lib/firebase';
 import { collection, query, where, getDocs, doc, getDoc, onSnapshot, DocumentData, Timestamp, documentId } from 'firebase/firestore';
+import { registerFcmToken } from '@/lib/notifications';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from '@/components/ui/skeleton';
@@ -99,6 +100,12 @@ export default function ParentDashboardPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    useEffect(() => {
+        if (user?.uid) {
+            registerFcmToken(user.uid);
+        }
+    }, [user?.uid]);
+    
     const fetchChildrenData = useCallback(async () => {
         if (!user || !profile) return;
         setIsLoading(true);

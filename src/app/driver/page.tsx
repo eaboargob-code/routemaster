@@ -14,6 +14,7 @@ import {
 import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
+import { registerFcmToken } from '@/lib/notifications';
 
 
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -166,6 +167,12 @@ export default function DriverPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSendingLocation, setIsSendingLocation] = useState(false);
     
+    useEffect(() => {
+        if (user?.uid) {
+            registerFcmToken(user.uid);
+        }
+    }, [user?.uid]);
+
     const fetchData = useCallback(async () => {
         if (!user || !profile) return;
         setUiState({ status: 'loading' });

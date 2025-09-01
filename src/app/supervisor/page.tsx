@@ -10,6 +10,7 @@ import {
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
+import { registerFcmToken } from '@/lib/notifications';
 
 import {
   Card,
@@ -72,6 +73,12 @@ export default function SupervisorPage() {
     routeMap: {},
   });
   const [uiState, setUiState] = useState<UiState>({ status: 'loading' });
+
+  useEffect(() => {
+    if (user?.uid) {
+        registerFcmToken(user.uid);
+    }
+  }, [user?.uid]);
 
   const fetchTripsAndReferences = useCallback(async () => {
     if (!user || !profile) return;
