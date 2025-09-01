@@ -1,143 +1,165 @@
-
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{db}/documents {
 
-    // --- Helpers ---
-    function authed() {
-      return request.auth != null;
-    }
-    function hasProfile() {
-      return exists(/databases/$(db)/documents/users/$(request.auth.uid));
-    }
-    function profile() {
-      return get(/databases/$(db)/documents/users/$(request.auth.uid)).data;
-    }
-    function role() {
-      return hasProfile() ? profile().role : null;
-    }
-    function schoolId() {
-      return hasProfile() ? profile().schoolId : null;
-    }
-    function isAdmin() {
-      return role() == "admin";
-    }
-    function isDriver() {
-      return role() == "driver";
-    }
-    function isSupervisor() {
-      return role() == "supervisor";
-    }
-    function isParent() {
-      return role() == "parent";
-    }
+    // ---------- helpers ----------
+    function authed()       { return request.auth != null; }
+    function hasMe()        { return authed() && exists(/databases/$(db)/documents/users/$(request.auth.uid)); }
+    function me()           { return get(/databases/$(db)/documents/users/$(request.auth.uid)); }
+    function myRole()       { return hasMe() ? me().data.role : null; }
+    function mySchool()     { return hasMe() ? me().data.schoolId : null; }
+    function isAdmin()      { return myRole() == "admin"; }
+    function isDriver()     { return myRole() == "driver"; }
+    function isSupervisor() { return myRole() == "supervisor"; }
+    function isParent()     { return myRole() == "parent"; }
 
-    // --- Rules ---
-    // User profiles can be read by any authenticated user in the same school,
-    // and can only be managed by admins.
+    // ---------- users ----------
     match /users/{uid} {
-      allow read: if (isAdmin() || isDriver() || isSupervisor() || isParent())
-                    && resource.data.schoolId == schoolId();
-      allow list: if isAdmin() && schoolId() != null;
-      allow write: if isAdmin() &&
-                     ((resource != null && resource.data.schoolId == schoolId()) ||
-                      (request.resource.data.schoolId == schoolId()));
-      // Allow users to get their own doc to bootstrap their profile
+      // Admin directory access (list + read) scoped by school
+      allow list: if isAdmin() && mySchool() != null;
+      allow read, update, delete: if isAdmin() && resource.data.schoolId == mySchool();
+      allow create: if isAdmin() && request.resource.data.schoolId == mySchool();
+
+      // Everyone can GET their own profile (bootstrap)
       allow get: if authed() && request.auth.uid == uid;
+
+      // Drivers & Supervisors may GET specific user docs in their school (to show names)
+      allow get: if (isDriver() || isSupervisor())
+        && get(/databases/$(db)/documents/users/$(uid)).data.schoolId == mySchool();
     }
 
-    // Stores the mapping of a parent to their students.
+    // ---------- parentStudents ----------
     match /parentStudents/{parentId} {
-      // Parents can query for their own link document
-      allow list: if isParent() && request.auth.uid == parentId;
-      // Parents can read their own link document
+      // parent can read their own link doc
       allow get: if isParent() && request.auth.uid == parentId;
 
-      // Admins can manage all links within their school
-      allow read, write: if isAdmin() &&
-                           ((resource != null && resource.data.schoolId == schoolId()) ||
-                            (request.resource.data.schoolId == schoolId()));
+      // ✅ FIX: Parents need to be able to query this collection to find their children
+      allow list: if isParent() && mySchool() != null;
+
+      // admin manage links within school
+      allow read, write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
+      );
     }
 
-    // Routes can be managed by admins, but read by drivers/supervisors/parents
-    // in the same school.
+    // ---------- routes ----------
     match /routes/{id} {
-      allow read: if (isAdmin() || isDriver() || isSupervisor() || isParent())
-                    && resource.data.schoolId == schoolId();
-      allow list: if isAdmin() && schoolId() != null;
-      allow write: if isAdmin() &&
-                     ((resource != null && resource.data.schoolId == schoolId()) ||
-                      (request.resource.data.schoolId == schoolId()));
+      // Admin full control within school
+      allow list: if isAdmin() && mySchool() != null;
+      allow read, write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
+      );
+
+      // Staff need read (get+query) for their school's routes
+      allow read: if (isDriver() || isSupervisor())
+        && resource.data.schoolId == mySchool();
+      
+      // ✅ FIX: Parents need to read route info for their school
+      allow read: if isParent() && resource.data.schoolId == mySchool();
     }
 
-    // Buses can be managed by admins. Drivers can read their assigned bus.
-    // Supervisors and Parents can read all buses in their school.
+    // ---------- buses ----------
     match /buses/{id} {
-      allow read: if (isSupervisor() || isParent()) && resource.data.schoolId == schoolId();
+      // Admin full control within school
+      allow list: if isAdmin() && mySchool() != null;
+      allow read, write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
+      );
+
+      // Driver: only their assigned bus (works for get and query results per-doc)
       allow read: if isDriver() && resource.data.driverId == request.auth.uid;
 
-      allow list: if isAdmin() && schoolId() != null;
-      allow read, write: if isAdmin() &&
-                           ((resource != null && resource.data.schoolId == schoolId()) ||
-                            (request.resource.data.schoolId == schoolId()));
-    }
-
-    // Trips can be created/managed by drivers and admins.
-    // Supervisors and Parents can read trips they are associated with.
-    match /trips/{id} {
-      // Parents can list/read trips relevant to their children (by route)
-      allow read, list: if isParent() && resource.data.schoolId == schoolId();
-
-      // Driver rules
-      allow create: if isDriver() && request.resource.data.driverId == request.auth.uid && request.resource.data.schoolId == schoolId();
-      allow read, update: if isDriver() && resource.data.driverId == request.auth.uid && resource.data.schoolId == schoolId();
-
-      // Supervisor rules
-      allow read: if isSupervisor() && resource.data.schoolId == schoolId() && resource.data.supervisorId == request.auth.uid;
-      allow update: if isSupervisor() && resource.data.schoolId == schoolId() && resource.data.supervisorId == request.auth.uid
-                      && request.resource.data.diff(resource.data).changedKeys().hasOnly(['counts', 'updatedAt']);
+      // Supervisor: read buses in their school (view-only)
+      allow read: if isSupervisor() && resource.data.schoolId == mySchool();
       
-      // Admin rules
-      allow list: if isAdmin() && schoolId() != null;
-      allow read, update, delete: if isAdmin() && resource.data.schoolId == schoolId();
-      allow create: if isAdmin() && request.resource.data.schoolId == schoolId();
+      // ✅ FIX: Parents need to read bus info for their school
+      allow read: if isParent() && resource.data.schoolId == mySchool();
     }
 
-    // Passengers are a subcollection of trips.
+    // ---------- trips ----------
+    match /trips/{id} {
+      // Admin
+      allow list: if isAdmin() && mySchool() != null;
+      allow read, update, delete: if isAdmin() && resource.data.schoolId == mySchool();
+      allow create: if isAdmin() && request.resource.data.schoolId == mySchool();
+
+      // Driver
+      allow create: if isDriver()
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.schoolId == mySchool();
+
+      allow read, update: if isDriver()
+        && resource.data.driverId == request.auth.uid
+        && resource.data.schoolId == mySchool();
+
+      // Supervisor
+      allow read: if isSupervisor()
+        && resource.data.schoolId == mySchool()
+        && resource.data.supervisorId == request.auth.uid;
+      allow update: if isSupervisor()
+        && resource.data.schoolId == mySchool()
+        && resource.data.supervisorId == request.auth.uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['counts','updatedAt']);
+
+      // ✅ FIX: Parents need to be able to query/read trips within their school
+      allow read: if isParent() && resource.data.schoolId == mySchool();
+    }
+
+    // ---------- passengers subcollection ----------
     match /trips/{tripId}/passengers/{studentId} {
       function trip() { return get(/databases/$(db)/documents/trips/$(tripId)); }
 
-      // Parents can read their own child's status within a trip.
-      allow get: if isParent() && request.auth.uid in get(/databases/$(db)/documents/parentStudents/{studentId}).data.parentIds;
-      
-      // Admin
-      allow read, write: if isAdmin() && trip().data.schoolId == schoolId();
-      
-      // Supervisor
-      allow read, write: if isSupervisor() && trip().data.supervisorId == request.auth.uid;
-      
-      // Driver
-      allow read: if isDriver() && trip().data.driverId == request.auth.uid;
-      allow create: if isDriver() && trip().data.driverId == request.auth.uid && request.resource.data.status == 'pending';
-      allow update, delete: if isDriver() && trip().data.driverId == request.auth.uid && trip().data.allowDriverAsSupervisor == true;
+      // Admin can see/manage passengers in their school
+      allow read, write: if isAdmin() && trip().data.schoolId == mySchool();
+
+      // Supervisor: for trips they supervise (same school)
+      allow read, write: if isSupervisor()
+        && trip().data.schoolId == mySchool()
+        && trip().data.supervisorId == request.auth.uid;
+
+      // Driver: read-only by default; write only if driver-as-supervisor enabled
+      allow read: if isDriver()
+        && trip().data.schoolId == mySchool()
+        && trip().data.driverId == request.auth.uid;
+      allow create: if isDriver()
+        && trip().data.schoolId == mySchool()
+        && trip().data.driverId == request.auth.uid
+        && request.resource.data.status == "pending"
+        && (!("boardedAt" in request.resource.data) || request.resource.data.boardedAt == null)
+        && (!("droppedAt" in request.resource.data) || request.resource.data.droppedAt == null);
+      allow update, delete: if isDriver()
+        && trip().data.schoolId == mySchool()
+        && trip().data.driverId == request.auth.uid
+        && trip().data.allowDriverAsSupervisor == true;
+
+      // ✅ FIX: Parents need to be able to read their own child's passenger document
+      allow get: if isParent() && exists(/databases/$(db)/documents/parentStudents/$(request.auth.uid))
+        && get(/databases/$(db)/documents/parentStudents/$(request.auth.uid)).data.studentIds.hasAny([studentId]);
     }
 
-    // Students can be managed by admins, and read by staff.
-    // Parents can only read their own linked children.
+    // ---------- students ----------
     match /students/{id} {
-      allow read: if (isAdmin() || isDriver() || isSupervisor())
-                    && resource.data.schoolId == schoolId();
-      
-      // A parent can read a student doc IF that student's ID is in the parent's link document.
-      allow get: if isParent()
-                   && resource.data.schoolId == schoolId()
-                   && id in get(/databases/$(db)/documents/parentStudents/$(request.auth.uid)).data.studentIds;
+      allow list: if isAdmin() && mySchool() != null;
 
-      allow list: if isAdmin() && schoolId() != null;
-      allow write: if isAdmin() &&
-                     ((resource != null && resource.data.schoolId == schoolId()) ||
-                      (request.resource.data.schoolId == schoolId()));
+      // Admin manage students in their school
+      allow write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
+      );
+
+      // Staff read (admin/driver/supervisor) for same school
+      allow read: if (isAdmin() || isDriver() || isSupervisor())
+        && resource.data.schoolId == mySchool();
+
+      // Parents: allow per-doc reads for their children (covers query results per doc)
+      // This rule requires a get() on another document, which is fine for `read` but not for `list`.
+      allow read: if isParent()
+        && resource.data.schoolId == mySchool()
+        && exists(/databases/$(db)/documents/parentStudents/$(request.auth.uid))
+        && get(/databases/$(db)/documents/parentStudents/$(request.auth.uid)).data.studentIds.hasAny([id]);
     }
   }
 }
