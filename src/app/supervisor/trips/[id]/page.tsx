@@ -27,7 +27,7 @@ interface TripDetails extends DocumentData {
 }
 
 export default function TripDetailsPage({ params }: { params: { id: string }}) {
-    const tripId = params.id;
+    const { id: tripId } = params;
     const { user, profile, loading: profileLoading } = useProfile();
     const [trip, setTrip] = useState<TripDetails | null>(null);
     const [route, setRoute] = useState<DocumentData | null>(null);
