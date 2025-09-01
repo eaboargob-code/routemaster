@@ -6,11 +6,18 @@ import { db, app } from "@/lib/firebase";
 // Call on page mount for Parent / Driver / Supervisor
 export async function registerFcmToken(uid: string) {
   if (!(await isSupported())) return null; // Safari macOS ok, iOS PWA no web push
+  
+  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
+  if (!vapidKey) {
+    console.warn("[FCM] VAPID key is missing in environment variables. Push notifications will not work.");
+    return null;
+  }
+  
   const perm = await Notification.requestPermission();
   if (perm !== "granted") return null;
 
   const messaging = getMessaging(app);
-  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY!;
+  
   const token = await getToken(messaging, { vapidKey });
   if (!token) return null;
 
