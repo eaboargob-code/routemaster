@@ -12,6 +12,10 @@ import {
   addDoc,
   deleteDoc,
   updateDoc,
+  setDoc,
+  getDoc,
+  arrayUnion,
+  arrayRemove,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -70,22 +74,20 @@ interface Student {
 }
 
 interface ParentStudentLink {
-  id: string;
-  parentId: string;
-  studentId: string;
+  studentIds: string[];
 }
 
 
-function LinkStudentDialog({ parent, students, existingLinks, onLink, schoolId }: { parent: Parent, students: Student[], existingLinks: ParentStudentLink[], onLink: () => void, schoolId: string }) {
+function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { parent: Parent, students: Student[], existingStudentIds: string[], onLink: () => void }) {
     const [isOpen, setIsOpen] = useState(false);
     const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const { toast } = useToast();
 
     const availableStudents = useMemo(() => {
-        const linkedStudentIds = new Set(existingLinks.map(l => l.studentId));
+        const linkedStudentIds = new Set(existingStudentIds);
         return students.filter(s => !linkedStudentIds.has(s.id));
-    }, [students, existingLinks]);
+    }, [students, existingStudentIds]);
 
     const handleLink = async () => {
         if (!selectedStudentId) {
@@ -94,11 +96,20 @@ function LinkStudentDialog({ parent, students, existingLinks, onLink, schoolId }
         }
         setIsSubmitting(true);
         try {
-            await addDoc(collection(db, "parentStudents"), {
-                parentId: parent.id,
-                studentId: selectedStudentId,
-                schoolId: schoolId,
-            });
+            const parentLinkRef = doc(db, "parentStudents", parent.id);
+            const linkSnap = await getDoc(parentLinkRef);
+
+            if (!linkSnap.exists()) {
+                await setDoc(parentLinkRef, { 
+                    schoolId: parent.schoolId, 
+                    studentIds: [selectedStudentId] 
+                });
+            } else {
+                await updateDoc(parentLinkRef, { 
+                    studentIds: arrayUnion(selectedStudentId)
+                });
+            }
+
             toast({
                 title: "Student Linked!",
                 description: "The student has been successfully linked to the parent.",
@@ -165,7 +176,7 @@ function LinkStudentDialog({ parent, students, existingLinks, onLink, schoolId }
 function ParentsList({ schoolId }: { schoolId: string }) {
   const [parents, setParents] = useState<Parent[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
-  const [links, setLinks] = useState<ParentStudentLink[]>([]);
+  const [links, setLinks] = useState<Map<string, ParentStudentLink>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const { toast } = useToast();
@@ -180,21 +191,33 @@ function ParentsList({ schoolId }: { schoolId: string }) {
         try {
             const parentsQuery = query(collection(db, "users"), where("schoolId", "==", schoolId), where("role", "==", "parent"));
             const studentsQuery = query(collection(db, "students"), where("schoolId", "==", schoolId));
-            const linksQuery = query(collection(db, "parentStudents"), where("schoolId", "==", schoolId));
-
-            const [parentsSnapshot, studentsSnapshot, linksSnapshot] = await Promise.all([
+            
+            const [parentsSnapshot, studentsSnapshot] = await Promise.all([
                 getDocs(parentsQuery),
                 getDocs(studentsQuery),
-                getDocs(linksQuery),
             ]);
 
             const parentsData = parentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Parent));
             const studentsData = studentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
-            const linksData = linksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ParentStudentLink));
-
+            
             setParents(parentsData);
             setStudents(studentsData);
-            setLinks(linksData);
+
+            // Fetch all parentLink docs based on parent IDs
+            if (parentsData.length > 0) {
+                const parentIds = parentsData.map(p => p.id);
+                const parentLinksMap = new Map<string, ParentStudentLink>();
+                // Firestore `in` query is limited to 30 items, but we should be fine here.
+                // For very large schools, this might need chunking.
+                const linksQuery = query(collection(db, "parentStudents"), where("__name__", "in", parentIds));
+                const linksSnapshot = await getDocs(linksQuery);
+                linksSnapshot.forEach(doc => {
+                    parentLinksMap.set(doc.id, doc.data() as ParentStudentLink);
+                });
+                setLinks(parentLinksMap);
+            } else {
+                setLinks(new Map());
+            }
 
         } catch (error) {
             console.error("Error fetching parent data:", error);
@@ -207,20 +230,13 @@ function ParentsList({ schoolId }: { schoolId: string }) {
   }, [schoolId, refreshKey, toast]);
 
   const studentMap = useMemo(() => new Map(students.map(s => [s.id, s.name])), [students]);
-  const parentLinks = useMemo(() => {
-      const map = new Map<string, ParentStudentLink[]>();
-      links.forEach(link => {
-          const parentLinks = map.get(link.parentId) || [];
-          parentLinks.push(link);
-          map.set(link.parentId, parentLinks);
-      });
-      return map;
-  }, [links]);
 
-
-  const handleUnlink = async (linkId: string) => {
+  const handleUnlink = async (parentId: string, studentId: string) => {
       try {
-          await deleteDoc(doc(db, "parentStudents", linkId));
+          const parentLinkRef = doc(db, "parentStudents", parentId);
+          await updateDoc(parentLinkRef, {
+              studentIds: arrayRemove(studentId)
+          });
           toast({ title: "Student Unlinked", description: "The student is no longer linked to this parent." });
           onDataNeedsRefresh();
       } catch (error) {
@@ -263,17 +279,18 @@ function ParentsList({ schoolId }: { schoolId: string }) {
               </TableRow>
             ) : parents.length > 0 ? (
               parents.map(parent => {
-                const linked = parentLinks.get(parent.id) || [];
+                const parentLinkData = links.get(parent.id);
+                const studentIds = parentLinkData?.studentIds || [];
                 return (
                     <TableRow key={parent.id}>
                         <TableCell className="font-medium">{parent.email}</TableCell>
                         <TableCell>
-                            {linked.length > 0 ? (
+                            {studentIds.length > 0 ? (
                                 <div className="flex flex-wrap gap-2">
-                                    {linked.map(link => (
-                                        <Badge key={link.id} variant="secondary" className="flex items-center gap-1.5">
-                                            {studentMap.get(link.studentId) || "Unknown Student"}
-                                            <button onClick={() => handleUnlink(link.id)} className="rounded-full hover:bg-muted-foreground/20 p-0.5">
+                                    {studentIds.map(studentId => (
+                                        <Badge key={studentId} variant="secondary" className="flex items-center gap-1.5">
+                                            {studentMap.get(studentId) || "Unknown Student"}
+                                            <button onClick={() => handleUnlink(parent.id, studentId)} className="rounded-full hover:bg-muted-foreground/20 p-0.5">
                                                 <X className="h-3 w-3" />
                                             </button>
                                         </Badge>
@@ -288,9 +305,8 @@ function ParentsList({ schoolId }: { schoolId: string }) {
                              <LinkStudentDialog 
                                 parent={parent}
                                 students={students}
-                                existingLinks={linked}
+                                existingStudentIds={studentIds}
                                 onLink={onDataNeedsRefresh}
-                                schoolId={schoolId}
                              />
                         </TableCell>
                     </TableRow>
