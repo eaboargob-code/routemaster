@@ -51,7 +51,8 @@ export const notifyPassengerStatus = onDocumentWritten(
     for (const d of parentsSnap.docs) {
       parentUids.push(d.id);
     }
-    console.log(`Found ${parentUids.length} parent(s): ${parentUids.join(', ')}`);
+    const parentsFound = parentUids.length;
+    console.log(`Found ${parentsFound} parent(s): ${parentUids.join(', ')}`);
     
     if (parentUids.length === 0) return;
 
@@ -60,11 +61,13 @@ export const notifyPassengerStatus = onDocumentWritten(
       const t = (u.get("fcmTokens") as string[] | undefined) ?? [];
       tokens.push(...t);
     });
-    if (tokens.length === 0) {
+
+    const tokensCount = tokens.length;
+    if (tokensCount === 0) {
         console.log("No FCM tokens found for the parent(s).");
         return;
     }
-    console.log(`Found ${tokens.length} tokens to send to.`);
+    console.log(`Found ${tokensCount} tokens to send to.`);
 
     // Enrich with student name
     const studentSnap = await db.doc(`students/${studentId}`).get();

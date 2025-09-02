@@ -44,8 +44,7 @@ export async function unregisterFcmToken(uid: string, token: string) {
   await updateDoc(doc(db, "users", uid), { fcmTokens: arrayRemove(token) });
 }
 
-export function onForegroundNotification(cb: (payload: any) => void) {
-  if (typeof window === 'undefined' || !isSupported()) return () => {};
-  const messaging = getMessaging(app);
-  return onMessage(messaging, cb);
+export function listenForeground(cb: (payload: any) => void) {
+  if (typeof window === 'undefined' || !(isSupported())) return () => {};
+  return onMessage(getMessaging(app), cb);
 }

@@ -9,7 +9,7 @@ import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
 import { LogOut, ShieldAlert, HeartHandshake, Bell, CheckCheck } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
-import { onForegroundNotification } from "@/lib/notifications";
+import { listenForeground } from "@/lib/notifications";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -132,7 +132,8 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     }
     
     // Set up foreground notification listener
-    const unsubscribe = onForegroundNotification((payload: any) => {
+    const unsubscribe = listenForeground((payload: any) => {
+        console.log("onMessage:", payload);
         const { notification } = payload;
         if (notification) {
              setNotifications(prev => [
