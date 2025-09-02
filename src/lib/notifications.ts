@@ -4,39 +4,35 @@ import { getMessaging, getToken, onMessage, isSupported } from "firebase/messagi
 import { arrayUnion, arrayRemove, doc, updateDoc } from "firebase/firestore";
 import { db, app } from "@/lib/firebase";
 
-// Call on page mount for Parent / Driver / Supervisor
 export async function registerFcmToken(uid: string) {
-  if (!(await isSupported())) {
-    console.log("[FCM] Push notifications are not supported in this browser.");
-    return null;
-  }
-  
-  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
-  if (!vapidKey) {
-    console.warn("[FCM] VAPID key is missing in environment variables. Push notifications will not work.");
-    return null;
-  }
-  
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") {
-    console.log("[FCM] Notification permission not granted.");
-    return null;
-  }
-
-  const messaging = getMessaging(app);
-  
   try {
-    const token = await getToken(messaging, { vapidKey });
-    if (!token) {
-        console.log("[FCM] No registration token available. Request permission to generate one.");
-        return null;
+    if (!(await isSupported())) {
+      console.warn("[FCM] Not supported in this browser/context");
+      return null;
     }
 
+    // Make sure we are NOT inside Firebase Studio iframe; SW must be registered on your app origin
+    const swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
+    console.log("[FCM] SW registered:", !!swReg);
+
+    const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
+    console.log("[FCM] VAPID present?", !!vapidKey);
+
+    const perm = await Notification.requestPermission();
+    console.log("[FCM] Permission:", perm);
+    if (perm !== "granted") return null;
+
+    const messaging = getMessaging(app);
+    const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: swReg });
+    console.log("[FCM] getToken ->", token);
+    if (!token) return null;
+
     await updateDoc(doc(db, "users", uid), { fcmTokens: arrayUnion(token) });
+    console.log("[FCM] Saved token to users/%s.fcmTokens[]", uid);
     return token;
-  } catch (error) {
-      console.error("[FCM] Error getting token. Is your VAPID key correct?", error);
-      return null;
+  } catch (err) {
+    console.error("[FCM] registerFcmToken failed:", err);
+    return null;
   }
 }
 
@@ -46,5 +42,6 @@ export async function unregisterFcmToken(uid: string, token: string) {
 
 export function listenForeground(cb: (payload: any) => void) {
   if (typeof window === 'undefined' || !(isSupported())) return () => {};
-  return onMessage(getMessaging(app), cb);
+  const messaging = getMessaging(app);
+  return onMessage(messaging, cb);
 }
