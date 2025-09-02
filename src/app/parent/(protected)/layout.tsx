@@ -4,7 +4,7 @@
 import { useEffect, useState, type ReactNode, useCallback }from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
 import { LogOut, ShieldAlert, HeartHandshake, Bell, CheckCheck } from "lucide-react";
@@ -21,12 +21,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from 'date-fns';
 import { useToast } from "@/hooks/use-toast";
+import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch } from "firebase/firestore";
 
 interface Notification {
     id: string;
     title: string;
     body: string;
-    timestamp: Date;
+    createdAt: Timestamp;
+    read: boolean;
 }
 
 function Header({ notifications, onClearNotifications }: { notifications: Notification[], onClearNotifications: () => void }) {
@@ -35,6 +37,8 @@ function Header({ notifications, onClearNotifications }: { notifications: Notifi
         await signOut(auth);
         router.push("/parent/login");
     };
+    
+    const unreadCount = notifications.filter(n => !n.read).length;
 
     return (
          <header className="sticky top-0 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6 z-50">
@@ -50,9 +54,9 @@ function Header({ notifications, onClearNotifications }: { notifications: Notifi
                     <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon" className="relative">
                             <Bell className="h-5 w-5" />
-                            {notifications.length > 0 && (
+                            {unreadCount > 0 && (
                                 <Badge className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0 text-xs">
-                                    {notifications.length}
+                                    {unreadCount}
                                 </Badge>
                             )}
                         </Button>
@@ -64,16 +68,20 @@ function Header({ notifications, onClearNotifications }: { notifications: Notifi
                             <>
                                 {notifications.map(n => (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
-                                        <div className="font-semibold">{n.title}</div>
-                                        <div className="text-xs text-muted-foreground">{n.body}</div>
-                                        <div className="text-xs text-muted-foreground/80 mt-1">{formatDistanceToNow(n.timestamp, { addSuffix: true })}</div>
+                                        <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
+                                        <div className={`text-xs ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>{n.body}</div>
+                                        <div className="text-xs text-muted-foreground/80 mt-1">{formatDistanceToNow(n.createdAt.toDate(), { addSuffix: true })}</div>
                                     </DropdownMenuItem>
                                 ))}
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={onClearNotifications} className="justify-center text-sm text-primary hover:!bg-primary/10 hover:!text-primary">
-                                    <CheckCheck className="mr-2 h-4 w-4" />
-                                    Clear All
-                                </DropdownMenuItem>
+                                {unreadCount > 0 && (
+                                    <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem onClick={onClearNotifications} className="justify-center text-sm text-primary hover:!bg-primary/10 hover:!text-primary">
+                                            <CheckCheck className="mr-2 h-4 w-4" />
+                                            Mark all as read
+                                        </DropdownMenuItem>
+                                    </>
+                                )}
                             </>
                         ) : (
                             <DropdownMenuItem disabled>No new notifications</DropdownMenuItem>
@@ -138,26 +146,15 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     // Set up foreground notification listener
     const unsubscribe = onForegroundNotification((notification) => {
         console.log("onMessage:", notification);
-        const newNotification: Notification = {
-            id: new Date().toISOString(),
-            title: notification.title || "New Notification",
-            body: notification.body || "",
-            timestamp: new Date(),
-        };
-
-        // Update UI state for the bell
-        setNotifications(prev => [newNotification, ...prev].slice(0, 50));
-        
-        // Show a toast
         toast({
-            title: newNotification.title,
-            description: newNotification.body,
+            title: notification.title,
+            description: notification.body,
         });
 
         // Persist to Firestore for the bell feed
         logBell(user.uid, {
-            title: newNotification.title,
-            body: newNotification.body,
+            title: notification.title || "New Notification",
+            body: notification.body || "",
             data: notification.data,
         });
     });
@@ -168,10 +165,36 @@ export function ParentGuard({ children }: { children: ReactNode }) {
       }
     }
   }, [user, loading, router, toast]);
+  
+  useEffect(() => {
+    if (!user?.uid) return;
+    const q = query(
+      collection(db, `users/${user.uid}/notifications`),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Notification));
+      setNotifications(docs);
+    });
+    return () => unsub();
+  }, [user?.uid]);
 
-  const handleClearNotifications = useCallback(() => {
-    setNotifications([]);
-  }, []);
+  const handleClearNotifications = useCallback(async () => {
+    if (!user?.uid) return;
+
+    const unreadNotifications = notifications.filter(n => !n.read);
+    if (unreadNotifications.length === 0) return;
+
+    const batch = writeBatch(db);
+    unreadNotifications.forEach(n => {
+        const notifRef = doc(db, `users/${user.uid}/notifications`, n.id);
+        batch.update(notifRef, { read: true });
+    });
+    
+    await batch.commit();
+
+  }, [user?.uid, notifications]);
 
   if (loading) {
     return <LoadingScreen />;
