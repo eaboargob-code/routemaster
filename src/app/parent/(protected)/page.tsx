@@ -1,15 +1,16 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
 import { useProfile } from "@/lib/useProfile";
 import { db } from "@/lib/firebase";
 import {
-  collection,
+  collectionGroup,
   query,
   where,
   getDocs,
   doc,
-  getDoc,            // ← important: was missing
+  getDoc,
   documentId,
   onSnapshot,
   DocumentData,
@@ -83,56 +84,52 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
     let cancelled = false;
 
     (async () => {
+      if (cancelled) return;
       setIsLoading(true);
 
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
-      // Find today's trip containing this student
-      const qTrips = query(
-        collection(db, "trips"),
-        where("schoolId", "==", initialStudent.schoolId),
-        where("passengers", "array-contains", initialStudent.id),
-        where("startedAt", ">=", Timestamp.fromDate(startOfDay))
+      // Securely find today's trip for this student by querying the 'passengers' collection group.
+      const passengersQuery = query(
+        collectionGroup(db, 'passengers'),
+        where('studentId', '==', initialStudent.id),
+        where('schoolId', '==', initialStudent.schoolId),
+        where('updatedAt', '>=', Timestamp.fromDate(startOfDay))
       );
 
-      const tripsSnapshot = await getDocs(qTrips);
+      const passengerDocs = await getDocs(passengersQuery);
       if (cancelled) return;
 
-      const t =
-        tripsSnapshot.docs.length > 0
-          ? { id: tripsSnapshot.docs[0].id, ...tripsSnapshot.docs[0].data() }
-          : null;
+      const latestPassengerDoc = passengerDocs.docs.sort((a,b) => b.data().updatedAt.toMillis() - a.data().updatedAt.toMillis())[0];
 
-      setIsLoading(false);
+      if (latestPassengerDoc) {
+        // Passenger doc path is `trips/{tripId}/passengers/{studentId}`
+        const tripId = latestPassengerDoc.ref.parent.parent?.id;
 
-      if (t) {
-        const passengerRef = doc(
-          db,
-          `trips/${t.id}/passengers`,
-          initialStudent.id
-        );
-        const tripRef = doc(db, "trips", t.id);
+        if (tripId) {
+            const tripRef = doc(db, 'trips', tripId);
+            const passengerRef = doc(db, `trips/${tripId}/passengers`, initialStudent.id);
 
-        stopPassenger = onSnapshot(passengerRef, (snap) => {
-          setStatus((prev) => ({
-            ...prev,
-            tripStatus: snap.exists()
-              ? (snap.data() as TripPassenger)
-              : null,
-          }));
-        });
+            stopPassenger = onSnapshot(passengerRef, (snap) => {
+                setStatus((prev) => ({
+                    ...prev,
+                    tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null,
+                }));
+            });
 
-        stopTrip = onSnapshot(tripRef, (snap) => {
-          const data = snap.data();
-          if (data?.lastLocation?.at) {
-            setStatus((prev) => ({
-              ...prev,
-              lastLocationUpdate: data.lastLocation.at,
-            }));
-          }
-        });
+            stopTrip = onSnapshot(tripRef, (snap) => {
+                const data = snap.data();
+                if (data?.lastLocation?.at) {
+                    setStatus((prev) => ({
+                    ...prev,
+                    lastLocationUpdate: data.lastLocation.at,
+                    }));
+                }
+            });
+        }
       }
+      setIsLoading(false);
     })();
 
     return () => {
@@ -271,7 +268,7 @@ export default function ParentDashboardPage() {
     })();
   }, [user?.uid]);
 
-  // Load children via Option-A
+  // Load children
   useEffect(() => {
     const fetchChildrenData = async () => {
       if (!user || !profile) return;
