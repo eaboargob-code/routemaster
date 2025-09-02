@@ -41,7 +41,9 @@ export async function unregisterFcmToken(uid: string, token: string) {
 }
 
 export function listenForeground(cb: (payload: any) => void) {
-  if (typeof window === 'undefined' || !(isSupported())) return () => {};
-  const messaging = getMessaging(app);
-  return onMessage(messaging, cb);
+  const m = getMessaging(app);
+  return onMessage(m, (p) => {
+    console.log("[FCM] onMessage foreground:", p);
+    cb(p);
+  });
 }

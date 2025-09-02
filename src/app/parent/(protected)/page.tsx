@@ -16,7 +16,7 @@ import {
   DocumentData,
   Timestamp,
 } from "firebase/firestore";
-import { registerFcmToken } from "@/lib/notifications";
+import { registerFcmToken, listenForeground } from "@/lib/notifications";
 
 import {
   Card,
@@ -269,6 +269,7 @@ export default function ParentDashboardPage() {
   const [children, setChildren] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [bell, setBell] = useState<Array<{title:string; body:string; ts:number}>>([]);
 
   // Register parent FCM token on mount/login
   useEffect(() => {
@@ -278,6 +279,15 @@ export default function ParentDashboardPage() {
       console.log("FCM token (parent):", t);
     })();
   }, [user?.uid]);
+
+  useEffect(() => {
+    const off = listenForeground((p) => {
+      const title = p.notification?.title ?? "RouteMaster";
+      const body  = p.notification?.body  ?? JSON.stringify(p.data || {});
+      setBell((b) => [{ title, body, ts: Date.now() }, ...b].slice(0,50));
+    });
+    return off;
+  }, []);
 
   // Load children
   useEffect(() => {
