@@ -279,13 +279,6 @@ export default function ParentDashboardPage() {
     })();
   }, [user?.uid]);
 
-  useEffect(() => {
-    const off = listenForeground((p) => {
-      console.log("[FCM] foreground:", p);
-    });
-    return off;
-  }, []);
-
   // Load children
   useEffect(() => {
     const fetchChildrenData = async () => {

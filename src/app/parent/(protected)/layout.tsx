@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from 'date-fns';
+import { useToast } from "@/hooks/use-toast";
 
 interface Notification {
     id: string;
@@ -125,6 +126,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, profile, loading, error } = useProfile();
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -136,15 +138,17 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         console.log("onMessage:", payload);
         const { notification } = payload;
         if (notification) {
-             setNotifications(prev => [
-                {
-                    id: payload.messageId || new Date().toISOString(),
-                    title: notification.title || "New Notification",
-                    body: notification.body || "",
-                    timestamp: new Date(),
-                },
-                ...prev
-            ]);
+             const newNotification = {
+                id: payload.messageId || new Date().toISOString(),
+                title: notification.title || "New Notification",
+                body: notification.body || "",
+                timestamp: new Date(),
+            };
+            setNotifications(prev => [newNotification, ...prev].slice(0, 50));
+            toast({
+                title: newNotification.title,
+                description: newNotification.body,
+            });
         }
     });
 
@@ -153,7 +157,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         unsubscribe();
       }
     }
-  }, [user, loading, router]);
+  }, [user, loading, router, toast]);
 
   const handleClearNotifications = useCallback(() => {
     setNotifications([]);
