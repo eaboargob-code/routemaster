@@ -1,49 +1,60 @@
 
 // Client-side (Next.js, Firebase Web v9+)
 import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging";
-import { arrayUnion, arrayRemove, doc, updateDoc } from "firebase/firestore";
+import { arrayUnion, arrayRemove, doc, updateDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { db, app } from "@/lib/firebase";
 
+const VAPID = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
+
 export async function registerFcmToken(uid: string) {
+  if (!VAPID) {
+    console.warn("[FCM] Missing VAPID key env");
+    return null;
+  }
+  if (!(await isSupported())) {
+    console.warn("[FCM] Not supported in this browser/context");
+    return null;
+  }
+
   try {
-    if (!(await isSupported())) {
-      console.warn("[FCM] Not supported in this browser/context");
-      return null;
-    }
-
-    // Make sure we are NOT inside Firebase Studio iframe; SW must be registered on your app origin
-    const swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
-    console.log("[FCM] SW registered:", !!swReg);
-
-    const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
-    console.log("[FCM] VAPID present?", !!vapidKey);
-
-    const perm = await Notification.requestPermission();
-    console.log("[FCM] Permission:", perm);
-    if (perm !== "granted") return null;
-
     const messaging = getMessaging(app);
-    const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: swReg });
-    console.log("[FCM] getToken ->", token);
+    const token = await getToken(messaging, { vapidKey: VAPID });
     if (!token) return null;
 
     await updateDoc(doc(db, "users", uid), { fcmTokens: arrayUnion(token) });
-    console.log("[FCM] Saved token to users/%s.fcmTokens[]", uid);
+    console.log("[FCM] token saved:", token.slice(0, 12) + "…");
     return token;
-  } catch (err) {
-    console.error("[FCM] registerFcmToken failed:", err);
+  } catch (e) {
+    console.error("[FCM] registerFcmToken failed:", e);
     return null;
   }
 }
+
 
 export async function unregisterFcmToken(uid: string, token: string) {
   await updateDoc(doc(db, "users", uid), { fcmTokens: arrayRemove(token) });
 }
 
-export function listenForeground(cb: (payload: any) => void) {
-  const m = getMessaging(app);
-  return onMessage(m, (p) => {
-    console.log("[FCM] foreground message:", p);
-    cb(p);
+
+// Foreground message handler
+export function onForegroundNotification(
+  handler: (payload: { title?: string; body?: string; data?: any }) => void
+) {
+  isSupported().then((ok) => {
+    if (!ok) return;
+    const messaging = getMessaging(app);
+    onMessage(messaging, (payload) => {
+      const n = payload.notification || {};
+      handler({ title: n.title, body: n.body, data: payload.data });
+    });
+  });
+}
+
+// Optional: write to a bell feed (works even without push)
+export async function logBell(uid: string, n: { title: string; body: string; data?: any }) {
+  await addDoc(collection(db, "users", uid, "notifications"), {
+    ...n,
+    createdAt: serverTimestamp(),
+    read: false,
   });
 }
