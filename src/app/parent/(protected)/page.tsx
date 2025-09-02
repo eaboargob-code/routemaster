@@ -19,6 +19,8 @@ interface Student {
     name: string;
     assignedRouteId?: string;
     assignedBusId?: string;
+    routeName?: string;
+    busCode?: string;
     schoolId: string;
 }
 
@@ -30,8 +32,6 @@ interface TripPassenger extends DocumentData {
 
 interface ChildStatus extends Student {
     tripStatus?: TripPassenger | null;
-    routeName?: string;
-    busCode?: string;
     lastLocationUpdate?: Timestamp | null;
 }
 
@@ -43,34 +43,26 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
     useEffect(() => {
         const fetchDetailsAndListen = async () => {
             setIsLoading(true);
-
-            // Fetch bus and route names
-            let busCode: string | undefined;
-            let routeName: string | undefined;
-            if (initialStudent.assignedBusId) {
-                const busSnap = await getDoc(doc(db, 'buses', initialStudent.assignedBusId));
-                busCode = busSnap.data()?.busCode;
-            }
-            if (initialStudent.assignedRouteId) {
-                const routeSnap = await getDoc(doc(db, 'routes', initialStudent.assignedRouteId));
-                routeName = routeSnap.data()?.name;
-            }
             
             // Find today's active trip for this student
             const startOfDay = new Date();
             startOfDay.setHours(0, 0, 0, 0);
 
-            const studentTripQueryConstraints = [
+            // Build a flexible query.
+            const studentTripQueryConstraints: any[] = [
                 where('schoolId', '==', initialStudent.schoolId),
                 where('status', '==', 'active'),
                 where('startedAt', '>=', Timestamp.fromDate(startOfDay))
             ];
-            
-            // To query on route or bus, we create a flexible query
+
             if (initialStudent.assignedRouteId) {
-                 studentTripQueryConstraints.push(where('routeId', '==', initialStudent.assignedRouteId));
+                studentTripQueryConstraints.push(where('routeId', '==', initialStudent.assignedRouteId));
             } else if (initialStudent.assignedBusId) {
                  studentTripQueryConstraints.push(where('busId', '==', initialStudent.assignedBusId));
+            } else {
+                // No assignment, no trip data.
+                 setIsLoading(false);
+                 return;
             }
             
             const tripsQuery = query(collection(db, 'trips'), ...studentTripQueryConstraints);
@@ -78,8 +70,6 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
             const tripsSnapshot = await getDocs(tripsQuery);
             const relevantTrip = tripsSnapshot.docs.length > 0 ? { id: tripsSnapshot.docs[0].id, ...tripsSnapshot.docs[0].data() } : null;
 
-            // Set initial state
-            setStatus(prev => ({...prev, busCode, routeName }));
             setIsLoading(false);
 
             if (relevantTrip) {
@@ -257,3 +247,5 @@ export default function ParentDashboardPage() {
         </div>
     )
 }
+
+    

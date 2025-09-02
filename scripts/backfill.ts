@@ -92,20 +92,24 @@ async function main() {
     const usersCounters = await backfillUsers(db, bulkWriter, isDryRun);
     const routesCounters = await backfillRoutes(db, bulkWriter, isDryRun);
     const passengersCounters = await backfillPassengers(db, bulkWriter, isDryRun);
+    const studentsCounters = await backfillStudents(db, bulkWriter, isDryRun);
 
-    const totalUpdated = usersCounters.updated + routesCounters.updated + passengersCounters.updated;
+    const totalUpdated = usersCounters.updated + routesCounters.updated + passengersCounters.updated + studentsCounters.updated;
 
     if (!isDryRun && totalUpdated > 0) {
         await bulkWriter.close();
         console.log('\nAll batched writes have been committed.');
-    } else if (!isDryRun) {
+    } else if (totalUpdated === 0) {
         console.log('\nNo documents needed updates.');
+    } else {
+        console.log(`\nDry run complete. ${totalUpdated} documents would be updated.`);
     }
 
     console.log('\n--- Summary ---');
     console.log(`Users:      ${usersCounters.scanned} scanned, ${usersCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
     console.log(`Routes:     ${routesCounters.scanned} scanned, ${routesCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
     console.log(`Passengers: ${passengersCounters.scanned} scanned, ${passengersCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
+    console.log(`Students:   ${studentsCounters.scanned} scanned, ${studentsCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
     console.log('----------------\n');
   } catch (error) {
     console.error('An unexpected error occurred during the backfill process:', error);
@@ -228,6 +232,74 @@ async function backfillPassengers(
   return counters;
 }
 
+/**
+ * Backfills the 'students' collection to denormalize routeName and busCode.
+ */
+async function backfillStudents(
+  db: admin.firestore.Firestore,
+  writer: admin.firestore.BulkWriter,
+  isDryRun: boolean
+): Promise<Counters> {
+  console.log('\nStarting backfill for "students" collection...');
+  const counters: Counters = { scanned: 0, updated: 0 };
+  const schoolId = SCHOOL_ID_TO_BACKFILL;
+
+  // 1. Cache all routes and buses for the school
+  const routesCache = new Map<string, string>();
+  const busesCache = new Map<string, string>();
+
+  const routesSnap = await db.collection('routes').where('schoolId', '==', schoolId).get();
+  routesSnap.forEach(doc => routesCache.set(doc.id, doc.data().name));
+  console.log(`Cached ${routesCache.size} routes.`);
+
+  const busesSnap = await db.collection('buses').where('schoolId', '==', schoolId).get();
+  busesSnap.forEach(doc => busesCache.set(doc.id, doc.data().busCode));
+  console.log(`Cached ${busesCache.size} buses.`);
+
+  // 2. Iterate through students
+  const studentsSnap = await db.collection('students').where('schoolId', '==', schoolId).get();
+  console.log(`Scanning ${studentsSnap.size} students...`);
+
+  for (const studentDoc of studentsSnap.docs) {
+    counters.scanned++;
+    const studentData = studentDoc.data();
+    const updates: { [key: string]: any } = {};
+
+    // Check and update routeName
+    if (studentData.assignedRouteId && routesCache.has(studentData.assignedRouteId)) {
+      const expectedRouteName = routesCache.get(studentData.assignedRouteId);
+      if (studentData.routeName !== expectedRouteName) {
+        updates.routeName = expectedRouteName;
+      }
+    } else if (studentData.routeName) {
+      // If route is unassigned but field exists, remove it.
+      updates.routeName = admin.firestore.FieldValue.delete();
+    }
+    
+    // Check and update busCode
+    if (studentData.assignedBusId && busesCache.has(studentData.assignedBusId)) {
+      const expectedBusCode = busesCache.get(studentData.assignedBusId);
+      if (studentData.busCode !== expectedBusCode) {
+        updates.busCode = expectedBusCode;
+      }
+    } else if (studentData.busCode) {
+      // If bus is unassigned but field exists, remove it.
+      updates.busCode = admin.firestore.FieldValue.delete();
+    }
+
+    if (Object.keys(updates).length > 0) {
+      counters.updated++;
+      console.log(` -> [students/${studentDoc.id}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
+      if (!isDryRun) {
+        writer.update(studentDoc.ref, updates);
+      }
+    }
+  }
+
+  console.log(`"students" collection scan complete.`);
+  return counters;
+}
+
 
 // --- Script Entry Point ---
 
@@ -235,3 +307,5 @@ main().catch((err) => {
   console.error('Fatal error running backfill script:', err);
   process.exit(1);
 });
+
+    

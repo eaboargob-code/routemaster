@@ -122,15 +122,27 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
         setIsSubmitting(true);
         try {
             const studentData: any = {
-                ...data,
+                name: data.name,
                 schoolId,
             };
-            
-            if (data.assignedRouteId === NONE_SENTINEL || !data.assignedRouteId) {
+
+            const selectedRoute = routes.find(r => r.id === data.assignedRouteId);
+            const selectedBus = buses.find(b => b.id === data.assignedBusId);
+
+            if (selectedRoute) {
+                studentData.assignedRouteId = selectedRoute.id;
+                studentData.routeName = selectedRoute.name;
+            } else {
                 studentData.assignedRouteId = deleteField();
+                studentData.routeName = deleteField();
             }
-            if (data.assignedBusId === NONE_SENTINEL || !data.assignedBusId) {
+
+            if (selectedBus) {
+                studentData.assignedBusId = selectedBus.id;
+                studentData.busCode = selectedBus.busCode;
+            } else {
                 studentData.assignedBusId = deleteField();
+                studentData.busCode = deleteField();
             }
 
             if (isEditMode) {
@@ -516,3 +528,5 @@ export default function StudentsPage() {
         </div>
     );
 }
+
+    
