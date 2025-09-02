@@ -269,7 +269,6 @@ export default function ParentDashboardPage() {
   const [children, setChildren] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [bell, setBell] = useState<Array<{title:string; body:string; ts:number}>>([]);
 
   // Register parent FCM token on mount/login
   useEffect(() => {

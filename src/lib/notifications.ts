@@ -43,7 +43,7 @@ export async function unregisterFcmToken(uid: string, token: string) {
 export function listenForeground(cb: (payload: any) => void) {
   const m = getMessaging(app);
   return onMessage(m, (p) => {
-    console.log("[FCM] foreground:", p);
+    console.log("[FCM] foreground message:", p);
     cb(p);
   });
 }
