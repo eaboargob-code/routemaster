@@ -1,10 +1,10 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
 import { useProfile } from "@/lib/useProfile";
 import { db } from "@/lib/firebase";
 import {
+  collection,
   collectionGroup,
   query,
   where,
