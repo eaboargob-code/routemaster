@@ -102,7 +102,11 @@ export default function ParentDashboardPage() {
 
     useEffect(() => {
         if (user?.uid) {
-            registerFcmToken(user.uid);
+            const registerAndLog = async () => {
+                const t = await registerFcmToken(user.uid);
+                console.log("FCM token (parent):", t);
+            };
+            registerAndLog();
         }
     }, [user?.uid]);
     
