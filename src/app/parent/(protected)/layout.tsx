@@ -132,7 +132,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     }
     
     // Set up foreground notification listener
-    const unsubscribe = onForegroundNotification((payload) => {
+    const unsubscribe = onForegroundNotification((payload: any) => {
         const { notification } = payload;
         if (notification) {
              setNotifications(prev => [
@@ -147,7 +147,11 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         }
     });
 
-    return () => unsubscribe();
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    }
   }, [user, loading, router]);
 
   const handleClearNotifications = useCallback(() => {

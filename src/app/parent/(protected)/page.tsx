@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useProfile } from '@/lib/useProfile';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, getDoc, onSnapshot, DocumentData, Timestamp, documentId } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, documentId, onSnapshot, DocumentData, Timestamp } from 'firebase/firestore';
 import { registerFcmToken } from '@/lib/notifications';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,30 +44,17 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
         const fetchDetailsAndListen = async () => {
             setIsLoading(true);
             
-            // Find today's active trip for this student
             const startOfDay = new Date();
             startOfDay.setHours(0, 0, 0, 0);
 
-            // Build a flexible query.
-            const studentTripQueryConstraints: any[] = [
-                where('schoolId', '==', initialStudent.schoolId),
-                where('status', '==', 'active'),
-                where('startedAt', '>=', Timestamp.fromDate(startOfDay))
-            ];
-
-            if (initialStudent.assignedRouteId) {
-                studentTripQueryConstraints.push(where('routeId', '==', initialStudent.assignedRouteId));
-            } else if (initialStudent.assignedBusId) {
-                 studentTripQueryConstraints.push(where('busId', '==', initialStudent.assignedBusId));
-            } else {
-                // No assignment, no trip data.
-                 setIsLoading(false);
-                 return;
-            }
+            const q = query(
+                collection(db, "trips"),
+                where("schoolId", "==", initialStudent.schoolId),
+                where("passengers", "array-contains", initialStudent.id),
+                where("startedAt", ">=", Timestamp.fromDate(startOfDay))
+              );
             
-            const tripsQuery = query(collection(db, 'trips'), ...studentTripQueryConstraints);
-            
-            const tripsSnapshot = await getDocs(tripsQuery);
+            const tripsSnapshot = await getDocs(q);
             const relevantTrip = tripsSnapshot.docs.length > 0 ? { id: tripsSnapshot.docs[0].id, ...tripsSnapshot.docs[0].data() } : null;
 
             setIsLoading(false);
@@ -185,14 +172,14 @@ export default function ParentDashboardPage() {
             try {
                 // 1. Find linked students via direct GET
                 const parentLinkRef = doc(db, "parentStudents", user.uid);
-                const linkDoc = await getDoc(parentLinkRef);
+                const linkDocSnap = await getDoc(parentLinkRef);
 
-                if (!linkDoc.exists() || !linkDoc.data()?.studentIds || linkDoc.data().studentIds.length === 0) {
+                if (!linkDocSnap.exists() || !linkDocSnap.data()?.studentIds || linkDocSnap.data().studentIds.length === 0) {
                     setChildren([]);
                     setIsLoading(false);
                     return;
                 }
-                const studentIds = linkDoc.data().studentIds;
+                const studentIds = linkDocSnap.data().studentIds;
 
                 // 2. Fetch only the specific student documents.
                 const studentsQuery = query(
@@ -247,5 +234,3 @@ export default function ParentDashboardPage() {
         </div>
     )
 }
-
-    

@@ -6,7 +6,10 @@ import { db, app } from "@/lib/firebase";
 
 // Call on page mount for Parent / Driver / Supervisor
 export async function registerFcmToken(uid: string) {
-  if (!(await isSupported())) return null; // Safari macOS ok, iOS PWA no web push
+  if (!(await isSupported())) {
+    console.log("[FCM] Push notifications are not supported in this browser.");
+    return null;
+  }
   
   const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
   if (!vapidKey) {
@@ -15,13 +18,19 @@ export async function registerFcmToken(uid: string) {
   }
   
   const perm = await Notification.requestPermission();
-  if (perm !== "granted") return null;
+  if (perm !== "granted") {
+    console.log("[FCM] Notification permission not granted.");
+    return null;
+  }
 
   const messaging = getMessaging(app);
   
   try {
     const token = await getToken(messaging, { vapidKey });
-    if (!token) return null;
+    if (!token) {
+        console.log("[FCM] No registration token available. Request permission to generate one.");
+        return null;
+    }
 
     await updateDoc(doc(db, "users", uid), { fcmTokens: arrayUnion(token) });
     return token;
@@ -36,6 +45,7 @@ export async function unregisterFcmToken(uid: string, token: string) {
 }
 
 export function onForegroundNotification(cb: (payload: any) => void) {
+  if (typeof window === 'undefined' || !isSupported()) return () => {};
   const messaging = getMessaging(app);
   return onMessage(messaging, cb);
 }
