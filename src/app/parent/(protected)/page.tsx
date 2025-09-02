@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -5,7 +6,6 @@ import { useProfile } from "@/lib/useProfile";
 import { db } from "@/lib/firebase";
 import {
   collection,
-  collectionGroup,
   query,
   where,
   getDocs,
@@ -83,54 +83,65 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
     let stopTrip: (() => void) | undefined;
     let cancelled = false;
 
-    (async () => {
+    const findTripAndSubscribe = async () => {
       if (cancelled) return;
       setIsLoading(true);
 
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
-      // Securely find today's trip for this student by querying the 'passengers' collection group.
-      const passengersQuery = query(
-        collectionGroup(db, 'passengers'),
-        where('studentId', '==', initialStudent.id),
+      // Query all of today's trips for the school
+      const tripsQuery = query(
+        collection(db, 'trips'),
         where('schoolId', '==', initialStudent.schoolId),
-        where('updatedAt', '>=', Timestamp.fromDate(startOfDay))
+        where('startedAt', '>=', Timestamp.fromDate(startOfDay))
       );
 
-      const passengerDocs = await getDocs(passengersQuery);
+      const tripsSnapshot = await getDocs(tripsQuery);
       if (cancelled) return;
+      
+      let foundTripId: string | null = null;
 
-      const latestPassengerDoc = passengerDocs.docs.sort((a,b) => b.data().updatedAt.toMillis() - a.data().updatedAt.toMillis())[0];
+      // Iterate through trips to find the one with the student
+      for (const tripDoc of tripsSnapshot.docs) {
+        const passengerRef = doc(db, `trips/${tripDoc.id}/passengers`, initialStudent.id);
+        const passengerSnap = await getDoc(passengerRef);
+        if (cancelled) return;
 
-      if (latestPassengerDoc) {
-        // Passenger doc path is `trips/{tripId}/passengers/{studentId}`
-        const tripId = latestPassengerDoc.ref.parent.parent?.id;
-
-        if (tripId) {
-            const tripRef = doc(db, 'trips', tripId);
-            const passengerRef = doc(db, `trips/${tripId}/passengers`, initialStudent.id);
-
-            stopPassenger = onSnapshot(passengerRef, (snap) => {
-                setStatus((prev) => ({
-                    ...prev,
-                    tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null,
-                }));
-            });
-
-            stopTrip = onSnapshot(tripRef, (snap) => {
-                const data = snap.data();
-                if (data?.lastLocation?.at) {
-                    setStatus((prev) => ({
-                    ...prev,
-                    lastLocationUpdate: data.lastLocation.at,
-                    }));
-                }
-            });
+        if (passengerSnap.exists()) {
+          foundTripId = tripDoc.id;
+          break; // Found the trip, stop searching
         }
       }
+
+      if (foundTripId) {
+        const tripRef = doc(db, 'trips', foundTripId);
+        const passengerRef = doc(db, `trips/${foundTripId}/passengers`, initialStudent.id);
+
+        stopPassenger = onSnapshot(passengerRef, (snap) => {
+          setStatus((prev) => ({
+            ...prev,
+            tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null,
+          }));
+        });
+
+        stopTrip = onSnapshot(tripRef, (snap) => {
+          const data = snap.data();
+          if (data?.lastLocation?.at) {
+            setStatus((prev) => ({
+              ...prev,
+              lastLocationUpdate: data.lastLocation.at,
+            }));
+          }
+        });
+      } else {
+        // No trip found for this student today
+        setStatus((prev) => ({ ...prev, tripStatus: null }));
+      }
       setIsLoading(false);
-    })();
+    };
+
+    findTripAndSubscribe();
 
     return () => {
       cancelled = true;
