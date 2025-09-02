@@ -37,6 +37,10 @@ export const onPassengerStatusChange = onDocumentWritten(
     }
     const trip = tripSnap.data() as any;
     const schoolId = trip.schoolId;
+    if (!schoolId) {
+        logger.warn("Trip is missing schoolId; skipping.", { tripId });
+        return;
+    }
 
     // Find parent links that contain this student
     const linksSnap = await admin.firestore()
@@ -58,10 +62,11 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     const tokens: string[] = [];
     parentDocs.forEach((snap) => {
-      const d = snap.data() as any;
-      if (d?.fcmTokens?.length) {
-        d.fcmTokens.forEach((t: string) => typeof t === "string" && tokens.push(t));
-      }
+        if (!snap.exists) return;
+        const d = snap.data() as any;
+        if (d?.fcmTokens?.length) {
+            d.fcmTokens.forEach((t: string) => typeof t === "string" && tokens.push(t));
+        }
     });
 
     if (tokens.length === 0) {
@@ -89,16 +94,23 @@ export const onPassengerStatusChange = onDocumentWritten(
       tripId, studentId, newStatus, tokensCount: tokens.length,
     });
 
-    const res = await admin.messaging().sendEachForMulticast({
+    const message: admin.messaging.MulticastMessage = {
       notification: { title, body },
       data: {
         tripId,
         studentId,
         status: String(newStatus),
-        schoolId: String(schoolId ?? ""),
+        schoolId: String(schoolId),
+        kind: "passengerStatus"
       },
       tokens,
-    });
+      android: { priority: "high" },
+      webpush: {
+        fcmOptions: { link: "/parent" },
+      },
+    };
+
+    const res = await admin.messaging().sendEachForMulticast(message);
 
     logger.info("Push result", {
       successCount: res.successCount,
@@ -110,20 +122,17 @@ export const onPassengerStatusChange = onDocumentWritten(
       .map((r, i) => (r.success ? null : tokens[i]))
       .filter((t): t is string => !!t);
 
-    if (invalidTokens.length) {
+    if (invalidTokens.length > 0) {
       logger.warn("Removing invalid tokens", { invalidTokensCount: invalidTokens.length });
       // remove from all parent docs (simple fan-out)
-      await Promise.all(
-        parentIds.map((id) =>
-          admin
-            .firestore()
-            .doc(`users/${id}`)
-            .update({
+      const batch = admin.firestore().batch();
+      parentDocs.forEach((snap) => {
+          if (!snap.exists) return;
+          batch.update(snap.ref, {
               fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens),
-            })
-            .catch((e) => logger.error("Failed to remove invalid token", { id, e }))
-        )
-      );
+          });
+      });
+      await batch.commit().catch(e => logger.error("Failed to remove invalid tokens", { e }));
     }
   }
 );
