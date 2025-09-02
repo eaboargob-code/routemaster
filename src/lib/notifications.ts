@@ -37,15 +37,16 @@ export async function unregisterFcmToken(uid: string, token: string) {
 
 
 // Foreground message handler
-export function listenForeground(
-  handler: (payload: any) => void
+export function onForegroundNotification(
+  handler: (payload: { title?: string; body?: string; data?: any }) => void
 ) {
   isSupported().then((ok) => {
     if (!ok) return;
     const messaging = getMessaging(app);
-    onMessage(messaging, (payload) => {
+    return onMessage(messaging, (payload) => {
       console.log("[FCM] onMessage foreground:", payload);
-      handler(payload);
+      const n = payload.notification || {};
+      handler({ title: n.title, body: n.body, data: payload.data });
     });
   });
 }

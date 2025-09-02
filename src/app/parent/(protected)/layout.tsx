@@ -9,7 +9,7 @@ import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
 import { LogOut, ShieldAlert, HeartHandshake, Bell, CheckCheck } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
-import { listenForeground } from "@/lib/notifications";
+import { onForegroundNotification, logBell } from "@/lib/notifications";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -133,23 +133,33 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         router.replace("/parent/login");
     }
     
+    if (!user?.uid) return;
+
     // Set up foreground notification listener
-    const unsubscribe = listenForeground((payload: any) => {
-        console.log("onMessage:", payload);
-        const { notification } = payload;
-        if (notification) {
-             const newNotification = {
-                id: payload.messageId || new Date().toISOString(),
-                title: notification.title || "New Notification",
-                body: notification.body || "",
-                timestamp: new Date(),
-            };
-            setNotifications(prev => [newNotification, ...prev].slice(0, 50));
-            toast({
-                title: newNotification.title,
-                description: newNotification.body,
-            });
-        }
+    const unsubscribe = onForegroundNotification((notification) => {
+        console.log("onMessage:", notification);
+        const newNotification: Notification = {
+            id: new Date().toISOString(),
+            title: notification.title || "New Notification",
+            body: notification.body || "",
+            timestamp: new Date(),
+        };
+
+        // Update UI state for the bell
+        setNotifications(prev => [newNotification, ...prev].slice(0, 50));
+        
+        // Show a toast
+        toast({
+            title: newNotification.title,
+            description: newNotification.body,
+        });
+
+        // Persist to Firestore for the bell feed
+        logBell(user.uid, {
+            title: newNotification.title,
+            body: newNotification.body,
+            data: notification.data,
+        });
     });
 
     return () => {
