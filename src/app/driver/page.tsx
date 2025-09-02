@@ -52,6 +52,7 @@ interface Trip extends DocumentData {
     allowDriverAsSupervisor?: boolean;
     driverSupervisionLocked?: boolean;
     schoolId: string;
+    passengers: string[]; // <-- Added for parent query
     counts?: {
         pending: number;
         boarded: number;
@@ -73,7 +74,7 @@ type UiState = {
 
 async function seedPassengersForTrip(
     fs: Firestore, 
-    trip: Trip,
+    trip: Omit<Trip, 'id'> & { id: string },
 ) {
   const studentsCol = collection(fs, "students");
   const queries = [];
@@ -100,12 +101,12 @@ async function seedPassengersForTrip(
 
   const querySnapshots = await Promise.all(queries.map(q => getDocs(q)));
   
-  const seen = new Set<string>();
+  const seenStudentIds = new Set<string>();
   const batch = writeBatch(fs);
 
   const addStudentToBatch = (s: QueryDocumentSnapshot<DocumentData>) => {
-    if (seen.has(s.id)) return;
-    seen.add(s.id);
+    if (seenStudentIds.has(s.id)) return;
+    seenStudentIds.add(s.id);
     const pRef = doc(fs, `trips/${trip.id}/passengers/${s.id}`);
     const data = s.data();
     batch.set(pRef, {
@@ -126,14 +127,15 @@ async function seedPassengersForTrip(
 
   await batch.commit();
 
-  // After seeding, update the trip's pending count
-  if (seen.size > 0) {
+  // After seeding, update the trip's metadata
+  if (seenStudentIds.size > 0) {
       await updateDoc(doc(fs, 'trips', trip.id), {
-          'counts.pending': seen.size,
+          'counts.pending': seenStudentIds.size,
+          'passengers': Array.from(seenStudentIds), // Add the array of student IDs
       });
   }
 
-  return seen.size;
+  return seenStudentIds.size;
 }
 
 
@@ -297,6 +299,7 @@ export default function DriverPage() {
                 supervisorId: bus.supervisorId || null,
                 allowDriverAsSupervisor: false,
                 driverSupervisionLocked: false,
+                passengers: [], // Initialize empty, will be populated by seed function
                 counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 }
             };
             const docRef = await addDoc(collection(db, "trips"), newTripData);

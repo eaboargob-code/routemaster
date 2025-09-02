@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -82,65 +83,82 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const startOfTodayTimestamp = Timestamp.fromDate(startOfDay);
+    let stopTrips: (() => void) | undefined;
+    let stopPassenger: (() => void) | undefined;
+    let stopTripDoc: (() => void) | undefined;
+    let cancelled = false;
 
-    let unsubscribeTrip: (() => void) | undefined;
+    (async () => {
+      setIsLoading(true);
 
-    // This query finds the single most recent passenger status update for this student today.
-    const passengerQuery = query(
-        collectionGroup(db, 'passengers'),
-        where('studentId', '==', initialStudent.id),
-        where('schoolId', '==', initialStudent.schoolId),
-        where('updatedAt', '>=', startOfTodayTimestamp),
-        orderBy('updatedAt', 'desc'),
+      const start = new Date(); start.setHours(0,0,0,0);
+      const tripsQ = query(
+        collection(db, "trips"),
+        where("schoolId", "==", initialStudent.schoolId),
+        where("passengers", "array-contains", initialStudent.id),
+        where("startedAt", ">=", Timestamp.fromDate(start)),
+        orderBy("startedAt", "desc"),
         limit(1)
-    );
+      );
 
-    const unsubscribePassengers = onSnapshot(passengerQuery, (passengerSnap) => {
-        // If the trip listener from a previous snapshot exists, unsubscribe from it.
-        if (unsubscribeTrip) {
-            unsubscribeTrip();
-            unsubscribeTrip = undefined;
+      stopTrips = onSnapshot(tripsQ, (ts) => {
+        if (cancelled) return;
+
+        // rewire listeners
+        stopPassenger?.(); stopPassenger = undefined;
+        stopTripDoc?.();  stopTripDoc  = undefined;
+
+        if (ts.empty) {
+          // no trip today containing this student
+          setStatus(prev => ({ ...prev, tripStatus: null, lastLocationUpdate: null }));
+          setIsLoading(false);
+          return;
         }
 
-        if (passengerSnap.empty) {
-            // No passenger record for today, so no active trip.
-            setStatus(prev => ({...prev, tripStatus: null, lastLocationUpdate: null }));
-            setIsLoading(false);
-            return;
-        }
+        const tripId = ts.docs[0].id;
+        const passengerPath = `trips/${tripId}/passengers/${initialStudent.id}`;
+        console.log("[Parent] Listening passenger:", passengerPath);
 
-        const latestPassengerDoc = passengerSnap.docs[0];
-        const passengerData = latestPassengerDoc.data() as TripPassenger;
-        const tripId = latestPassengerDoc.ref.parent.parent!.id;
+        // 1) Passenger listener
+        const passengerRef = doc(db, "trips", tripId, "passengers", initialStudent.id);
+        stopPassenger = onSnapshot(
+          passengerRef,
+          (snap) => {
+            const p = snap.exists() ? (snap.data() as TripPassenger) : null;
+            setStatus(prev => ({ ...prev, tripStatus: p }));
+          },
+          (err) => {
+            console.error("Error listening to passenger", passengerPath, err);
+          }
+        );
 
-        // Update the passenger status right away.
-        setStatus(prev => ({...prev, tripStatus: passengerData}));
-        
-        // Now, create a live listener for the parent trip document to get location updates.
-        const tripRef = doc(db, 'trips', tripId);
-        unsubscribeTrip = onSnapshot(tripRef, (tripSnap) => {
-            if (tripSnap.exists()) {
-                const tripData = tripSnap.data();
-                setStatus(prev => ({ ...prev, lastLocationUpdate: tripData.lastLocation?.at ?? null }));
-            }
-        });
+        // 2) Trip doc listener (for lastLocation)
+        const tripRef = doc(db, "trips", tripId);
+        stopTripDoc = onSnapshot(
+          tripRef,
+          (snap) => {
+            const t = snap.data() as any;
+            setStatus(prev => ({ ...prev, lastLocationUpdate: t?.lastLocation?.at ?? null }));
+          },
+          (err) => {
+            console.error("Error listening to trip", tripId, err);
+          }
+        );
+
         setIsLoading(false);
-
-    }, (error) => {
-        console.error("Error listening to passenger status:", error);
+      }, (err) => {
+        console.error("Error querying trips for student", initialStudent.id, err);
         setIsLoading(false);
-    });
+      });
+    })();
 
     return () => {
-        unsubscribePassengers();
-        if (unsubscribeTrip) {
-            unsubscribeTrip();
-        }
+      cancelled = true;
+      stopTrips?.();
+      stopPassenger?.();
+      stopTripDoc?.();
     };
-}, [initialStudent.id, initialStudent.schoolId]);
+  }, [initialStudent.id, initialStudent.schoolId]);
 
   const getStatusBadge = () => {
     if (isLoading) return <Skeleton className="h-6 w-24" />;
