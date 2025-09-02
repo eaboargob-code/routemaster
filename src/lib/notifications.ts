@@ -1,3 +1,4 @@
+
 // Client-side (Next.js, Firebase Web v9+)
 import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging";
 import { arrayUnion, arrayRemove, doc, updateDoc } from "firebase/firestore";
@@ -18,11 +19,16 @@ export async function registerFcmToken(uid: string) {
 
   const messaging = getMessaging(app);
   
-  const token = await getToken(messaging, { vapidKey });
-  if (!token) return null;
+  try {
+    const token = await getToken(messaging, { vapidKey });
+    if (!token) return null;
 
-  await updateDoc(doc(db, "users", uid), { fcmTokens: arrayUnion(token) });
-  return token;
+    await updateDoc(doc(db, "users", uid), { fcmTokens: arrayUnion(token) });
+    return token;
+  } catch (error) {
+      console.error("[FCM] Error getting token. Is your VAPID key correct?", error);
+      return null;
+  }
 }
 
 export async function unregisterFcmToken(uid: string, token: string) {
