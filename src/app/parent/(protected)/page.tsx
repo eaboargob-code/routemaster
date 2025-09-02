@@ -29,19 +29,95 @@ interface TripPassenger extends DocumentData {
 }
 
 interface ChildStatus extends Student {
-    tripStatus?: TripPassenger;
+    tripStatus?: TripPassenger | null;
     routeName?: string;
     busCode?: string;
-    lastLocationUpdate?: Timestamp;
+    lastLocationUpdate?: Timestamp | null;
 }
 
-function StudentCard({ student }: { student: ChildStatus }) {
+
+function StudentCard({ student: initialStudent }: { student: Student }) {
+    const [status, setStatus] = useState<ChildStatus>({ ...initialStudent, tripStatus: null, lastLocationUpdate: null });
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchDetailsAndListen = async () => {
+            setIsLoading(true);
+
+            // Fetch bus and route names
+            let busCode: string | undefined;
+            let routeName: string | undefined;
+            if (initialStudent.assignedBusId) {
+                const busSnap = await getDoc(doc(db, 'buses', initialStudent.assignedBusId));
+                busCode = busSnap.data()?.busCode;
+            }
+            if (initialStudent.assignedRouteId) {
+                const routeSnap = await getDoc(doc(db, 'routes', initialStudent.assignedRouteId));
+                routeName = routeSnap.data()?.name;
+            }
+            
+            // Find today's active trip for this student
+            const startOfDay = new Date();
+            startOfDay.setHours(0, 0, 0, 0);
+
+            const studentTripQueryConstraints = [
+                where('schoolId', '==', initialStudent.schoolId),
+                where('status', '==', 'active'),
+                where('startedAt', '>=', Timestamp.fromDate(startOfDay))
+            ];
+            
+            // To query on route or bus, we create a flexible query
+            if (initialStudent.assignedRouteId) {
+                 studentTripQueryConstraints.push(where('routeId', '==', initialStudent.assignedRouteId));
+            } else if (initialStudent.assignedBusId) {
+                 studentTripQueryConstraints.push(where('busId', '==', initialStudent.assignedBusId));
+            }
+            
+            const tripsQuery = query(collection(db, 'trips'), ...studentTripQueryConstraints);
+            
+            const tripsSnapshot = await getDocs(tripsQuery);
+            const relevantTrip = tripsSnapshot.docs.length > 0 ? { id: tripsSnapshot.docs[0].id, ...tripsSnapshot.docs[0].data() } : null;
+
+            // Set initial state
+            setStatus(prev => ({...prev, busCode, routeName }));
+            setIsLoading(false);
+
+            if (relevantTrip) {
+                const passengerRef = doc(db, `trips/${relevantTrip.id}/passengers`, initialStudent.id);
+                const tripRef = doc(db, 'trips', relevantTrip.id);
+
+                const unsubPassenger = onSnapshot(passengerRef, (snap) => {
+                    setStatus(prev => ({ ...prev, tripStatus: snap.exists() ? snap.data() as TripPassenger : null }));
+                });
+
+                const unsubTrip = onSnapshot(tripRef, (snap) => {
+                    const tripData = snap.data();
+                    if (tripData?.lastLocation?.at) {
+                        setStatus(prev => ({ ...prev, lastLocationUpdate: tripData.lastLocation.at }));
+                    }
+                });
+
+                return () => {
+                    unsubPassenger();
+                    unsubTrip();
+                };
+            }
+        };
+
+        const unsub = fetchDetailsAndListen();
+        return () => {
+            unsub.then(cleanup => cleanup && cleanup());
+        };
+    }, [initialStudent]);
     
     const getStatusBadge = () => {
-        if (!student.tripStatus) {
+        if (isLoading) {
+            return <Skeleton className="h-6 w-24" />
+        }
+        if (!status.tripStatus) {
             return <Badge variant="outline"><HelpCircle className="mr-1 h-3 w-3"/>No trip data</Badge>;
         }
-        switch(student.tripStatus.status) {
+        switch(status.tripStatus.status) {
             case 'boarded':
                 return <Badge className="bg-blue-100 text-blue-800 border-blue-200"><Bus className="mr-1 h-3 w-3"/> On Bus</Badge>;
             case 'dropped':
@@ -58,25 +134,25 @@ function StudentCard({ student }: { student: ChildStatus }) {
         <Card>
             <CardHeader className="flex flex-row items-start justify-between">
                 <div>
-                    <CardTitle>{student.name}</CardTitle>
+                    <CardTitle>{status.name}</CardTitle>
                     <CardDescription className="flex flex-col gap-1 mt-2">
-                        {student.busCode && <span className="flex items-center gap-2"><Bus className="h-4 w-4"/> {student.busCode}</span>}
-                        {student.routeName && <span className="flex items-center gap-2"><Route className="h-4 w-4"/> {student.routeName}</span>}
+                        {status.busCode && <span className="flex items-center gap-2"><Bus className="h-4 w-4"/> {status.busCode}</span>}
+                        {status.routeName && <span className="flex items-center gap-2"><Route className="h-4 w-4"/> {status.routeName}</span>}
                     </CardDescription>
                 </div>
                 {getStatusBadge()}
             </CardHeader>
             <CardContent>
-                {student.lastLocationUpdate && (
+                {status.lastLocationUpdate && (
                      <div className="text-sm text-muted-foreground flex items-center gap-2">
                         <Clock className="h-4 w-4"/>
-                        <span>Last bus location update: {format(student.lastLocationUpdate.toDate(), 'p')}</span>
+                        <span>Last bus location update: {format(status.lastLocationUpdate.toDate(), 'p')}</span>
                     </div>
                 )}
-                 {student.tripStatus?.status === 'dropped' && student.tripStatus.droppedAt && (
+                 {status.tripStatus?.status === 'dropped' && status.tripStatus.droppedAt && (
                      <div className="text-sm text-muted-foreground flex items-center gap-2">
                         <Clock className="h-4 w-4"/>
-                        <span>Dropped off at: {format(student.tripStatus.droppedAt.toDate(), 'p')}</span>
+                        <span>Dropped off at: {format(status.tripStatus.droppedAt.toDate(), 'p')}</span>
                     </div>
                 )}
             </CardContent>
@@ -96,7 +172,7 @@ function LoadingState() {
 
 export default function ParentDashboardPage() {
     const { user, profile } = useProfile();
-    const [children, setChildren] = useState<ChildStatus[]>([]);
+    const [children, setChildren] = useState<Student[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -110,128 +186,46 @@ export default function ParentDashboardPage() {
         }
     }, [user?.uid]);
     
-    const fetchChildrenData = useCallback(async () => {
-        if (!user || !profile) return;
-        setIsLoading(true);
-        setError(null);
-        
-        try {
-            // 1. Find linked students via direct GET
-            const parentLinkRef = doc(db, "parentStudents", user.uid);
-            const linkDoc = await getDoc(parentLinkRef);
-
-            if (!linkDoc.exists() || !linkDoc.data()?.studentIds || linkDoc.data().studentIds.length === 0) {
-                setChildren([]);
-                setIsLoading(false);
-                return;
-            }
-            const studentIds = linkDoc.data().studentIds;
-
-            // 2. Fetch only the specific student documents.
-            const studentsQuery = query(
-                collection(db, "students"), 
-                where(documentId(), "in", studentIds),
-                where("schoolId", "==", profile.schoolId)
-            );
-            const studentsSnapshot = await getDocs(studentsQuery);
-            const studentData = studentsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Student));
-
-            // 3. Find today's active trips for these students' routes/buses
-            const startOfDay = new Date();
-            startOfDay.setHours(0, 0, 0, 0);
-            const relevantRouteIds = [...new Set(studentData.map(s => s.assignedRouteId).filter(Boolean))];
+    useEffect(() => {
+        const fetchChildrenData = async () => {
+            if (!user || !profile) return;
+            setIsLoading(true);
+            setError(null);
             
-            let trips: DocumentData[] = [];
-            if (relevantRouteIds.length > 0) {
-                 const tripsQuery = query(
-                    collection(db, 'trips'),
-                    where('schoolId', '==', profile.schoolId),
-                    where('status', '==', 'active'),
-                    where('routeId', 'in', relevantRouteIds),
-                    where('startedAt', '>=', Timestamp.fromDate(startOfDay))
+            try {
+                // 1. Find linked students via direct GET
+                const parentLinkRef = doc(db, "parentStudents", user.uid);
+                const linkDoc = await getDoc(parentLinkRef);
+
+                if (!linkDoc.exists() || !linkDoc.data()?.studentIds || linkDoc.data().studentIds.length === 0) {
+                    setChildren([]);
+                    setIsLoading(false);
+                    return;
+                }
+                const studentIds = linkDoc.data().studentIds;
+
+                // 2. Fetch only the specific student documents.
+                const studentsQuery = query(
+                    collection(db, "students"), 
+                    where(documentId(), "in", studentIds),
+                    where("schoolId", "==", profile.schoolId)
                 );
-                const tripsSnapshot = await getDocs(tripsQuery);
-                trips = tripsSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-            }
-            
-             // 4. Create initial child status objects with bus/route names
-            const initialChildrenStatus = await Promise.all(studentData.map(async (s) => {
-                let busCode: string | undefined;
-                let routeName: string | undefined;
-
-                if (s.assignedBusId) {
-                    const busSnap = await getDoc(doc(db, 'buses', s.assignedBusId));
-                    busCode = busSnap.data()?.busCode;
-                }
-                if (s.assignedRouteId) {
-                    const routeSnap = await getDoc(doc(db, 'routes', s.assignedRouteId));
-                    routeName = routeSnap.data()?.name;
-                }
-
-                return { ...s, busCode, routeName };
-            }));
-
-            setChildren(initialChildrenStatus);
-            setIsLoading(false);
-            
-            // 5. Set up listeners for each student on their respective trip
-            const tripListeners: (()=>void)[] = [];
-            
-            studentData.forEach(student => {
-                const relevantTrip = trips.find(t => t.routeId === student.assignedRouteId || t.busId === student.assignedBusId);
-                if (relevantTrip) {
-                    // Listen to the passenger subcollection
-                    const passengerRef = doc(db, `trips/${relevantTrip.id}/passengers`, student.id);
-                    const passengerUnsub = onSnapshot(passengerRef, (snap) => {
-                        setChildren(prev => prev.map(c => c.id === student.id ? { ...c, tripStatus: snap.data() as TripPassenger } : c));
-                    });
-                    
-                    // Listen to the trip for location updates
-                    const tripRef = doc(db, 'trips', relevantTrip.id);
-                    const tripUnsub = onSnapshot(tripRef, (snap) => {
-                        const tripData = snap.data();
-                        if (tripData?.lastLocation?.at) {
-                             setChildren(prev => prev.map(c => {
-                                 const associatedTrip = trips.find(t => t.routeId === c.assignedRouteId || t.busId === c.assignedBusId);
-                                 if(associatedTrip?.id === snap.id) {
-                                     return {...c, lastLocationUpdate: tripData.lastLocation.at }
-                                 }
-                                 return c;
-                            }));
-                        }
-                    });
-                    tripListeners.push(passengerUnsub, tripUnsub);
-                }
-            });
-            
-            return () => tripListeners.forEach(unsub => unsub());
-
-        } catch (e: any) {
-            console.error("Failed to fetch parent data:", e);
-            if (e.code === 'permission-denied') {
-                setError("Missing or insufficient permissions. Please check Firestore rules for parents.");
-            } else {
+                const studentsSnapshot = await getDocs(studentsQuery);
+                const studentData = studentsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+                setChildren(studentData);
+            } catch (e: any) {
+                console.error("Failed to fetch parent data:", e);
                 setError(e.message || "An unknown error occurred.");
+            } finally {
+                setIsLoading(false);
             }
-            setIsLoading(false);
+        };
+
+        if (profile && user) {
+            fetchChildrenData();
         }
     }, [user, profile]);
 
-    useEffect(() => {
-        let unsub: (() => void) | undefined;
-        if(profile && user) {
-            fetchChildrenData().then(cleanup => {
-                if (typeof cleanup === 'function') {
-                    unsub = cleanup;
-                }
-            });
-        }
-        return () => {
-            if (unsub) {
-                unsub();
-            }
-        };
-    }, [fetchChildrenData, profile, user]);
 
     if (isLoading) {
         return <LoadingState />;
@@ -263,5 +257,3 @@ export default function ParentDashboardPage() {
         </div>
     )
 }
-
-    
