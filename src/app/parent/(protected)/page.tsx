@@ -282,9 +282,7 @@ export default function ParentDashboardPage() {
 
   useEffect(() => {
     const off = listenForeground((p) => {
-      const title = p.notification?.title ?? "RouteMaster";
-      const body  = p.notification?.body  ?? JSON.stringify(p.data || {});
-      setBell((b) => [{ title, body, ts: Date.now() }, ...b].slice(0,50));
+      console.log("[FCM] foreground:", p);
     });
     return off;
   }, []);
