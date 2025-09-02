@@ -269,6 +269,7 @@ export default function ParentDashboardPage() {
   const [children, setChildren] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<any[]>([]);
 
   // Register parent FCM token on mount/login
   useEffect(() => {
@@ -278,6 +279,14 @@ export default function ParentDashboardPage() {
       console.log("FCM token (parent):", t);
     })();
   }, [user?.uid]);
+  
+  useEffect(() => {
+    const off = listenForeground((p: any) => {
+      console.log("[FCM] foreground message:", p);
+      setNotifications((bell) => [p, ...bell].slice(0, 50));
+    });
+    return off;
+  }, []);
 
   // Load children
   useEffect(() => {
