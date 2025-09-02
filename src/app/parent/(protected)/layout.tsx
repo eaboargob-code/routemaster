@@ -153,7 +153,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     });
 
     return () => {
-      if (unsubscribe) {
+      if (typeof unsubscribe === 'function') {
         unsubscribe();
       }
     }
