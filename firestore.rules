@@ -2,8 +2,89 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    // Helper function to check if the user is an admin or supervisor for a given school
+    function isStaff(schoolId) {
+      let userRole = get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      let userSchoolId = get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId;
+      return request.auth != null &&
+             userSchoolId == schoolId &&
+             (userRole == 'admin' || userRole == 'supervisor');
+    }
+
+    // Helper function to check if a user is a parent of a specific student
+    function isParentOf(studentId) {
+      let parentLink = get(/databases/$(database)/documents/parentStudents/$(request.auth.uid)).data;
+      return request.auth != null &&
+             parentLink.studentIds.hasAny([studentId]);
+    }
+    
+    // Helper function to check if a user is a parent with access to a specific trip
+    function isParentOnTrip(tripId) {
+       let trip = get(/databases/$(database)/documents/trips/$(tripId)).data;
+       let parentLink = get(/databases/$(database)/documents/parentStudents/$(request.auth.uid)).data;
+       // Check for any intersection between parent's students and trip's passengers
+       return request.auth != null &&
+              trip.schoolId == parentLink.schoolId &&
+              trip.passengers.hasAny(parentLink.studentIds);
+    }
+
+    // Users can read their own profile. Staff can read any profile in their school.
+    match /users/{userId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == userId || 
+        isStaff(get(/databases/$(database)/documents/users/$(userId)).data.schoolId)
+      );
+      allow write: if isStaff(resource.data.schoolId); // Admins can update users
+      
+      // Notifications are private to the user
+      match /notifications/{notificationId} {
+        allow read, write: if request.auth.uid == userId;
+      }
+    }
+    
+    // Parents can read their own student links. Staff can read any.
+    match /parentStudents/{parentId} {
+       allow read: if request.auth != null && (
+         request.auth.uid == parentId ||
+         isStaff(get(/databases/$(database)/documents/parentStudents/$(parentId)).data.schoolId)
+       );
+       allow write: if isStaff(resource.data.schoolId);
+    }
+
+    // Staff can manage all data for their school
+    match /{collection}/{docId} 
+      where collection in ['routes', 'buses', 'students', 'trips'] {
+      allow read, write: if request.auth != null && isStaff(request.resource.data.schoolId);
+    }
+    
+    // Students can be read by their parents or by staff
+    match /students/{studentId} {
+        allow read: if request.auth != null && (
+          isStaff(get(/databases/$(database)/documents/students/$(studentId)).data.schoolId) ||
+          isParentOf(studentId)
+        );
+    }
+    
+    // Trips can be read by staff or by parents of children on the trip
+    match /trips/{tripId} {
+       allow read: if request.auth != null && (
+         isStaff(get(/databases/$(database)/documents/trips/$(tripId)).data.schoolId) ||
+         isParentOnTrip(tripId)
+       );
+       
+       // Passenger status can be read by parents on the trip, or by staff.
+       // Passenger status can be written by staff or authorized drivers.
+       match /passengers/{passengerId} {
+         allow read: if request.auth != null && (
+            isStaff(get(/databases/$(database)/documents/trips/$(tripId)).data.schoolId) ||
+            isParentOnTrip(tripId)
+         );
+         allow write: if request.auth != null && (
+            isStaff(get(/databases/$(database)/documents/trips/$(tripId)).data.schoolId) ||
+            request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.driverId
+         );
+       }
     }
   }
 }
