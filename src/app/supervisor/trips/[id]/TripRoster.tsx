@@ -31,6 +31,7 @@ interface RosterProps {
 interface Passenger {
     id: string;
     name: string;
+    studentName?: string;
     status: 'pending' | 'boarded' | 'absent' | 'dropped';
 }
 
@@ -187,7 +188,7 @@ export function Roster({ tripId, canEdit }: RosterProps) {
                     <TableBody>
                         {passengers.map(p => (
                             <TableRow key={p.id}>
-                                <TableCell className="font-medium">{p.name}</TableCell>
+                                <TableCell className="font-medium">{p.studentName || p.name || p.id}</TableCell>
                                 <TableCell>{getStatusBadge(p.status)}</TableCell>
                                 {canEdit && (
                                     <TableCell className="text-right space-x-1">

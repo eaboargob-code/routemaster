@@ -1,105 +1,73 @@
-import { db } from "@/lib/firebase";
+// lib/roster.ts
 import {
-  collection, query, where, getDocs, doc, getDoc, writeBatch, serverTimestamp, updateDoc
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  Timestamp,
+  writeBatch,
 } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
-export async function seedPassengersForTrip(opts: {
+interface SeedArgs {
   tripId: string;
   schoolId: string;
   routeId?: string | null;
   busId?: string | null;
-}) {
-  const { tripId, schoolId, routeId, busId } = opts;
-  const parentStudentsCol = collection(db, "parentStudents");
+}
 
-
-  // 1) gather students by route OR bus (both queries, then merge)
-  const studentsRef = collection(db, "students");
-  const queries = [];
-  if (routeId) {
-    queries.push(query(studentsRef, where("schoolId", "==", schoolId), where("assignedRouteId", "==", routeId)));
+/**
+ * Seed passenger roster for a trip.
+ * Idempotent: safe to call multiple times.
+ */
+export async function seedPassengersForTrip({
+  tripId,
+  schoolId,
+  routeId,
+  busId,
+}: SeedArgs): Promise<{ created: number }> {
+  if (!tripId || !schoolId) {
+    throw new Error("Missing required tripId or schoolId");
   }
-  if (busId) {
-    queries.push(query(studentsRef, where("schoolId", "==", schoolId), where("assignedBusId", "==", busId)));
-  }
 
-  if (queries.length === 0) {
-    console.debug("[ROSTER] No route or bus ID on trip. Cannot seed passengers.");
+  // 1) Collect all students in this school filtered by busId or routeId
+  const studentsCol = collection(db, "students");
+  const allStudentsSnap = await getDocs(studentsCol);
+  const candidates = allStudentsSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter(
+      (s: any) =>
+        s.schoolId === schoolId &&
+        ((busId && s.assignedBusId === busId) ||
+          (routeId && s.assignedRouteId === routeId))
+    );
+
+  if (candidates.length === 0) {
     return { created: 0 };
   }
 
-  const snaps = await Promise.all(queries.map(q => getDocs(q)));
-  const studentMap = new Map<string, any>();
-  for (const s of snaps) {
-    for (const d of s.docs) studentMap.set(d.id, { id: d.id, ...d.data() });
-  }
-  const students = [...studentMap.values()].sort((a,b)=>a.name.localeCompare(b.name));
-
-  console.debug('[ROSTER] trip', tripId, routeId, busId);
-  console.debug('[ROSTER] merged students', students.length);
-  
-  if (students.length === 0) {
-      return { created: 0 };
-  }
-
-  // 2) Find all parent links for these students in a single query
-  const studentIds = Array.from(studentMap.keys());
-  const parentLinksByStudent = new Map<string, string[]>();
-
-  const CHUNK_SIZE = 10;
-  for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
-    const chunk = studentIds.slice(i, i + CHUNK_SIZE);
-    if (chunk.length === 0) continue;
-
-    const parentQuery = query(parentStudentsCol, where('schoolId', '==', schoolId), where('studentIds', 'array-contains-any', chunk));
-    const parentLinksSnap = await getDocs(parentQuery);
-    parentLinksSnap.forEach(doc => {
-        const parentId = doc.id;
-        const data = doc.data();
-        data.studentIds.forEach((studentId: string) => {
-            if (studentMap.has(studentId)) {
-                if (!parentLinksByStudent.has(studentId)) {
-                    parentLinksByStudent.set(studentId, []);
-                }
-                parentLinksByStudent.get(studentId)!.push(parentId);
-            }
-        });
-    });
-  }
-
-  // 3) create missing passenger docs, idempotent
   const batch = writeBatch(db);
-  const passengerRefs = students.map(s => doc(db, `trips/${tripId}/passengers`, s.id));
-  const existingDocs = await Promise.all(passengerRefs.map(ref => getDoc(ref)));
+  let created = 0;
 
-  let createdCount = 0;
-  students.forEach((s, index) => {
-      if (!existingDocs[index].exists()) {
-          createdCount++;
-          batch.set(passengerRefs[index], {
-              schoolId,
-              studentId: s.id,
-              studentName: s.name ?? null,
-              parentUids: parentLinksByStudent.get(s.id) || [],
-              status: "pending",
-              boardedAt: null,
-              droppedAt: null,
-              updatedAt: serverTimestamp(),
-          }, { merge: true });
-      }
-  });
+  for (const student of candidates) {
+    const passRef = doc(db, `trips/${tripId}/passengers/${student.id}`);
+    const existing = await getDoc(passRef);
+    if (!existing.exists()) {
+      batch.set(passRef, {
+        studentId: student.id,
+        studentName: student.name || "Unknown", // ✅ always include a name
+        schoolId,
+        status: "pending",
+        createdAt: Timestamp.now(),
+      });
+      created++;
+    }
+  }
 
-  if (createdCount > 0) {
+  if (created > 0) {
     await batch.commit();
   }
 
-  // 4) After seeding, update the trip's metadata
-  if (students.length > 0) {
-      await updateDoc(doc(db, 'trips', tripId), {
-          'counts.pending': students.length,
-          'passengers': Array.from(studentMap.keys()),
-      });
-  }
-
-  return { created: students.length };
+  return { created };
 }
