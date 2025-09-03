@@ -372,12 +372,13 @@ async function backfillInboxItems(
             counters.scanned++;
             const inboxData = inboxDoc.data();
             
-            // Check if studentName needs to be fixed
-            if (inboxData.studentId && (typeof inboxData.studentName !== 'string' || !inboxData.studentName.trim())) {
-                const studentId = inboxData.studentId;
+            // Check if data field or studentName needs to be fixed
+            const dataField = inboxData.data || {};
+            if (dataField.studentId && (typeof dataField.studentName !== 'string' || !dataField.studentName.trim())) {
+                const studentId = dataField.studentId;
                 const studentName = studentNamesCache.get(studentId) || studentId; // Use ID as fallback
 
-                const updates = { studentName };
+                const updates = { data: { ...dataField, studentName } };
                 counters.updated++;
                 console.log(` -> [${inboxDoc.ref.path}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
                 if (!isDryRun) {
