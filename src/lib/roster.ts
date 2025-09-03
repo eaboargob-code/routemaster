@@ -4,8 +4,10 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
   setDoc,
   Timestamp,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -33,16 +35,29 @@ export async function seedPassengersForTrip({
 
   // 1) Collect all students in this school filtered by busId or routeId
   const studentsCol = collection(db, "students");
-  const allStudentsSnap = await getDocs(studentsCol);
-  const candidates = allStudentsSnap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
-    .filter(
-      (s: any) =>
-        s.schoolId === schoolId &&
-        ((busId && s.assignedBusId === busId) ||
-          (routeId && s.assignedRouteId === routeId))
-    );
+  const candidates: any[] = [];
+  const studentIds = new Set<string>();
 
+  const processSnaps = (snap: any) => {
+    snap.docs.forEach((doc: any) => {
+      if (!studentIds.has(doc.id)) {
+        studentIds.add(doc.id);
+        candidates.push({ id: doc.id, ...doc.data() });
+      }
+    });
+  }
+
+  // Query by route
+  if (routeId) {
+    const q = query(studentsCol, where("schoolId", "==", schoolId), where("assignedRouteId", "==", routeId));
+    processSnaps(await getDocs(q));
+  }
+  // Query by bus
+  if (busId) {
+    const q = query(studentsCol, where("schoolId", "==", schoolId), where("assignedBusId", "==", busId));
+    processSnaps(await getDocs(q));
+  }
+  
   if (candidates.length === 0) {
     return { created: 0 };
   }
@@ -51,15 +66,16 @@ export async function seedPassengersForTrip({
   let created = 0;
 
   for (const student of candidates) {
-    const passRef = doc(db, `trips/${tripId}/passengers/${student.id}`);
+    const passRef = doc(db, `trips/${tripId}/passengers`, student.id);
     const existing = await getDoc(passRef);
     if (!existing.exists()) {
       batch.set(passRef, {
         studentId: student.id,
-        studentName: student.name || "Unknown", // ✅ always include a name
-        schoolId,
+        studentName: student.name || "Unknown",
+        schoolId, // Ensure schoolId is always set
         status: "pending",
         createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
       });
       created++;
     }
