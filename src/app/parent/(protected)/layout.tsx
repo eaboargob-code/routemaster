@@ -21,7 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from 'date-fns';
 import { useToast } from "@/hooks/use-toast";
-import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch } from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc } from "firebase/firestore";
 
 interface Notification {
     id: string;
@@ -31,14 +31,57 @@ interface Notification {
     read: boolean;
 }
 
-function Header({ notifications, onClearNotifications }: { notifications: Notification[], onClearNotifications: () => void }) {
+// --- useInbox Hook ---
+function useInbox() {
+  const { user } = useProfile();
+  const [items, setItems] = useState<Notification[]>([]);
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const q = query(
+      collection(db, "users", user.uid, "inbox"),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      const rows: Notification[] = [];
+      snap.forEach(d => rows.push({ id: d.id, ...(d.data() as any) }));
+      setItems(rows);
+      setCount(rows.filter(r => !r.read).length);
+    }, (err) => {
+      console.error("[Inbox] listener error:", err);
+    });
+
+    return () => unsub();
+  }, [user?.uid]);
+  
+  const handleClearNotifications = useCallback(async () => {
+    if (!user?.uid) return;
+    const unreadNotifications = items.filter(n => !n.read);
+    if (unreadNotifications.length === 0) return;
+
+    const batch = writeBatch(db);
+    unreadNotifications.forEach(n => {
+        const notifRef = doc(db, `users/${user.uid}/inbox`, n.id);
+        batch.update(notifRef, { read: true });
+    });
+    
+    await batch.commit();
+  }, [user?.uid, items]);
+
+  return { items, count, handleClearNotifications };
+}
+
+
+function Header({ notifications, unreadCount, onClearNotifications }: { notifications: Notification[], unreadCount: number, onClearNotifications: () => void }) {
     const router = useRouter();
     const handleLogout = async () => {
         await signOut(auth);
         router.push("/parent/login");
     };
-    
-    const unreadCount = notifications.filter(n => !n.read).length;
 
     return (
          <header className="sticky top-0 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6 z-50">
@@ -70,7 +113,7 @@ function Header({ notifications, onClearNotifications }: { notifications: Notifi
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
                                         <div className={`text-xs ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>{n.body}</div>
-                                        <div className="text-xs text-muted-foreground/80 mt-1">{formatDistanceToNow(n.createdAt.toDate(), { addSuffix: true })}</div>
+                                        <div className="text-xs text-muted-foreground/80 mt-1">{n.createdAt ? formatDistanceToNow(n.createdAt.toDate(), { addSuffix: true }) : ''}</div>
                                     </DropdownMenuItem>
                                 ))}
                                 {unreadCount > 0 && (
@@ -133,8 +176,8 @@ function AccessDeniedScreen({ message, details }: { message: string, details?: s
 export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, profile, loading, error } = useProfile();
-  const [notifications, setNotifications] = useState<Notification[]>([]);
   const { toast } = useToast();
+  const { items: notifications, count: unreadCount, handleClearNotifications } = useInbox();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -165,36 +208,6 @@ export function ParentGuard({ children }: { children: ReactNode }) {
       }
     }
   }, [user, loading, router, toast]);
-  
-  useEffect(() => {
-    if (!user?.uid) return;
-    const q = query(
-      collection(db, `users/${user.uid}/notifications`),
-      orderBy("createdAt", "desc"),
-      limit(20)
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Notification));
-      setNotifications(docs);
-    });
-    return () => unsub();
-  }, [user?.uid]);
-
-  const handleClearNotifications = useCallback(async () => {
-    if (!user?.uid) return;
-
-    const unreadNotifications = notifications.filter(n => !n.read);
-    if (unreadNotifications.length === 0) return;
-
-    const batch = writeBatch(db);
-    unreadNotifications.forEach(n => {
-        const notifRef = doc(db, `users/${user.uid}/notifications`, n.id);
-        batch.update(notifRef, { read: true });
-    });
-    
-    await batch.commit();
-
-  }, [user?.uid, notifications]);
 
   if (loading) {
     return <LoadingScreen />;
@@ -218,7 +231,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full flex-col">
-      <Header notifications={notifications} onClearNotifications={handleClearNotifications} />
+      <Header notifications={notifications} unreadCount={unreadCount} onClearNotifications={handleClearNotifications} />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
         {children}
       </main>

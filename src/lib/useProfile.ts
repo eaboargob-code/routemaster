@@ -32,8 +32,6 @@ interface UseProfileReturn {
   profile: UserProfile | null;
   loading: boolean;
   error: Error | null;
-  bellItems: BellItem[];
-  bellCount: number;
 }
 
 export function useProfile(): UseProfileReturn {
@@ -41,16 +39,12 @@ export function useProfile(): UseProfileReturn {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const [bellItems, setBellItems] = useState<BellItem[]>([]);
-  const [bellCount, setBellCount] = useState(0);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       if (!currentUser) {
         setProfile(null);
-        setBellItems([]);
-        setBellCount(0);
         setLoading(false);
       }
     });
@@ -65,10 +59,9 @@ export function useProfile(): UseProfileReturn {
     }
 
     setLoading(true);
-    const unsubs: (()=>void)[] = [];
-
+    
     const meRef = doc(db, "users", user.uid);
-    unsubs.push(listenWithPath(meRef, `users/${user.uid}`, (snap) => {
+    const unsubscribe = listenWithPath(meRef, `users/${user.uid}`, (snap) => {
       if (snap.exists()) {
         setProfile(snap.data() as UserProfile);
       } else {
@@ -76,18 +69,10 @@ export function useProfile(): UseProfileReturn {
         setError(new Error("User profile does not exist."));
       }
       setLoading(false);
-    }));
+    });
 
-    const inboxRef = collection(db, "users", user.uid, "notifications");
-    const inboxQ = query(inboxRef, orderBy("createdAt","desc"), limit(20));
-    unsubs.push(listenWithPath(inboxQ, `users/${user.uid}/notifications/*`, (snap) => {
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as BellItem));
-        setBellItems(items);
-        setBellCount(items.filter(item => !item.read).length);
-    }));
-
-    return () => { unsubs.forEach(unsub => unsub()); };
+    return () => unsubscribe();
   }, [user]);
 
-  return { user, profile, loading, error, bellItems, bellCount };
+  return { user, profile, loading, error };
 }
