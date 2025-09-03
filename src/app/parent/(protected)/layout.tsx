@@ -20,10 +20,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge";
-import { formatRelative } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs, serverTimestamp } from "firebase/firestore";
 import ParentDashboardPage from "./page";
+import { relativeFrom } from "@/lib/datetime";
 
 interface Notification {
     id: string;
@@ -31,8 +31,11 @@ interface Notification {
     body: string;
     createdAt: Timestamp;
     read: boolean;
-    studentName?: string;
-    studentId?: string;
+    data?: {
+      studentName?: string;
+      studentId?: string;
+      status?: string;
+    }
 }
 
 interface Student {
@@ -91,7 +94,7 @@ function useInbox() {
 }
 
 
-function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void, childNameMap: Record<string, string> }) {
+function Header({ notifications, unreadCount, onMarkAsRead }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void }) {
     const router = useRouter();
     const handleLogout = async () => {
         await signOut(auth);
@@ -125,15 +128,15 @@ function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { no
                         {notifications.length > 0 ? (
                             <>
                                 {notifications.map(n => {
-                                     const displayName = n.studentName ?? childNameMap[n.studentId ?? ''] ?? 'Student';
-                                     const body = n.body.replace(n.studentId ?? '', displayName).replace(n.studentName ?? '', displayName);
+                                     const studentIdentifier = n.data?.studentName || n.data?.studentId;
+                                     const body = `Student ${studentIdentifier} is ${n.data?.status || 'updated'}.`;
                                      return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
                                         <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
-                                            {body}
+                                            {n.body || body}
                                         </div>
-                                        <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
+                                        <div className="text-xs text-muted-foreground/80 mt-1">{relativeFrom(n.createdAt)}</div>
                                     </DropdownMenuItem>
                                      )
                                 })}
@@ -298,15 +301,12 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     return <AccessDeniedScreen message="Access Denied" details={`Your role is '${profile.role}'. You must have the 'parent' role to access this page.`} />;
   }
 
-  const childNameMap = Object.fromEntries(childrenList.map(c => [c.id, c.name]));
-
   return (
     <div className="flex min-h-screen w-full flex-col">
       <Header 
         notifications={notifications} 
         unreadCount={unreadCount} 
         onMarkAsRead={handleMarkAsRead}
-        childNameMap={childNameMap}
       />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
          {/* Pass fetched data down to the actual page component */}
