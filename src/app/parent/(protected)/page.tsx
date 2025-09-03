@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/firebase";
 import type { UserProfile } from "@/lib/useProfile";
 import {
-  collectionGroup,
+  collection,
   query,
   where,
   getDocs,
@@ -13,6 +13,7 @@ import {
   limit,
   Timestamp,
   DocumentData,
+  doc,
 } from "firebase/firestore";
 
 import {
@@ -36,6 +37,7 @@ import {
   Footprints,
   HelpCircle,
 } from "lucide-react";
+import { formatRelative } from "@/lib/utils";
 
 /* ---------------- types ---------------- */
 
@@ -59,39 +61,16 @@ type TripPassenger = {
   updatedAt?: Timestamp | null;
 };
 
-type ChildStatus = Student & {
+type ChildStatus = {
   tripId?: string | null;
   tripStatus?: TripPassenger | null;
   lastLocationUpdate?: Timestamp | null;
-};
-
-/* --------------- utils ---------------- */
-
-const startOfToday = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return Timestamp.fromDate(d);
-};
-
-const timeAgo = (t?: Timestamp | null) => {
-  if (!t) return null;
-  const then = t.toDate().getTime();
-  const diff = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (diff < 5) return "just now";
-  if (diff < 60) return `${diff}s`;
-  const m = Math.floor(diff / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  return `${d}d`;
 };
 
 /* --------------- child card --------------- */
 
 function StudentCard({ student }: { student: Student }) {
   const [state, setState] = useState<ChildStatus>({
-    ...student,
     tripId: null,
     tripStatus: null,
     lastLocationUpdate: null,
@@ -99,73 +78,78 @@ function StudentCard({ student }: { student: Student }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let stopPassenger: (() => void) | null = null;
-    let stopTrip: (() => void) | null = null;
+    let unsubPassenger: (() => void) | null = null;
+    let unsubTrip: (() => void) | null = null;
     let cancelled = false;
 
-    (async () => {
-      setLoading(true);
+    const fetchTripAndListen = async () => {
+        setLoading(true);
 
-      // Find today's latest passenger doc for this student
-      // Requires composite index (see file footer comment)
-      const cg = query(
-        collectionGroup(db, "passengers"),
-        where("schoolId", "==", student.schoolId),
-        where("studentId", "==", student.id),
-        where("updatedAt", ">=", startOfToday()),
-        orderBy("updatedAt", "desc"),
-        limit(1)
-      );
+        const startOfDay = new Date();
+        startOfDay.setHours(0,0,0,0);
 
-      const found = await getDocs(cg);
-      if (cancelled) return;
-
-      const latest = found.docs[0];
-      if (!latest) {
-        setState((p) => ({ ...p, tripId: null, tripStatus: null, lastLocationUpdate: null }));
-        setLoading(false);
-        return;
-      }
-
-      const passengerRef = latest.ref;
-      const tripRef = passengerRef.parent.parent; // trips/{tripId}
-      setState((p) => ({ ...p, tripId: tripRef?.id ?? null }));
-
-      // live passenger row
-      stopPassenger = onSnapshot(
-        passengerRef,
-        (ps) => {
-          setState((p) => ({ ...p, tripStatus: ps.exists() ? (ps.data() as TripPassenger) : null }));
-        },
-        (err) => console.error("[parent] passenger listen error", err)
-      );
-
-      // live trip for lastLocation.at
-      if (tripRef) {
-        stopTrip = onSnapshot(
-          tripRef,
-          (ts) => {
-            const td = ts.data() as DocumentData | undefined;
-            setState((p) => ({ ...p, lastLocationUpdate: td?.lastLocation?.at ?? null }));
-          },
-          (err) => console.error("[parent] trip listen error", err)
+        const tripsQ = query(
+          collection(db, 'trips'),
+          where('schoolId', '==', student.schoolId),
+          where('passengers', 'array-contains', student.id),
+          where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
+          orderBy('startedAt', 'desc'),
+          limit(1)
         );
-      }
 
-      setLoading(false);
-    })();
+        try {
+            const tripsSnap = await getDocs(tripsQ);
+            if (cancelled) return;
+
+            const t = tripsSnap.docs[0];
+            if (!t) {
+                setState({ tripId: null, tripStatus: null, lastLocationUpdate: null });
+                setLoading(false);
+                return;
+            }
+
+            const tripId = t.id;
+            setState(prev => ({ ...prev, tripId }));
+
+            // Listener for passenger status
+            const passengerRef = doc(db, 'trips', tripId, 'passengers', student.id);
+            unsubPassenger = onSnapshot(passengerRef, (snap) => {
+                if (!cancelled) {
+                    setState(prev => ({ ...prev, tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null }));
+                }
+            }, (err) => console.error(`[Parent] Passenger listener for ${student.id} failed:`, err));
+
+            // Listener for trip's last location update
+            const tripRef = doc(db, 'trips', tripId);
+            unsubTrip = onSnapshot(tripRef, (snap) => {
+                 if (!cancelled) {
+                    const tripData = snap.data() as DocumentData | undefined;
+                    setState(prev => ({ ...prev, lastLocationUpdate: tripData?.lastLocation?.at ?? null }));
+                 }
+            }, (err) => console.error(`[Parent] Trip listener for ${tripId} failed:`, err));
+
+        } catch (err) {
+            console.error(`[Parent] Error fetching trip for student ${student.id}:`, err);
+        } finally {
+            if (!cancelled) {
+                setLoading(false);
+            }
+        }
+    };
+    
+    fetchTripAndListen();
 
     return () => {
       cancelled = true;
-      stopPassenger?.();
-      stopTrip?.();
+      unsubPassenger?.();
+      unsubTrip?.();
     };
   }, [student]);
 
   const statusBadge = useMemo(() => {
     if (loading) return <Skeleton className="h-6 w-24" />;
     const s = state.tripStatus?.status;
-    if (!s) {
+    if (!state.tripId || !s) {
       return (
         <Badge variant="outline">
           <HelpCircle className="mr-1 h-3 w-3" />
@@ -200,7 +184,7 @@ function StudentCard({ student }: { student: Student }) {
         Awaiting Check-in
       </Badge>
     );
-  }, [loading, state.tripStatus]);
+  }, [loading, state.tripStatus, state.tripId]);
 
   const primaryTime =
     state.tripStatus?.status === "dropped"
@@ -234,7 +218,7 @@ function StudentCard({ student }: { student: Student }) {
         {!!primaryTime && (
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Clock className="h-4 w-4" />
-            <span>Updated {timeAgo(primaryTime)}</span>
+            <span>Updated {formatRelative(primaryTime)}</span>
           </div>
         )}
       </CardContent>
@@ -326,7 +310,7 @@ export default function ParentDashboardPage({ profile, childrenData }: ParentDas
 
 /**
  * 🔧 Composite index needed (create once via console link if prompted):
- * collectionGroup: passengers
- * where: schoolId ==, studentId ==, updatedAt >=
- * orderBy: updatedAt desc
+ * collection: trips
+ * where: schoolId ==, passengers array-contains, startedAt >=
+ * orderBy: startedAt desc
  */
