@@ -3,8 +3,19 @@
 
 import { useState, useEffect } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import { doc, onSnapshot, type DocumentData } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, orderBy, limit, type DocumentData, type Timestamp } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
+
+function listenWithPath(ref: any, label: string, onData: (snap: any)=>void) {
+  try {
+    return onSnapshot(ref, (snap) => onData(snap), (err) => {
+      console.error(`[PROFILE-LISTEN ERROR] ${label}`, err);
+    });
+  } catch (e) {
+    console.error(`[PROFILE-START ERROR] ${label}`, e);
+    return () => {};
+  }
+}
 
 export type UserRole = "admin" | "driver" | "supervisor" | "parent";
 
@@ -17,11 +28,22 @@ export interface UserProfile {
   pending?: boolean;
 }
 
+export interface BellItem {
+    id: string;
+    title: string;
+    body: string;
+    createdAt: Timestamp;
+    read: boolean;
+    data?: any;
+}
+
 interface UseProfileReturn {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
   error: Error | null;
+  bellItems: BellItem[];
+  bellCount: number;
 }
 
 export function useProfile(): UseProfileReturn {
@@ -29,12 +51,16 @@ export function useProfile(): UseProfileReturn {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const [bellItems, setBellItems] = useState<BellItem[]>([]);
+  const [bellCount, setBellCount] = useState(0);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       if (!currentUser) {
         setProfile(null);
+        setBellItems([]);
+        setBellCount(0);
         setLoading(false);
       }
     });
@@ -49,29 +75,29 @@ export function useProfile(): UseProfileReturn {
     }
 
     setLoading(true);
-    const profileRef = doc(db, "users", user.uid);
-    const unsubscribeProfile = onSnapshot(profileRef, 
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setProfile(docSnap.data() as UserProfile);
-        } else {
-          setProfile(null);
-        }
-        setError(null);
-        setLoading(false);
-      },
-      (err) => {
-        console.error("Error fetching user profile:", err);
-        setError(err);
-        setProfile(null);
-        setLoading(false);
-      }
-    );
+    const unsubs: (()=>void)[] = [];
 
-    return () => unsubscribeProfile();
+    const meRef = doc(db, "users", user.uid);
+    unsubs.push(listenWithPath(meRef, `users/${user.uid}`, (snap) => {
+      if (snap.exists()) {
+        setProfile(snap.data() as UserProfile);
+      } else {
+        setProfile(null);
+      }
+      setError(null);
+      setLoading(false);
+    }));
+
+    const inboxRef = collection(db, "users", user.uid, "inbox");
+    const inboxQ = query(inboxRef, orderBy("createdAt","desc"), limit(20));
+    unsubs.push(listenWithPath(inboxQ, `users/${user.uid}/inbox/*`, (snap) => {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as BellItem));
+        setBellItems(items);
+        setBellCount(items.filter(item => !item.read).length);
+    }));
+
+    return () => { unsubs.forEach(unsub => unsub()); };
   }, [user]);
 
-  return { user, profile, loading, error };
+  return { user, profile, loading, error, bellItems, bellCount };
 }
-
-    
