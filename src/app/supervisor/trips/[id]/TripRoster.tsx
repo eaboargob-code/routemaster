@@ -3,7 +3,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from 'react';
-import { collection, onSnapshot, doc, setDoc, serverTimestamp, getDoc, writeBatch, increment, type DocumentData } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, getDoc, writeBatch, increment, serverTimestamp, type DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useProfile, type UserProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
@@ -35,41 +35,38 @@ interface Passenger {
 }
 
 async function updatePassengerStatus(
-    tripId: string, 
-    studentId: string, 
-    newStatus: Passenger['status'],
-    actor: { uid: string, role: UserProfile['role'] }
+  tripId: string,
+  studentId: string,
+  newStatus: 'pending' | 'boarded' | 'absent' | 'dropped',
+  actor: { uid: string, role: UserProfile['role'] }
 ) {
-    const passengerRef = doc(db, `trips/${tripId}/passengers`, studentId);
-    const tripRef = doc(db, `trips`, tripId);
+  const passengerRef = doc(db, `trips/${tripId}/passengers`, studentId);
+  const tripRef      = doc(db, `trips`, tripId);
 
-    const passengerSnap = await getDoc(passengerRef);
-    if (!passengerSnap.exists()) {
-        throw new Error("Passenger not found in roster.");
-    }
-    const oldStatus = passengerSnap.data().status as Passenger['status'];
-    
-    if (oldStatus === newStatus) return; // No change needed
+  const passengerSnap = await getDoc(passengerRef);
+  if (!passengerSnap.exists()) throw new Error("Passenger not found in roster.");
+  const oldStatus = passengerSnap.data().status;
+  if (oldStatus === newStatus) return;
 
-    const batch = writeBatch(db);
+  const batch = writeBatch(db);
 
-    // 1. Update passenger document
-    const passengerUpdate: any = {
-        status: newStatus,
-        updatedBy: actor.uid,
-        updatedAt: serverTimestamp(),
-    };
-    if (newStatus === 'boarded') passengerUpdate.boardedAt = serverTimestamp();
-    if (newStatus === 'dropped') passengerUpdate.droppedAt = serverTimestamp();
-    batch.set(passengerRef, passengerUpdate, { merge: true });
+  // 🔹 use serverTimestamp everywhere
+  const update: any = {
+    status: newStatus,
+    updatedBy: actor.uid,
+    updatedAt: serverTimestamp(),
+  };
+  if (newStatus === 'boarded') update.boardedAt = serverTimestamp();
+  if (newStatus === 'dropped') update.droppedAt = serverTimestamp();
 
-    // 2. Atomically update counters on the trip document
-    const counterUpdate: Record<string, any> = {};
-    counterUpdate[`counts.${oldStatus}`] = increment(-1);
-    counterUpdate[`counts.${newStatus}`] = increment(1);
-    batch.update(tripRef, counterUpdate);
+  batch.set(passengerRef, update, { merge: true });
 
-    await batch.commit();
+  const counters: Record<string, any> = {};
+  if (oldStatus) counters[`counts.${oldStatus}`] = increment(-1);
+  counters[`counts.${newStatus}`] = increment(1);
+  batch.update(tripRef, counters);
+
+  await batch.commit();
 }
 
 export function Roster({ tripId, canEdit }: RosterProps) {
