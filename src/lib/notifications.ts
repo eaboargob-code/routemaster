@@ -58,7 +58,7 @@ export function onForegroundNotification(
 
 // Optional: write to a bell feed (works even without push)
 export async function logBell(uid: string, n: { title: string; body: string; data?: any }) {
-  await addDoc(collection(db, "users", uid, "notifications"), {
+  await addDoc(collection(db, "users", uid, "inbox"), {
     ...n,
     createdAt: serverTimestamp(),
     read: false,
