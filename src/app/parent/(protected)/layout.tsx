@@ -9,7 +9,7 @@ import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
 import { LogOut, ShieldAlert, HeartHandshake, Bell, CheckCheck } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
-import { onForegroundNotification, logBell } from "@/lib/notifications";
+import { onForegroundNotification, logBell, registerFcmToken } from "@/lib/notifications";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,12 +124,12 @@ function Header({ notifications, unreadCount, onClearNotifications, childNameMap
                         {notifications.length > 0 ? (
                             <>
                                 {notifications.map(n => {
-                                     const displayName = n.studentName ?? (n.studentId ? childNameMap[n.studentId] : null) ?? n.body;
+                                     const displayName = n.studentName ?? childNameMap[n.studentId ?? ''] ?? n.body;
                                      return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
                                         <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
-                                            {displayName} — {n.body}
+                                            {displayName}
                                         </div>
                                         <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>
@@ -194,7 +194,7 @@ function AccessDeniedScreen({ message, details }: { message: string, details?: s
 
 export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, profile, loading: profileLoading } = useProfile();
+  const { user, profile, loading: profileLoading, error: profileError } = useProfile();
   const { toast } = useToast();
   const { items: notifications, unreadCount, handleClearNotifications } = useInbox();
   
