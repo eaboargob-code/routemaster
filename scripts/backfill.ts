@@ -264,7 +264,7 @@ async function backfillPassengers(
 
 
 /**
- * Backfills the 'students' collection to denormalize routeName and busCode.
+ * Backfills the 'students' collection to add schoolId and denormalize route/bus info.
  */
 async function backfillStudents(
   db: admin.firestore.Firestore,
@@ -287,36 +287,42 @@ async function backfillStudents(
   busesSnap.forEach(doc => busesCache.set(doc.id, doc.data().busCode));
   console.log(`Cached ${busesCache.size} buses.`);
 
-  // 2. Iterate through students
-  const studentsSnap = await db.collection('students').where('schoolId', '==', schoolId).get();
-  console.log(`Scanning ${studentsSnap.size} students...`);
+  // 2. Iterate through all students (not just one school)
+  const studentsSnap = await db.collection('students').get();
+  console.log(`Scanning ${studentsSnap.size} total students...`);
 
   for (const studentDoc of studentsSnap.docs) {
     counters.scanned++;
     const studentData = studentDoc.data();
     const updates: { [key: string]: any } = {};
-
-    // Check and update routeName
-    if (studentData.assignedRouteId && routesCache.has(studentData.assignedRouteId)) {
-      const expectedRouteName = routesCache.get(studentData.assignedRouteId);
-      if (studentData.routeName !== expectedRouteName) {
-        updates.routeName = expectedRouteName;
-      }
-    } else if (studentData.routeName) {
-      // If route is unassigned but field exists, remove it.
-      updates.routeName = admin.firestore.FieldValue.delete();
-    }
     
-    // Check and update busCode
-    if (studentData.assignedBusId && busesCache.has(studentData.assignedBusId)) {
-      const expectedBusCode = busesCache.get(studentData.assignedBusId);
-      if (studentData.busCode !== expectedBusCode) {
-        updates.busCode = expectedBusCode;
-      }
-    } else if (studentData.busCode) {
-      // If bus is unassigned but field exists, remove it.
-      updates.busCode = admin.firestore.FieldValue.delete();
+    // Add schoolId if missing
+    if (!studentData.schoolId) {
+        updates.schoolId = schoolId;
     }
+
+    // Check and update routeName if student belongs to the target school
+    if (studentData.schoolId === schoolId || updates.schoolId === schoolId) {
+        if (studentData.assignedRouteId && routesCache.has(studentData.assignedRouteId)) {
+            const expectedRouteName = routesCache.get(studentData.assignedRouteId);
+            if (studentData.routeName !== expectedRouteName) {
+                updates.routeName = expectedRouteName;
+            }
+        } else if (studentData.routeName) {
+            updates.routeName = admin.firestore.FieldValue.delete();
+        }
+        
+        // Check and update busCode if student belongs to the target school
+        if (studentData.assignedBusId && busesCache.has(studentData.assignedBusId)) {
+            const expectedBusCode = busesCache.get(studentData.assignedBusId);
+            if (studentData.busCode !== expectedBusCode) {
+                updates.busCode = expectedBusCode;
+            }
+        } else if (studentData.busCode) {
+            updates.busCode = admin.firestore.FieldValue.delete();
+        }
+    }
+
 
     if (Object.keys(updates).length > 0) {
       counters.updated++;

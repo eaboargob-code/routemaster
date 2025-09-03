@@ -119,6 +119,8 @@ async function seedPassengersForTrip(
       const CHUNK_SIZE = 10;
       for (let i = 0; i < studentIdsArray.length; i += CHUNK_SIZE) {
         const chunk = studentIdsArray.slice(i, i + CHUNK_SIZE);
+        if (chunk.length === 0) continue;
+
         const parentQuery = query(parentStudentsCol, where('schoolId', '==', trip.schoolId), where('studentIds', 'array-contains-any', chunk));
         const parentLinksSnap = await getDocs(parentQuery);
         parentLinksSnap.forEach(doc => {

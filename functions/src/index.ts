@@ -117,4 +117,3 @@ export const onPassengerStatusChange = functions.firestore
     writes.push(batch.commit());
     await Promise.all(writes);
   });
-
