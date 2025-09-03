@@ -32,6 +32,7 @@ interface Passenger {
     id: string;
     name: string;
     studentName?: string;
+    schoolId: string;
     status: 'pending' | 'boarded' | 'absent' | 'dropped';
 }
 
@@ -46,7 +47,8 @@ async function updatePassengerStatus(
 
   const passengerSnap = await getDoc(passengerRef);
   if (!passengerSnap.exists()) throw new Error("Passenger not found in roster.");
-  const oldStatus = passengerSnap.data().status;
+  const oldData = passengerSnap.data();
+  const oldStatus = oldData.status;
   if (oldStatus === newStatus) return;
 
   const batch = writeBatch(db);
@@ -59,6 +61,9 @@ async function updatePassengerStatus(
   };
   if (newStatus === 'boarded') update.boardedAt = serverTimestamp();
   if (newStatus === 'dropped') update.droppedAt = serverTimestamp();
+  
+  // Ensure schoolId is present using set with merge
+  update.schoolId = oldData.schoolId;
 
   batch.set(passengerRef, update, { merge: true });
 
