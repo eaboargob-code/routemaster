@@ -114,7 +114,7 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
               console.log(`[PARENT-UPDATE] Got update for trips/${tripId}/passengers/${initialStudent.id}`);
               setTripStatus(snap.exists() ? (snap.data() as TripPassenger) : null);
             },
-            (err) => console.error(`Error listening to passenger ${initialStudent.id}`, err)
+            (err) => console.error(`[PARENT-LISTEN ERROR] passenger ${initialStudent.id}`, err)
           );
 
           // Listen to trip for location updates
@@ -126,7 +126,7 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
                const t = snap.data() as TripLocation;
                setLastLocationUpdate(t.lastLocation?.at ?? null);
             },
-            (err) => console.error(`Error listening to trip ${tripId}`, err)
+            (err) => console.error(`[PARENT-LISTEN ERROR] trip ${tripId}`, err)
           );
 
         } else {
@@ -145,8 +145,14 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
     findTripAndListen();
 
     return () => {
-      unsubPassenger?.();
-      unsubTrip?.();
+      if (unsubPassenger) {
+        console.log(`[PARENT-UNSUB] Detaching listener from passenger ${initialStudent.id}`);
+        unsubPassenger();
+      }
+       if (unsubTrip) {
+        console.log(`[PARENT-UNSUB] Detaching listener from trip`);
+        unsubTrip();
+      }
     };
   }, [initialStudent.id, initialStudent.schoolId]);
 
