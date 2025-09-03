@@ -11,7 +11,6 @@ import {
   getDocs,
   doc,
   getDoc,
-  documentId,
   DocumentData,
   Timestamp,
   orderBy,
@@ -292,26 +291,38 @@ export default function ParentDashboardPage() {
         const parentLinkRef = doc(db, "parentStudents", user.uid);
         const linkDocSnap = await getDoc(parentLinkRef);
 
-        const linkedIds: string[] =
+        const studentIds: string[] =
           (linkDocSnap.exists() && (linkDocSnap.data().studentIds as string[])) ||
           [];
 
-        if (linkedIds.length === 0) {
+        if (studentIds.length === 0) {
           setChildren([]);
           setIsLoading(false);
           return;
         }
 
         // 2) Fetch the specific student docs by ID.
-        const studentsQuery = query(
-          collection(db, "students"),
-          where(documentId(), "in", linkedIds)
-        );
-        const studentsSnapshot = await getDocs(studentsQuery);
+        // Firestore's 'in' query is limited to 30 items per query.
+        const CHUNK_SIZE = 30;
+        const studentData: Student[] = [];
+        for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
+            const chunk = studentIds.slice(i, i + CHUNK_SIZE);
+            const studentsQuery = query(
+              collection(db, "students"),
+              where(doc(db, "students", "x").parent.path, "==", "students"), // This is a workaround to use documentId()
+              where("__name__", "in", chunk.map(id => doc(db, "students", id).path))
+            );
+            
+            const studentsSnapshot = await getDocs(query(
+                collection(db, "students"), 
+                where("__name__", "in", chunk))
+            );
 
-        const studentData = studentsSnapshot.docs
-          .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .filter((s) => s.schoolId === profile.schoolId) as Student[];
+            const chunkData = studentsSnapshot.docs
+              .map((d) => ({ id: d.id, ...(d.data() as any) }))
+              .filter((s) => s.schoolId === profile.schoolId) as Student[];
+            studentData.push(...chunkData);
+        }
 
         setChildren(studentData);
       } catch (e: any) {
