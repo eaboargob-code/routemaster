@@ -1,94 +1,175 @@
 
 rules_version = '2';
-
 service cloud.firestore {
-  match /databases/{database}/documents {
-  
-    // Helper functions
-    function isAuth() {
-      return request.auth != null;
-    }
-    
-    function isRole(role) {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
-    }
-    
-    function isSchoolMember(schoolId) {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+  match /databases/{db}/documents {
+
+    function authed()       { return request.auth != null; }
+    function hasMe()        { return authed() && exists(/databases/$(db)/documents/users/$(request.auth.uid)); }
+    function me()           { return get(/databases/$(db)/documents/users/$(request.auth.uid)); }
+    function myRole()       { return hasMe() ? me().data.role : null; }
+    function mySchool()     { return hasMe() ? me().data.schoolId : null; }
+    function isAdmin()      { return myRole() == "admin"; }
+    function isDriver()     { return myRole() == "driver"; }
+    function isSupervisor() { return myRole() == "supervisor"; }
+    function isParent()     { return myRole() == "parent"; }
+
+    // Option-A parent link helpers
+    function parentLink()    { return get(/databases/$(db)/documents/parentStudents/$(request.auth.uid)); }
+    function hasParentLink() { return exists(/databases/$(db)/documents/parentStudents/$(request.auth.uid)); }
+    function isMyChild(studentId) {
+      return hasParentLink() && studentId in parentLink().data.studentIds;
     }
 
-    // --- Global ---
-    match /{document=**} {
-      allow read, write: if false; // Default deny
+    /* ---------- users ---------- */
+    match /users/{uid} {
+      // Admin directory (school-scoped)
+      allow list: if isAdmin() && mySchool() != null;
+      allow read: if isAdmin() && resource.data.schoolId == mySchool();
+      allow update, delete: if isAdmin() && resource.data.schoolId == mySchool();
+      allow create: if isAdmin() && request.resource.data.schoolId == mySchool();
+
+      // Everyone can read their own profile
+      allow get: if authed() && request.auth.uid == uid;
+
+      // Staff/parent may read specific user docs in their school (name display)
+      allow get: if (isDriver() || isSupervisor() || isParent())
+                 && get(/databases/$(db)/documents/users/$(uid)).data.schoolId == mySchool();
+
+      // Self can update ONLY fcmTokens
+      allow update: if authed()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['fcmTokens']);
     }
 
-    // --- Users ---
-    match /users/{userId} {
-      // Admins can manage all users in their school
-      allow read, write: if isAuth() && isRole('admin') && isSchoolMember(resource.data.schoolId);
-      // Users can read their own profile
-      allow read: if isAuth() && request.auth.uid == userId;
+    /* ---------- users/{uid}/inbox (bell items) ---------- */
+    match /users/{uid}/notifications/{noteId} {
+      // Parent can read their own inbox (queries + doc reads)
+      allow read: if authed() && request.auth.uid == uid;
+      // Allow the client to mark read/delete its own items if you want
+      allow update, delete: if authed() && request.auth.uid == uid;
+
+      // Create is performed by Cloud Functions with Admin SDK (bypasses rules).
+      // If you also create from client, restrict to self:
+      allow create: if authed() && request.auth.uid == uid;
     }
 
-    // --- Schools (Read-only reference data) ---
-    match /schools/{schoolId} {
-      allow read: if isAuth();
-    }
-    
-    // --- Students & Parents ---
-    match /students/{studentId} {
-      allow read, write: if isAuth() && isRole('admin') && isSchoolMember(resource.data.schoolId);
-    }
-    
+    /* ---------- parentStudents (Option A) ---------- */
     match /parentStudents/{parentId} {
-        // Admins can manage all links in their school
-        allow read, write: if isAuth() && isRole('admin') && isSchoolMember(resource.data.schoolId);
-        // Parents can read their own student links
-        allow read: if isAuth() && request.auth.uid == parentId;
-    }
+      // Parent can read their own link doc
+      allow get: if isParent() && request.auth.uid == parentId;
 
-    // --- Buses & Routes (Admin-managed) ---
-    match /buses/{busId} {
-      allow read, write: if isAuth() && isRole('admin') && isSchoolMember(resource.data.schoolId);
-      allow read: if isAuth() && (isRole('driver') || isRole('supervisor')) && isSchoolMember(resource.data.schoolId);
-    }
-
-    match /routes/{routeId} {
-      allow read, write: if isAuth() && isRole('admin') && isSchoolMember(resource.data.schoolId);
-      allow read: if isAuth() && (isRole('driver') || isRole('supervisor')) && isSchoolMember(resource.data.schoolId);
-    }
-    
-    // --- Trips ---
-    match /trips/{tripId} {
-      allow read: if isAuth() && isSchoolMember(resource.data.schoolId);
-      
-      // Creating trips: drivers, supervisors, or admins
-      allow create: if isAuth() && (isRole('driver') || isRole('supervisor') || isRole('admin'));
-
-      // Updating trips: only specific roles on their school's trips
-      allow update: if isAuth() && isSchoolMember(resource.data.schoolId) && (
-        isRole('admin') || 
-        (isRole('supervisor') && request.auth.uid == resource.data.supervisorId) ||
-        (isRole('driver') && request.auth.uid == resource.data.driverId)
+      // Admin manage link docs within school
+      allow read, write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
       );
-      
-      // --- Passengers Subcollection ---
-      match /passengers/{passengerId} {
-          allow read: if isAuth() && isSchoolMember(get(/databases/$(database)/documents/trips/$(tripId)).data.schoolId);
-          
-          allow create, update: if isAuth() && isSchoolMember(get(/databases/$(database)/documents/trips/$(tripId)).data.schoolId) && (
-            isRole('admin') ||
-            (isRole('supervisor') && request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.supervisorId) ||
-            // Driver can update if they are the trip driver AND they are allowed to supervise
-            (isRole('driver') && request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.driverId && get(/databases/$(database)/documents/trips/$(tripId)).data.allowDriverAsSupervisor == true)
-          );
-      }
+
+      allow list: if isAdmin() && mySchool() != null;
     }
-    
-     // --- Notifications Subcollection ---
-    match /users/{userId}/notifications/{notificationId} {
-        // Users can read/write their own notifications
-        allow read, write: if isAuth() && request.auth.uid == userId;
+
+    /* ---------- routes ---------- */
+    match /routes/{id} {
+      allow list: if isAdmin() && mySchool() != null;
+      allow read, write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
+      );
+      allow read: if (isDriver() || isSupervisor() || isParent())
+                  && resource.data.schoolId == mySchool();
+    }
+
+    /* ---------- buses ---------- */
+    match /buses/{id} {
+      allow list: if isAdmin() && mySchool() != null;
+      allow read, write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
+      );
+      allow read: if isDriver() && resource.data.driverId == request.auth.uid;
+      allow read: if (isSupervisor() || isParent())
+                  && resource.data.schoolId == mySchool();
+    }
+
+    /* ---------- trips ---------- */
+    match /trips/{id} {
+      allow list: if isAdmin() && mySchool() != null;
+      allow read, update, delete: if isAdmin() && resource.data.schoolId == mySchool();
+      allow create: if isAdmin() && request.resource.data.schoolId == mySchool();
+
+      // Driver
+      allow create: if isDriver()
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.schoolId == mySchool();
+
+      allow read, update: if isDriver()
+        && resource.data.driverId == request.auth.uid
+        && resource.data.schoolId == mySchool();
+
+      // Supervisor/Parent can READ trips in their school
+      allow read: if (isSupervisor() || isParent())
+        && resource.data.schoolId == mySchool();
+
+      // Supervisor: limited counters update on their own trip
+      allow update: if isSupervisor()
+        && resource.data.schoolId == mySchool()
+        && resource.data.supervisorId == request.auth.uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['counts','updatedAt']);
+    }
+
+    /* ---------- trips/{tripId}/passengers/{studentId} ---------- */
+    match /trips/{tripId}/passengers/{studentId} {
+      function trip() { return get(/databases/$(db)/documents/trips/$(tripId)); }
+
+      // Admin manage within school
+      allow read, write: if isAdmin()
+        && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool());
+
+      // Supervisor manage for assigned trips
+      allow read, write: if isSupervisor()
+        && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+        && trip().data.supervisorId == request.auth.uid;
+
+      // Driver read; write only if acting as supervisor
+      allow read: if isDriver()
+        && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+        && trip().data.driverId == request.auth.uid;
+
+      // Seed pending rows at trip start
+      allow create: if isDriver()
+        && (request.resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+        && trip().data.driverId == request.auth.uid
+        && request.resource.data.status == "pending"
+        && (!("boardedAt" in request.resource.data) || request.resource.data.boardedAt == null)
+        && (!("droppedAt" in request.resource.data) || request.resource.data.droppedAt == null);
+
+      // Driver updates only when allowed as supervisor
+      allow update, delete: if isDriver()
+        && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+        && trip().data.driverId == request.auth.uid
+        && trip().data.allowDriverAsSupervisor == true;
+
+      // Parent: read only their child's passenger rows in their school
+      allow read: if isParent()
+        && (resource.data.schoolId == mySchool() || trip().data.schoolId == mySchool())
+        && isMyChild(studentId);
+    }
+
+    /* ---------- students ---------- */
+    match /students/{id} {
+      allow list: if isAdmin() && mySchool() != null;
+      allow write: if isAdmin() && (
+        (resource != null && resource.data.schoolId == mySchool()) ||
+        (request.resource.data.schoolId == mySchool())
+      );
+
+      // Staff
+      allow read: if (isAdmin() || isDriver() || isSupervisor())
+        && resource.data.schoolId == mySchool();
+
+      // Parent: only their child in same school
+      allow read: if isParent()
+        && resource.data.schoolId == mySchool()
+        && isMyChild(id);
     }
   }
 }
