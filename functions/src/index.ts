@@ -104,6 +104,7 @@ export const onPassengerStatusChange = functions.firestore
                 studentId,
                 tripId,
                 status: statusNow,
+                studentName, // send name in data payload for toasts
               },
             });
           } catch (e) {

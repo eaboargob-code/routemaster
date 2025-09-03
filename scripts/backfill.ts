@@ -194,7 +194,9 @@ async function backfillRoutes(
 
 
 /**
- * Backfills the 'passengers' subcollection for recent trips.
+ * Backfills the 'passengers' subcollection for all trips.
+ * Ensures `schoolId` and `studentId` fields exist.
+ * Re-keys any documents where the doc.id does not match doc.data().studentId.
  */
 async function backfillPassengers(
   db: admin.firestore.Firestore,
@@ -204,36 +206,62 @@ async function backfillPassengers(
   console.log('\nStarting backfill for "passengers" subcollections...');
   const counters: Counters = { scanned: 0, updated: 0 };
 
-  const tripsSnapshot = await db.collection('trips')
-      .where('schoolId', '==', SCHOOL_ID_TO_BACKFILL)
-      .get();
-      
-  console.log(`Found ${tripsSnapshot.docs.length} trips for school ${SCHOOL_ID_TO_BACKFILL}. Checking passenger subcollections...`);
+  const tripsSnapshot = await db.collectionGroup('passengers').get();
+  console.log(`Found ${tripsSnapshot.docs.length} total passenger documents across all trips.`);
+  
+  const toDelete: admin.firestore.DocumentReference[] = [];
 
-  for (const tripDoc of tripsSnapshot.docs) {
-    const tripData = tripDoc.data();
-    if (!tripData.schoolId) continue;
+  for (const passengerDoc of tripsSnapshot.docs) {
+    counters.scanned++;
+    const passengerData = passengerDoc.data();
+    const updates: { [key: string]: any } = {};
 
-    const passengersSnapshot = await tripDoc.ref.collection('passengers').get();
-    
-    for (const passengerDoc of passengersSnapshot.docs) {
-      counters.scanned++;
-      const passengerData = passengerDoc.data();
-      
-      if (passengerData.schoolId === undefined) {
-        const updates = { schoolId: tripData.schoolId };
-        counters.updated++;
-        console.log(` -> [${passengerDoc.ref.path}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
-        if (!isDryRun) {
-          writer.update(passengerDoc.ref, updates);
-        }
+    // Ensure schoolId exists
+    if (!passengerData.schoolId) {
+      const tripRef = passengerDoc.ref.parent.parent!;
+      const tripSnap = await tripRef.get();
+      if (tripSnap.exists() && tripSnap.data()?.schoolId) {
+        updates.schoolId = tripSnap.data()!.schoolId;
       }
     }
+    
+    // Ensure studentId field exists
+    if (!passengerData.studentId) {
+      updates.studentId = passengerDoc.id;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      console.log(` -> [${passengerDoc.ref.path}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
+      counters.updated++;
+      if (!isDryRun) {
+        writer.update(passengerDoc.ref, updates);
+      }
+    }
+
+    // Check if doc ID needs to be re-keyed
+    if (passengerData.studentId && passengerDoc.id !== passengerData.studentId) {
+       console.log(` -> [${passengerDoc.ref.path}] ${isDryRun ? 'Needs re-keying to ' : 'Re-keying to '} ${passengerData.studentId}`);
+       counters.updated++;
+       if (!isDryRun) {
+            const newRef = passengerDoc.ref.parent.doc(passengerData.studentId);
+            writer.create(newRef, passengerData);
+            toDelete.push(passengerDoc.ref); // Schedule old doc for deletion
+       }
+    }
+  }
+
+  // Perform deletions after all other writes
+  if (!isDryRun && toDelete.length > 0) {
+      console.log(`Deleting ${toDelete.length} old passenger documents after re-keying...`);
+      for (const ref of toDelete) {
+          writer.delete(ref);
+      }
   }
 
   console.log(`"passengers" subcollection scan complete.`);
   return counters;
 }
+
 
 /**
  * Backfills the 'students' collection to denormalize routeName and busCode.

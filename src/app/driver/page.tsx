@@ -115,20 +115,25 @@ async function seedPassengersForTrip(
   const studentIdsArray = Array.from(seenStudentIds);
   const parentLinksByStudent = new Map<string, string[]>();
   if (studentIdsArray.length > 0) {
-      const parentQuery = query(parentStudentsCol, where('schoolId', '==', trip.schoolId), where('studentIds', 'array-contains-any', studentIdsArray));
-      const parentLinksSnap = await getDocs(parentQuery);
-      parentLinksSnap.forEach(doc => {
-          const parentId = doc.id;
-          const data = doc.data();
-          data.studentIds.forEach((studentId: string) => {
-              if (seenStudentIds.has(studentId)) {
-                  if (!parentLinksByStudent.has(studentId)) {
-                      parentLinksByStudent.set(studentId, []);
-                  }
-                  parentLinksByStudent.get(studentId)!.push(parentId);
-              }
-          });
-      });
+      // Chunk the array because 'array-contains-any' is limited to 10 items
+      const CHUNK_SIZE = 10;
+      for (let i = 0; i < studentIdsArray.length; i += CHUNK_SIZE) {
+        const chunk = studentIdsArray.slice(i, i + CHUNK_SIZE);
+        const parentQuery = query(parentStudentsCol, where('schoolId', '==', trip.schoolId), where('studentIds', 'array-contains-any', chunk));
+        const parentLinksSnap = await getDocs(parentQuery);
+        parentLinksSnap.forEach(doc => {
+            const parentId = doc.id;
+            const data = doc.data();
+            data.studentIds.forEach((studentId: string) => {
+                if (seenStudentIds.has(studentId)) {
+                    if (!parentLinksByStudent.has(studentId)) {
+                        parentLinksByStudent.set(studentId, []);
+                    }
+                    parentLinksByStudent.get(studentId)!.push(parentId);
+                }
+            });
+        });
+      }
   }
 
   const batch = writeBatch(fs);
@@ -137,7 +142,7 @@ async function seedPassengersForTrip(
     const data = s.data();
     batch.set(pRef, {
       studentId: s.id,
-      name: data.name ?? s.id,
+      studentName: data.name ?? s.id, // <-- Caching studentName
       schoolId: trip.schoolId,
       parentUids: parentLinksByStudent.get(s.id) || [], // <-- New field
       status: "pending",
