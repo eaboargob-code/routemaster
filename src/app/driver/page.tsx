@@ -117,7 +117,7 @@ async function seedPassengersForTrip(
 
   const studentMap = new Map<string, DocumentData>();
   [...byRouteStudents, ...byBusStudents].forEach(s => studentMap.set(s.id, s));
-  const students = Array.from(studentMap.values());
+  const students = Array.from(studentMap.values()).sort((a,b)=>a.name.localeCompare(b.name));
   console.debug('[ROSTER] merged students', students.length);
 
 
@@ -125,7 +125,6 @@ async function seedPassengersForTrip(
   const studentIds = Array.from(studentMap.keys());
   const parentLinksByStudent = new Map<string, string[]>();
   if (studentIds.length > 0) {
-      // Chunk the array because 'array-contains-any' is limited to 10 items
       const CHUNK_SIZE = 10;
       for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
         const chunk = studentIds.slice(i, i + CHUNK_SIZE);
@@ -149,19 +148,24 @@ async function seedPassengersForTrip(
   }
 
   const batch = writeBatch(fs);
-  for (const s of students) {
-    const pRef = doc(fs, `trips/${trip.id}/passengers/${s.id}`);
-    batch.set(pRef, {
-      studentId: s.id,
-      studentName: s.name ?? s.id,
-      schoolId: trip.schoolId,
-      parentUids: parentLinksByStudent.get(s.id) || [],
-      status: "pending",
-      boardedAt: null,
-      droppedAt: null,
-      updatedAt: serverTimestamp(),
-    }, { merge: true });
-  }
+  const passengerRefs = students.map(s => doc(fs, `trips/${trip.id}/passengers`, s.id));
+  const existingDocs = await Promise.all(passengerRefs.map(ref => getDoc(ref)));
+
+  students.forEach((s, index) => {
+      if (!existingDocs[index].exists()) {
+          batch.set(passengerRefs[index], {
+              schoolId: trip.schoolId,
+              studentId: s.id,
+              studentName: s.name ?? null,
+              parentUids: parentLinksByStudent.get(s.id) || [],
+              status: "pending",
+              boardedAt: null,
+              droppedAt: null,
+              updatedAt: serverTimestamp(),
+          }, { merge: true });
+      }
+  });
+
 
   await batch.commit();
 
