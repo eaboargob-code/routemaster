@@ -1,4 +1,5 @@
 
+// functions/index.ts
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 admin.initializeApp();
@@ -14,14 +15,30 @@ export const onPassengerStatusChange = functions.firestore
     const afterStatus  = after?.status;
     if (!after || !afterStatus || beforeStatus === afterStatus) return;
 
-    const { studentId } = ctx.params as any;
-    const tripId = ctx.params.tripId as string;
+    const { tripId, studentId } = ctx.params as { tripId: string; studentId: string };
+    const schoolId = (after.schoolId as string) || null;
 
-    // Grab data we need
-    const schoolId = after.schoolId as string | undefined;
-    const studentSnap = await admin.firestore().doc(`students/${studentId}`).get();
-    const student = studentSnap.exists ? studentSnap.data() : {};
-    const studentName = (after.studentName || student?.name || 'Student') as string;
+    // 1) Read passenger row (most reliable for studentName)
+    const passengerSnap = await admin.firestore()
+      .doc(`trips/${tripId}/passengers/${studentId}`)
+      .get();
+    const passenger = passengerSnap.exists ? passengerSnap.data() : undefined;
+
+    // 2) Read student doc (fallback fields)
+    const studentSnap = await admin.firestore()
+      .doc(`students/${studentId}`)
+      .get();
+    const student = studentSnap.exists ? studentSnap.data() : undefined;
+
+    // 3) Resolve studentName from multiple sources
+    const candidateName =
+      (passenger?.studentName as string | undefined) ||
+      (after.studentName as string | undefined) ||
+      (student?.name as string | undefined) ||
+      (student?.displayName as string | undefined) ||
+      ([student?.firstName, student?.lastName].filter(Boolean).join(' ') || undefined);
+
+    const studentName = (candidateName && candidateName.trim()) || 'Student';
 
     // Find parents (Option A: parentStudents/{parentUid}.studentIds contains studentId)
     const parents = await admin.firestore()
@@ -39,6 +56,7 @@ export const onPassengerStatusChange = functions.firestore
     };
     const title = titleMap[afterStatus] || 'Update';
 
+    // **Body now uses the resolved studentName**
     const body = `Student ${studentName} is ${afterStatus}.`;
 
     const batch = admin.firestore().batch();
@@ -56,7 +74,7 @@ export const onPassengerStatusChange = functions.firestore
           schoolId: schoolId ?? p.get('schoolId') ?? null,
           tripId,
           studentId,
-          studentName,
+          studentName,  // <-- write the resolved name for the UI
           status: afterStatus,
         },
       }, { merge: true });
