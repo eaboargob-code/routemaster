@@ -133,16 +133,23 @@ export const onPassengerStatusChange = onDocumentWritten(
     
     // --- Write to Inbox ---
     const inboxBatch = db.batch();
+    const inboxTitle =
+      newStatus === "boarded" ? "On Bus 🚌" :
+      newStatus === "dropped" ? "Dropped Off ✅" :
+      newStatus === "absent"  ? "Marked Absent ⚠️" :
+      "Status Updated";
+
     const payload = {
-        title,
-        studentId,
-        studentName,
-        tripId,
-        schoolId: schoolId,
-        type: newStatus,
-        body: `${studentName} is ${newStatus}.`,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        read: false,
+      title: inboxTitle,
+      body: `${studentName} is ${newStatus}.`,
+      studentId,
+      studentName,
+      tripId,
+      schoolId: schoolId,
+      status: newStatus,
+      read: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      data: messageData
     };
       
     parentDocs.forEach(parentDoc => {
