@@ -37,7 +37,7 @@ interface Notification {
 function useInbox() {
   const { user } = useProfile();
   const [items, setItems] = useState<Notification[]>([]);
-  const [count, setCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -52,7 +52,7 @@ function useInbox() {
       const rows: Notification[] = [];
       snap.forEach(d => rows.push({ id: d.id, ...(d.data() as any) }));
       setItems(rows);
-      setCount(rows.filter(r => !r.read).length);
+      setUnreadCount(rows.filter(r => !r.read).length);
     }, (err) => {
       console.error("[Inbox] listener error:", err);
     });
@@ -71,10 +71,10 @@ function useInbox() {
         batch.update(notifRef, { read: true });
     });
     
-    await batch.commit();
+    await batch.commit().catch(err => console.error("Failed to mark notifications as read", err));
   }, [user?.uid, items]);
 
-  return { items, count, handleClearNotifications };
+  return { items, unreadCount, handleClearNotifications };
 }
 
 
@@ -114,7 +114,7 @@ function Header({ notifications, unreadCount, onClearNotifications }: { notifica
                                 {notifications.map(n => (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
-                                        <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>{n.studentName ?? n.body}</div>
+                                        <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>{n.studentName || n.body}</div>
                                         <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>
                                 ))}
@@ -179,7 +179,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, profile, loading, error } = useProfile();
   const { toast } = useToast();
-  const { items: notifications, count: unreadCount, handleClearNotifications } = useInbox();
+  const { items: notifications, unreadCount, handleClearNotifications } = useInbox();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -190,7 +190,6 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 
     // Set up foreground notification listener
     const unsubscribe = onForegroundNotification((notification) => {
-        console.log("onMessage:", notification);
         toast({
             title: notification.title,
             description: notification.body,

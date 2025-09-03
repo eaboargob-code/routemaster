@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { formatDistanceToNowStrict } from "date-fns";
+import { formatDistanceToNow, formatDistanceToNowStrict } from "date-fns";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatRelative(ts?: any) {
   const d = ts?.toDate?.() as Date | undefined;
-  if (!d) return "just now";
+  if (!d) return "";
   const ms = Date.now() - d.getTime();
   if (ms < 60_000) return "just now";
   return formatDistanceToNowStrict(d, { addSuffix: true });

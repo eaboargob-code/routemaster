@@ -109,10 +109,8 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
           
           // Listen to passenger status
           const passengerRef = doc(db, "trips", tripId, "passengers", initialStudent.id);
-          console.log(`[PARENT-LISTEN] Attaching listener to trips/${tripId}/passengers/${initialStudent.id}`);
           unsubPassenger = onSnapshot(passengerRef, 
             (snap) => {
-              console.log(`[PARENT-UPDATE] Got update for trips/${tripId}/passengers/${initialStudent.id}`);
               setTripStatus(snap.exists() ? (snap.data() as TripPassenger) : null);
             },
             (err) => console.error(`[PARENT-LISTEN ERROR] passenger ${initialStudent.id}`, err)
@@ -120,10 +118,8 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
 
           // Listen to trip for location updates
           const tripRef = doc(db, "trips", tripId);
-           console.log(`[PARENT-LISTEN] Attaching listener to trips/${tripId}`);
           unsubTrip = onSnapshot(tripRef, 
             (snap) => {
-               console.log(`[PARENT-UPDATE] Got update for trips/${tripId}`);
                const t = snap.data() as TripLocation;
                setLastLocationUpdate(t.lastLocation?.at ?? null);
             },
@@ -146,14 +142,8 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
     findTripAndListen();
 
     return () => {
-      if (unsubPassenger) {
-        console.log(`[PARENT-UNSUB] Detaching listener from passenger ${initialStudent.id}`);
-        unsubPassenger();
-      }
-       if (unsubTrip) {
-        console.log(`[PARENT-UNSUB] Detaching listener from trip`);
-        unsubTrip();
-      }
+      unsubPassenger?.();
+      unsubTrip?.();
     };
   }, [initialStudent.id, initialStudent.schoolId]);
 
@@ -218,18 +208,26 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
         </div>
         {getStatusBadge()}
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-1">
         {lastLocationUpdate && (
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Clock className="h-4 w-4" />
             <span>
               Last bus location update:{" "}
-              {format(lastLocationUpdate.toDate(), "p")}
+              {formatRelative(lastLocationUpdate)}
             </span>
           </div>
         )}
-        {tripStatus?.status === 'dropped' &&
-          tripStatus.droppedAt && (
+        {tripStatus?.status === 'boarded' && tripStatus.boardedAt && (
+            <div className="text-sm text-muted-foreground flex items-center gap-2">
+              <Clock className="h-4 w-4" />
+              <span>
+                Boarded at:{" "}
+                {formatRelative(tripStatus.boardedAt)}
+              </span>
+            </div>
+        )}
+        {tripStatus?.status === 'dropped' && tripStatus.droppedAt && (
             <div className="text-sm text-muted-foreground flex items-center gap-2">
               <Clock className="h-4 w-4" />
               <span>
@@ -237,7 +235,7 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
                 {formatRelative(tripStatus.droppedAt)}
               </span>
             </div>
-          )}
+        )}
       </CardContent>
     </Card>
   );
@@ -282,7 +280,6 @@ export default function ParentDashboardPage() {
     if (!user?.uid) return;
     (async () => {
       const t = await registerFcmToken(user.uid);
-      console.log("FCM token (parent):", t);
     })();
   }, [user?.uid]);
   
