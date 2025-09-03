@@ -114,7 +114,9 @@ function Header({ notifications, unreadCount, onClearNotifications }: { notifica
                                 {notifications.map(n => (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
-                                        <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>{n.studentName || n.body}</div>
+                                        <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
+                                            {n.body}
+                                        </div>
                                         <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>
                                 ))}
