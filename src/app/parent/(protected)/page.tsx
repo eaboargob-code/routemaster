@@ -332,7 +332,9 @@ export default function ParentDashboardPage() {
       }
     };
 
-    fetchChildrenData();
+    if (profile) { // Wait for profile to be loaded
+        fetchChildrenData();
+    }
   }, [user, profile]);
 
   if (isLoading) return <LoadingState />;

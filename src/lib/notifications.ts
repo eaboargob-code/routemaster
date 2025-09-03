@@ -21,7 +21,12 @@ export async function registerFcmToken(uid: string) {
     const token = await getToken(messaging, { vapidKey: VAPID });
     if (!token) return null;
 
-    await updateDoc(doc(db, "users", uid), { fcmTokens: arrayUnion(token) });
+    // This specifically uses `arrayUnion` to only add the new token,
+    // leaving other user document fields untouched.
+    await updateDoc(doc(db, "users", uid), {
+      fcmTokens: arrayUnion(token)
+    });
+
     console.log("[FCM] token saved:", token.slice(0, 12) + "…");
     return token;
   } catch (e) {
@@ -59,3 +64,4 @@ export async function logBell(uid: string, n: { title: string; body: string; dat
     read: false,
   });
 }
+
