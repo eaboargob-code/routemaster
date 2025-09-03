@@ -126,7 +126,7 @@ function Header({ notifications, unreadCount, onClearNotifications, childNameMap
                             <>
                                 {notifications.map(n => {
                                      const displayName = n.studentName ?? childNameMap[n.studentId ?? ''] ?? 'Student';
-                                     const body = n.body.replace(n.studentId ?? '', displayName); // Replace ID in body if present
+                                     const body = n.body.replace(n.studentId ?? '', displayName).replace(n.studentName ?? '', displayName);
                                      return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
