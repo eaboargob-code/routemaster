@@ -307,11 +307,7 @@ export default function ParentDashboardPage() {
         const studentData: Student[] = [];
         for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
             const chunk = studentIds.slice(i, i + CHUNK_SIZE);
-            const studentsQuery = query(
-              collection(db, "students"),
-              where(doc(db, "students", "x").parent.path, "==", "students"), // This is a workaround to use documentId()
-              where("__name__", "in", chunk.map(id => doc(db, "students", id).path))
-            );
+            if (chunk.length === 0) continue;
             
             const studentsSnapshot = await getDocs(query(
                 collection(db, "students"), 
