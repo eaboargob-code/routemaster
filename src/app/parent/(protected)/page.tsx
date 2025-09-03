@@ -19,7 +19,6 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { registerFcmToken } from "@/lib/notifications";
-import { listenWithPath } from "@/lib/firestore-helpers";
 
 import {
   Card,
@@ -72,11 +71,6 @@ interface TripLocation {
   }
 }
 
-interface ChildStatus extends Student {
-  tripStatus?: TripPassenger | null;
-  lastLocationUpdate?: Timestamp | null;
-}
-
 /* -------------------- Child card -------------------- */
 
 function StudentCard({ student: initialStudent }: { student: Student }) {
@@ -115,9 +109,10 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
           
           // Listen to passenger status
           const passengerRef = doc(db, "trips", tripId, "passengers", initialStudent.id);
+          console.log(`[PARENT-LISTEN] Attaching listener to trips/${tripId}/passengers/${initialStudent.id}`);
           unsubPassenger = onSnapshot(passengerRef, 
             (snap) => {
-              console.log(`[LISTENER] Got update for trips/${tripId}/passengers/${initialStudent.id}`);
+              console.log(`[PARENT-UPDATE] Got update for trips/${tripId}/passengers/${initialStudent.id}`);
               setTripStatus(snap.exists() ? (snap.data() as TripPassenger) : null);
             },
             (err) => console.error(`Error listening to passenger ${initialStudent.id}`, err)
@@ -125,9 +120,10 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
 
           // Listen to trip for location updates
           const tripRef = doc(db, "trips", tripId);
+           console.log(`[PARENT-LISTEN] Attaching listener to trips/${tripId}`);
           unsubTrip = onSnapshot(tripRef, 
             (snap) => {
-               console.log(`[LISTENER] Got update for trips/${tripId}`);
+               console.log(`[PARENT-UPDATE] Got update for trips/${tripId}`);
                const t = snap.data() as TripLocation;
                setLastLocationUpdate(t.lastLocation?.at ?? null);
             },
@@ -374,3 +370,5 @@ export default function ParentDashboardPage() {
     </div>
   );
 }
+
+    
