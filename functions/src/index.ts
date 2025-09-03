@@ -1,163 +1,118 @@
 
 import * as admin from "firebase-admin";
-import { onDocumentWritten } from "firebase-functions/v2/firestore";
-import { logger } from "firebase-functions/v2";
+import * as functions from "firebase-functions";
 
 admin.initializeApp();
+const db = admin.firestore();
 
-export const onPassengerStatusChange = onDocumentWritten(
-  {
-    document: "trips/{tripId}/passengers/{studentId}",
-    region: "us-central1", // keep consistent across your functions
-  },
-  async (event) => {
-    const after = event.data?.after?.data() || null;
-    const before  = event.data?.before?.data()  || null;
+/**
+ * When a passenger's status changes, notify all parents
+ * whose parentStudents doc contains this studentId.
+ */
+export const onPassengerStatusChange = functions.firestore
+  .document("trips/{tripId}/passengers/{studentId}")
+  .onWrite(async (change, ctx) => {
+    const after = change.after.exists ? change.after.data() : null;
+    const before = change.before.exists ? change.before.data() : null;
+    if (!after) return; // deleted
 
-    if (!after) {
-      logger.info("Deleted passenger doc; skipping.");
-      return;
+    // Only fire on meaningful status changes
+    const statusNow: string | undefined = after.status;
+    const statusBefore: string | undefined = before?.status;
+    if (!statusNow || statusNow === statusBefore) return;
+
+    const { tripId, studentId } = ctx.params as { tripId: string; studentId: string };
+    const schoolId: string = after.schoolId;
+
+    // 1) Get student name
+    let studentName = studentId;
+    try {
+      const studentSnap = await db.doc(`students/${studentId}`).get();
+      if (studentSnap.exists) {
+        const s = studentSnap.data()!;
+        if (typeof s.name === "string" && s.name.trim().length > 0) {
+          studentName = s.name.trim();
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch student name:", e);
     }
 
-    // Only when status actually changes
-    const oldStatus = before?.status ?? null;
-    const newStatus = after?.status ?? null;
-    if (!newStatus || oldStatus === newStatus) {
-      logger.info("No status change; skipping.", { oldStatus, newStatus });
-      return;
-    }
-
-    const { tripId, studentId } = event.params as { tripId: string; studentId: string };
-    const schoolId = after.schoolId;
-    if (!schoolId) {
-        logger.warn("Passenger doc is missing schoolId; skipping.", { tripId, studentId });
-        return;
-    }
-    
-    const db = admin.firestore();
-
-    // 🔹 fetch the student's name
-    const studentSnap = await db.collection("students").doc(studentId).get();
-    const studentName =
-      (studentSnap.exists && typeof studentSnap.data()?.name === "string" && studentSnap.data()!.name.trim())
-        ? (studentSnap.data()!.name as string)
-        : studentId; // <-- fallback so it's never undefined
-
-    // Fetch trip for context/routeName
-    const tripSnap = await db.doc(`trips/${tripId}`).get();
-    const routeName = tripSnap.exists() ? (tripSnap.data()?.routeName as string) : "";
-
-    // 🔹 find parents
+    // 2) Find all parents that have this student linked (Option A shape)
     const parentsSnap = await db
       .collection("parentStudents")
       .where("studentIds", "array-contains", studentId)
-      .where("schoolId", "==", schoolId)
       .get();
 
-    if (parentsSnap.empty) {
-      logger.info("No parent links for student; skipping.", { studentId, schoolId });
-      return;
-    }
+    if (parentsSnap.empty) return;
 
-    // --- Prepare Notifications ---
-    const parentUids = parentsSnap.docs.map((d) => d.id);
-    const parentDocs = await admin.firestore().getAll(
-        ...parentUids.map((id) => db.doc(`users/${id}`))
-    );
+    // 3) Prepare common payload
+    const title =
+      statusNow === "boarded"
+        ? "On Bus 🚌"
+        : statusNow === "dropped"
+        ? "Dropped Off ✅"
+        : statusNow === "absent"
+        ? "Marked Absent ⚠️"
+        : "Passenger Update";
 
-    const titleByStatus: Record<string, string> = {
-      boarded: `${studentName} boarded the bus 🚌`,
-      dropped: `${studentName} arrived at destination ✅`,
-      absent: `${studentName} marked absent ⚠️`,
-      pending: `${studentName} status updated`,
-    };
-    const title = titleByStatus[newStatus] ?? `${studentName} status updated`;
-    const body = routeName
-      ? `Route ${routeName} • ${new Date().toLocaleTimeString()}`
-      : new Date().toLocaleTimeString();
-    
-    const messageData = {
-        tripId,
-        studentId,
-        status: String(newStatus),
-        schoolId: String(schoolId),
-        kind: "passengerStatus",
-        studentName, // include student name
-    };
+    const body = `${studentName} is ${statusNow}.`;
 
-    // --- Send Push Notifications ---
-    const tokens: string[] = [];
-    parentDocs.forEach((snap) => {
-        if (!snap.exists) return;
-        const d = snap.data() as any;
-        if (d?.fcmTokens?.length) {
-            d.fcmTokens.forEach((t: string) => typeof t === "string" && tokens.push(t));
-        }
-    });
+    // 4) Write inbox doc + (optional) FCM fan-out
+    const writes: Promise<any>[] = [];
 
-    if (tokens.length > 0) {
-        logger.info("Sending push", {
-          tripId, studentId, newStatus, tokensCount: tokens.length,
-        });
+    for (const pDoc of parentsSnap.docs) {
+      const parentUid = pDoc.id;
 
-        const message: admin.messaging.MulticastMessage = {
-          notification: { title, body },
-          data: messageData,
-          tokens,
-          android: { priority: "high" },
-          webpush: {
-            fcmOptions: { link: "/parent" },
+      // 4a) Inbox document (this powers the bell dropdown)
+      const inboxRef = db.collection("users").doc(parentUid).collection("inbox").doc();
+      writes.push(
+        inboxRef.set({
+          title,
+          body,
+          studentId,
+          studentName,               // <-- the field we were missing
+          tripId,
+          schoolId,
+          status: statusNow,
+          read: false,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          data: {
+            kind: "passengerStatus",
+            schoolId,
+            studentId,
+            tripId,
+            status: statusNow,
           },
-        };
+        })
+      );
 
-        const res = await admin.messaging().sendEachForMulticast(message);
-        logger.info("Push result", { successCount: res.successCount, failureCount: res.failureCount });
+      // 4b) (Optional) Web push via FCM
+      // If you already send pushes elsewhere, keep that. Otherwise:
+      writes.push(
+        (async () => {
+          try {
+            const userSnap = await db.doc(`users/${parentUid}`).get();
+            const tokens: string[] = (userSnap.data()?.fcmTokens ?? []).filter(Boolean);
+            if (!tokens.length) return;
 
-        // Clean up invalid tokens
-        const invalidTokens = res.responses
-          .map((r, i) => (r.success ? null : tokens[i]))
-          .filter((t): t is string => !!t);
-
-        if (invalidTokens.length > 0) {
-          logger.warn("Removing invalid tokens", { invalidTokensCount: invalidTokens.length });
-          const batch = db.batch();
-          parentDocs.forEach((snap) => {
-              if (!snap.exists) return;
-              batch.update(snap.ref, { fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens) });
-          });
-          await batch.commit().catch(e => logger.error("Failed to remove invalid tokens", { e }));
-        }
-    } else {
-         logger.info("No tokens found for parents; skipping push.", { parentUids });
+            await admin.messaging().sendEachForMulticast({
+              tokens,
+              notification: { title, body },
+              data: {
+                kind: "passengerStatus",
+                schoolId,
+                studentId,
+                tripId,
+                status: statusNow,
+              },
+            });
+          } catch (e) {
+            console.error("FCM fan-out failed for", parentUid, e);
+          }
+        })()
+      );
     }
-    
-    // --- Write to Inbox ---
-    const inboxBatch = db.batch();
-    const inboxTitle =
-      newStatus === "boarded" ? "On Bus 🚌" :
-      newStatus === "dropped" ? "Dropped Off ✅" :
-      newStatus === "absent"  ? "Marked Absent ⚠️" :
-      "Status Updated";
 
-    const payload = {
-      title: inboxTitle,
-      body: `${studentName} is ${newStatus}.`,
-      studentId,
-      studentName,
-      tripId,
-      schoolId: schoolId,
-      status: newStatus,
-      read: false,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      data: messageData
-    };
-      
-    parentDocs.forEach(parentDoc => {
-        if (!parentDoc.exists) return;
-        const inboxRef = parentDoc.ref.collection("inbox").doc();
-        inboxBatch.set(inboxRef, payload);
-    });
-    await inboxBatch.commit();
-    logger.info(`Wrote ${parentDocs.length} inbox item(s)`);
-  }
-);
+    await Promise.all(writes);
+  });
