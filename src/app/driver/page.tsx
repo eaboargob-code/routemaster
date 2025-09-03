@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -216,11 +217,11 @@ export default function DriverPage() {
 
       if (active) {
         setActiveTrip(active as Trip);
-
+        
         // 5) Ensure roster exists (idempotent). Log result; don't block UI.
         seedPassengersForTrip({
           tripId: active.id,
-          schoolId: profile.schoolId,
+          schoolId: active.schoolId,
           routeId: active.routeId ?? null,
           busId: active.busId ?? null,
         })
@@ -234,6 +235,7 @@ export default function DriverPage() {
           .catch((err) =>
             console.error("[seed passengers existing trip]", err)
           );
+
       } else {
         setActiveTrip(null);
       }
@@ -302,7 +304,7 @@ export default function DriverPage() {
         return;
       }
 
-      const newTripData: Omit<Trip, "id"> = {
+      const newTripData: Omit<Trip, "id" | "passengers" | "counts"> = {
         driverId: user.uid,
         busId: bus.id,
         routeId: route?.id || "",
@@ -312,11 +314,9 @@ export default function DriverPage() {
         supervisorId: bus.supervisorId || null,
         allowDriverAsSupervisor: false,
         driverSupervisionLocked: false,
-        passengers: [],
-        counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 },
       };
       const docRef = await addDoc(collection(db, "trips"), newTripData);
-      const finalTrip: Trip = { id: docRef.id, ...newTripData };
+      const finalTrip = { id: docRef.id, ...newTripData } as Trip;
 
       setActiveTrip(finalTrip);
       toast({
