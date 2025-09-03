@@ -22,7 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { formatRelative } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs, serverTimestamp } from "firebase/firestore";
 import ParentDashboardPage from "./page";
 
 interface Notification {
@@ -73,25 +73,25 @@ function useInbox() {
     return () => unsub();
   }, [user?.uid]);
   
-  const handleClearNotifications = useCallback(async () => {
+  const handleMarkAsRead = useCallback(async () => {
     if (!user?.uid) return;
-    const unreadNotifications = items.filter(n => !n.read);
-    if (unreadNotifications.length === 0) return;
+    const toMark = items.filter(i => !i.read).slice(0, 25);
+    if (toMark.length === 0) return;
 
     const batch = writeBatch(db);
-    unreadNotifications.forEach(n => {
+    toMark.forEach(n => {
         const notifRef = doc(db, `users/${user.uid}/inbox`, n.id);
-        batch.update(notifRef, { read: true });
+        batch.update(notifRef, { read: true, readAt: serverTimestamp() });
     });
     
     await batch.commit().catch(err => console.error("Failed to mark notifications as read", err));
   }, [user?.uid, items]);
 
-  return { items, unreadCount, handleClearNotifications };
+  return { items, unreadCount, handleMarkAsRead };
 }
 
 
-function Header({ notifications, unreadCount, onClearNotifications, childNameMap }: { notifications: Notification[], unreadCount: number, onClearNotifications: () => void, childNameMap: Record<string, string> }) {
+function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void, childNameMap: Record<string, string> }) {
     const router = useRouter();
     const handleLogout = async () => {
         await signOut(auth);
@@ -108,12 +108,12 @@ function Header({ notifications, unreadCount, onClearNotifications, childNameMap
             </nav>
              <div className="flex w-full items-center gap-4 md:ml-auto md:gap-2 lg:gap-4">
                 <div className="ml-auto flex-1 sm:flex-initial" />
-                 <DropdownMenu>
+                 <DropdownMenu onOpenChange={(open) => { if (open) onMarkAsRead() }}>
                     <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon" className="relative">
                             <Bell className="h-5 w-5" />
                             {unreadCount > 0 && (
-                                <Badge className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0 text-xs">
+                                <Badge className="absolute -top-1 -right-1 h-5 min-w-5 justify-center rounded-full p-1 text-xs">
                                     {unreadCount}
                                 </Badge>
                             )}
@@ -137,15 +137,6 @@ function Header({ notifications, unreadCount, onClearNotifications, childNameMap
                                     </DropdownMenuItem>
                                      )
                                 })}
-                                {unreadCount > 0 && (
-                                    <>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem onClick={onClearNotifications} className="justify-center text-sm text-primary hover:!bg-primary/10 hover:!text-primary">
-                                            <CheckCheck className="mr-2 h-4 w-4" />
-                                            Mark all as read
-                                        </DropdownMenuItem>
-                                    </>
-                                )}
                             </>
                         ) : (
                             <DropdownMenuItem disabled>No new notifications</DropdownMenuItem>
@@ -198,7 +189,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, profile, loading: profileLoading, error: profileError } = useProfile();
   const { toast } = useToast();
-  const { items: notifications, unreadCount, handleClearNotifications } = useInbox();
+  const { items: notifications, unreadCount, handleMarkAsRead } = useInbox();
   
   // --- Data fetching for children, now in the layout ---
   const [childrenList, setChildrenList] = useState<Student[]>([]);
@@ -314,7 +305,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
       <Header 
         notifications={notifications} 
         unreadCount={unreadCount} 
-        onClearNotifications={handleClearNotifications}
+        onMarkAsRead={handleMarkAsRead}
         childNameMap={childNameMap}
       />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
