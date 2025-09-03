@@ -304,11 +304,11 @@ export default function DriverPage() {
         return;
       }
 
-      const newTripData: Omit<Trip, "id" | "passengers" | "counts"> = {
+      const newTripData = {
         driverId: user.uid,
         busId: bus.id,
         routeId: route?.id || "",
-        schoolId: profile.schoolId,
+        schoolId: profile.schoolId, // <-- REQUIRED
         startedAt: Timestamp.now(),
         status: "active",
         supervisorId: bus.supervisorId || null,
@@ -326,42 +326,24 @@ export default function DriverPage() {
       });
 
       // Seed roster (idempotent)
-      seedPassengersForTrip({
+      const { created } = await seedPassengersForTrip({
         tripId: finalTrip.id,
         schoolId: finalTrip.schoolId,
-        routeId: finalTrip.routeId || null,
-        busId: finalTrip.busId || null,
-      })
-        .then(async ({ created }) => {
-          if (created > 0) {
-            // Optional: reflect pending count immediately
-            try {
-              await updateDoc(doc(db, "trips", finalTrip.id), {
-                "counts.pending": created,
-              });
-            } catch (_) {}
-            toast({
-              title: "Roster Ready!",
-              description: `${created} passengers have been added to your roster.`,
-              className: "bg-accent text-accent-foreground border-0",
-            });
-          } else {
-            toast({
-              title: "Empty Roster",
-              description:
-                "No students are assigned to this route or bus for your school.",
-            });
-          }
-        })
-        .catch((err) => {
-          console.error("[seed passengers]", err);
-          toast({
-            variant: "destructive",
-            title: "Roster Error",
-            description:
-              "Could not create the passenger roster. Check permissions to read 'students'.",
-          });
+        routeId: finalTrip.routeId,
+        busId: finalTrip.busId,
+      });
+      if (created > 0) {
+        toast({
+            title: "Roster Ready!",
+            description: `${created} passengers have been added to your roster.`,
+            className: "bg-accent text-accent-foreground border-0",
         });
+      } else {
+          toast({
+            title: "Empty Roster",
+            description: "No students are assigned to this route or bus for your school.",
+          });
+      }
     } catch (error) {
       console.error("[start trip]", error);
       toast({
