@@ -38,7 +38,10 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     // 🔹 fetch the student's name
     const studentSnap = await db.collection("students").doc(studentId).get();
-    const studentName = studentSnap.exists ? (studentSnap.data()?.name as string) : studentId;
+    const studentName =
+      (studentSnap.exists && typeof studentSnap.data()?.name === "string" && studentSnap.data()!.name.trim())
+        ? (studentSnap.data()!.name as string)
+        : studentId; // <-- fallback so it's never undefined
 
     // Fetch trip for context/routeName
     const tripSnap = await db.doc(`trips/${tripId}`).get();
@@ -130,16 +133,22 @@ export const onPassengerStatusChange = onDocumentWritten(
     
     // --- Write to Inbox ---
     const inboxBatch = db.batch();
+    const payload = {
+        title,
+        studentId,
+        studentName,
+        tripId,
+        schoolId: schoolId,
+        type: newStatus,
+        body: `${studentName} is ${newStatus}.`,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        read: false,
+    };
+      
     parentDocs.forEach(parentDoc => {
         if (!parentDoc.exists) return;
         const inboxRef = parentDoc.ref.collection("inbox").doc();
-        inboxBatch.set(inboxRef, {
-            ...messageData,
-            title,
-            body,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            read: false,
-        });
+        inboxBatch.set(inboxRef, payload);
     });
     await inboxBatch.commit();
     logger.info(`Wrote ${parentDocs.length} inbox item(s)`);
