@@ -82,6 +82,7 @@ async function seedPassengersForTrip(
 
   // Query by route if it exists
   if (trip.routeId) {
+    console.debug("[ROSTER] Querying students by route", trip.routeId);
     queries.push(query(
         studentsCol,
         where("schoolId", "==", trip.schoolId),
@@ -91,6 +92,7 @@ async function seedPassengersForTrip(
 
   // Query by bus if it exists
   if (trip.busId) {
+    console.debug("[ROSTER] Querying students by bus", trip.busId);
     queries.push(query(
         studentsCol,
         where("schoolId", "==", trip.schoolId),
@@ -98,21 +100,25 @@ async function seedPassengersForTrip(
     ));
   }
   
-  if (queries.length === 0) return 0;
+  if (queries.length === 0) {
+    console.debug("[ROSTER] No route or bus ID on trip. Cannot seed passengers.");
+    return 0;
+  }
 
   const querySnapshots = await Promise.all(queries.map(q => getDocs(q)));
   
-  const seenStudentIds = new Set<string>();
-  const studentDocs: QueryDocumentSnapshot<DocumentData>[] = [];
-  querySnapshots.forEach(snap => snap.forEach(doc => {
-      if (!seenStudentIds.has(doc.id)) {
-          seenStudentIds.add(doc.id);
-          studentDocs.push(doc);
-      }
-  }));
+  const studentDocsById = new Map<string, QueryDocumentSnapshot<DocumentData>>();
+  querySnapshots[0]?.docs.forEach(doc => studentDocsById.set(doc.id, doc));
+  console.debug('[ROSTER] students by route', querySnapshots[0]?.docs.length || 0);
+  querySnapshots[1]?.docs.forEach(doc => studentDocsById.set(doc.id, doc));
+  console.debug('[ROSTER] students by bus', querySnapshots[1]?.docs.length || 0);
+
+  const studentDocs = Array.from(studentDocsById.values());
+  console.debug('[ROSTER] merged students', studentDocs.length);
+
 
   // Find all parent links for these students in a single query
-  const studentIdsArray = Array.from(seenStudentIds);
+  const studentIdsArray = Array.from(studentDocsById.keys());
   const parentLinksByStudent = new Map<string, string[]>();
   if (studentIdsArray.length > 0) {
       // Chunk the array because 'array-contains-any' is limited to 10 items
@@ -127,7 +133,7 @@ async function seedPassengersForTrip(
             const parentId = doc.id;
             const data = doc.data();
             data.studentIds.forEach((studentId: string) => {
-                if (seenStudentIds.has(studentId)) {
+                if (studentDocsById.has(studentId)) {
                     if (!parentLinksByStudent.has(studentId)) {
                         parentLinksByStudent.set(studentId, []);
                     }
@@ -158,14 +164,14 @@ async function seedPassengersForTrip(
   await batch.commit();
 
   // After seeding, update the trip's metadata
-  if (seenStudentIds.size > 0) {
+  if (studentDocsById.size > 0) {
       await updateDoc(doc(fs, 'trips', trip.id), {
-          'counts.pending': seenStudentIds.size,
-          'passengers': Array.from(seenStudentIds),
+          'counts.pending': studentDocsById.size,
+          'passengers': Array.from(studentDocsById.keys()),
       });
   }
 
-  return seenStudentIds.size;
+  return studentDocsById.size;
 }
 
 
@@ -296,6 +302,8 @@ export default function DriverPage() {
     const handleStartTrip = async () => {
         if (!user || !profile || !bus) return;
         setIsSubmitting(true);
+        console.debug('[ROSTER] Starting trip...', { busId: bus.id, routeId: route?.id });
+
         try {
             // Prevent duplicate active trips
             const existingQ = query(
