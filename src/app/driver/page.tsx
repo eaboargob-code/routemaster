@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
@@ -15,6 +14,7 @@ import { db } from '@/lib/firebase';
 import { useProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
 import { registerFcmToken } from '@/lib/notifications';
+import { seedPassengersForTrip } from '@/lib/roster';
 
 
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -70,114 +70,6 @@ interface Supervisor extends DocumentData {
 type UiState = {
     status: 'loading' | 'ready' | 'error' | 'empty';
     errorMessage?: string;
-}
-
-async function seedPassengersForTrip(
-    fs: Firestore, 
-    trip: Omit<Trip, 'id'> & { id: string },
-) {
-  const studentsCol = collection(fs, "students");
-  const parentStudentsCol = collection(fs, "parentStudents");
-  
-  console.debug('[ROSTER] trip', trip.id, trip.routeId, trip.busId);
-
-  // Query by route if it exists
-  const byRouteQ = trip.routeId 
-    ? query(
-        studentsCol,
-        where("schoolId", "==", trip.schoolId),
-        where("assignedRouteId", "==", trip.routeId)
-      )
-    : null;
-
-  // Query by bus if it exists
-  const byBusQ = trip.busId
-    ? query(
-        studentsCol,
-        where("schoolId", "==", trip.schoolId),
-        where("assignedBusId", "==", trip.busId)
-      )
-    : null;
-  
-  if (!byRouteQ && !byBusQ) {
-    console.debug("[ROSTER] No route or bus ID on trip. Cannot seed passengers.");
-    return 0;
-  }
-
-  const [byRouteSnap, byBusSnap] = await Promise.all([
-      byRouteQ ? getDocs(byRouteQ) : Promise.resolve({ docs: [] }),
-      byBusQ ? getDocs(byBusQ) : Promise.resolve({ docs: [] })
-  ]);
-  
-  const byRouteStudents = byRouteSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-  const byBusStudents = byBusSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-  console.debug('[ROSTER] students by route', byRouteStudents.length);
-  console.debug('[ROSTER] students by bus', byBusStudents.length);
-
-  const studentMap = new Map<string, DocumentData>();
-  [...byRouteStudents, ...byBusStudents].forEach(s => studentMap.set(s.id, s));
-  const students = Array.from(studentMap.values()).sort((a,b)=>a.name.localeCompare(b.name));
-  console.debug('[ROSTER] merged students', students.length);
-
-
-  // Find all parent links for these students in a single query
-  const studentIds = Array.from(studentMap.keys());
-  const parentLinksByStudent = new Map<string, string[]>();
-  if (studentIds.length > 0) {
-      const CHUNK_SIZE = 10;
-      for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
-        const chunk = studentIds.slice(i, i + CHUNK_SIZE);
-        if (chunk.length === 0) continue;
-
-        const parentQuery = query(parentStudentsCol, where('schoolId', '==', trip.schoolId), where('studentIds', 'array-contains-any', chunk));
-        const parentLinksSnap = await getDocs(parentQuery);
-        parentLinksSnap.forEach(doc => {
-            const parentId = doc.id;
-            const data = doc.data();
-            data.studentIds.forEach((studentId: string) => {
-                if (studentMap.has(studentId)) {
-                    if (!parentLinksByStudent.has(studentId)) {
-                        parentLinksByStudent.set(studentId, []);
-                    }
-                    parentLinksByStudent.get(studentId)!.push(parentId);
-                }
-            });
-        });
-      }
-  }
-
-  const batch = writeBatch(fs);
-  const passengerRefs = students.map(s => doc(fs, `trips/${trip.id}/passengers`, s.id));
-  const existingDocs = await Promise.all(passengerRefs.map(ref => getDoc(ref)));
-
-  students.forEach((s, index) => {
-      if (!existingDocs[index].exists()) {
-          batch.set(passengerRefs[index], {
-              schoolId: trip.schoolId,
-              studentId: s.id,
-              studentName: s.name ?? null,
-              parentUids: parentLinksByStudent.get(s.id) || [],
-              status: "pending",
-              boardedAt: null,
-              droppedAt: null,
-              updatedAt: serverTimestamp(),
-          }, { merge: true });
-      }
-  });
-
-
-  await batch.commit();
-
-  // After seeding, update the trip's metadata
-  if (studentMap.size > 0) {
-      await updateDoc(doc(fs, 'trips', trip.id), {
-          'counts.pending': studentMap.size,
-          'passengers': Array.from(studentMap.keys()),
-      });
-  }
-
-  return studentMap.size;
 }
 
 
@@ -346,18 +238,22 @@ export default function DriverPage() {
                 counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 }
             };
             const docRef = await addDoc(collection(db, "trips"), newTripData);
-            const fullTrip = { ...newTripData, id: docRef.id };
             
-            setActiveTrip(fullTrip);
+            setActiveTrip({ id: docRef.id, ...newTripData });
             toast({ title: "Trip Started!", description: `Your trip is now active.`, className: 'bg-accent text-accent-foreground border-0' });
 
             // Seed passengers in the background
-            seedPassengersForTrip(db, fullTrip)
-                .then(count => {
-                    if (count > 0) {
+            seedPassengersForTrip({ 
+                tripId: docRef.id, 
+                schoolId: profile.schoolId,
+                routeId: route?.id,
+                busId: bus.id,
+            })
+                .then(({ created }) => {
+                    if (created > 0) {
                         toast({
                             title: "Roster Ready!",
-                            description: `${count} passengers have been added to your roster.`,
+                            description: `${created} passengers have been added to your roster.`,
                             className: 'bg-accent text-accent-foreground border-0',
                         });
                     } else {
@@ -545,5 +441,3 @@ export default function DriverPage() {
         </div>
     )
 }
-
-    
