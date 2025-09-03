@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useProfile } from "@/lib/useProfile";
+import type { UserProfile } from "@/lib/useProfile";
 import { db } from "@/lib/firebase";
 import {
   collection,
@@ -17,7 +17,6 @@ import {
   limit,
   onSnapshot,
 } from "firebase/firestore";
-import { registerFcmToken } from "@/lib/notifications";
 
 import {
   Card,
@@ -44,7 +43,6 @@ import {
   HelpCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { format } from "date-fns";
 import { formatRelative } from "@/lib/utils";
 
 /* -------------------- Types -------------------- */
@@ -70,6 +68,16 @@ interface TripLocation {
     at?: Timestamp;
   }
 }
+
+interface ParentDashboardPageProps {
+    profile: UserProfile | null;
+    childrenData: {
+        students: Student[];
+        loading: boolean;
+        error: string | null;
+    }
+}
+
 
 /* -------------------- Child card -------------------- */
 
@@ -269,76 +277,10 @@ function LoadingState() {
 
 /* -------------------- Page -------------------- */
 
-export default function ParentDashboardPage() {
-  const { user, profile, loading: profileLoading } = useProfile();
-  const [children, setChildren] = useState<Student[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export default function ParentDashboardPage({ profile, childrenData }: ParentDashboardPageProps) {
+  const { students, loading, error } = childrenData;
 
-  // Register parent FCM token on mount/login
-  useEffect(() => {
-    if (!user?.uid) return;
-    (async () => {
-      const t = await registerFcmToken(user.uid);
-    })();
-  }, [user?.uid]);
-  
-  // Load children
-  useEffect(() => {
-    const fetchChildrenData = async () => {
-      if (!user || !profile) return;
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        // 1) parentStudents/{parentUid}
-        const parentLinkRef = doc(db, "parentStudents", user.uid);
-        const linkDocSnap = await getDoc(parentLinkRef);
-
-        const studentIds: string[] =
-          (linkDocSnap.exists() && (linkDocSnap.data().studentIds as string[])) ||
-          [];
-
-        if (studentIds.length === 0) {
-          setChildren([]);
-          setIsLoading(false);
-          return;
-        }
-
-        // 2) Fetch the specific student docs by ID.
-        // Firestore's 'in' query is limited to 30 items per query.
-        const CHUNK_SIZE = 30;
-        const studentData: Student[] = [];
-        for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
-            const chunk = studentIds.slice(i, i + CHUNK_SIZE);
-            if (chunk.length === 0) continue;
-            
-            const studentsSnapshot = await getDocs(query(
-                collection(db, "students"), 
-                where("__name__", "in", chunk))
-            );
-
-            const chunkData = studentsSnapshot.docs
-              .map((d) => ({ id: d.id, ...(d.data() as any) }))
-              .filter((s) => s.schoolId === profile.schoolId) as Student[];
-            studentData.push(...chunkData);
-        }
-
-        setChildren(studentData);
-      } catch (e: any) {
-        console.error("Failed to fetch parent data:", e);
-        setError(e.message || "An unknown error occurred.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (!profileLoading && profile) { // Wait for profile to be loaded
-        fetchChildrenData();
-    }
-  }, [user, profile, profileLoading]);
-
-  if (isLoading || profileLoading) return <LoadingState />;
+  if (loading) return <LoadingState />;
 
   return (
     <div className="grid gap-6">
@@ -362,7 +304,7 @@ export default function ParentDashboardPage() {
             </Alert>
           )}
 
-          {children.length === 0 && !error && (
+          {students.length === 0 && !error && (
             <div className="mt-4 border rounded-lg p-8 text-center text-muted-foreground">
               <Frown className="mx-auto h-12 w-12" />
               <p className="mt-4 font-semibold">No Children Found</p>
@@ -373,7 +315,7 @@ export default function ParentDashboardPage() {
             </div>
           )}
 
-          {children.map((child) => (
+          {students.map((child) => (
             <StudentCard key={child.id} student={child} />
           ))}
         </CardContent>

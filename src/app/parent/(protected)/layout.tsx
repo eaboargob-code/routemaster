@@ -21,7 +21,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { formatRelative } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc } from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs } from "firebase/firestore";
+import ParentDashboardPage from "./page";
 
 interface Notification {
     id: string;
@@ -32,6 +33,17 @@ interface Notification {
     studentName?: string;
     studentId?: string;
 }
+
+interface Student {
+  id: string;
+  name: string;
+  assignedRouteId?: string;
+  assignedBusId?: string;
+  routeName?: string;
+  busCode?: string;
+  schoolId: string;
+}
+
 
 // --- useInbox Hook ---
 function useInbox() {
@@ -78,7 +90,7 @@ function useInbox() {
 }
 
 
-function Header({ notifications, unreadCount, onClearNotifications }: { notifications: Notification[], unreadCount: number, onClearNotifications: () => void }) {
+function Header({ notifications, unreadCount, onClearNotifications, childNameMap }: { notifications: Notification[], unreadCount: number, onClearNotifications: () => void, childNameMap: Record<string, string> }) {
     const router = useRouter();
     const handleLogout = async () => {
         await signOut(auth);
@@ -111,15 +123,18 @@ function Header({ notifications, unreadCount, onClearNotifications }: { notifica
                         <DropdownMenuSeparator />
                         {notifications.length > 0 ? (
                             <>
-                                {notifications.map(n => (
+                                {notifications.map(n => {
+                                     const displayName = n.studentName ?? (n.studentId ? childNameMap[n.studentId] : null) ?? n.body;
+                                     return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
                                         <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
-                                            {n.body}
+                                            {displayName} — {n.body}
                                         </div>
                                         <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>
-                                ))}
+                                     )
+                                })}
                                 {unreadCount > 0 && (
                                     <>
                                         <DropdownMenuSeparator />
@@ -179,25 +194,83 @@ function AccessDeniedScreen({ message, details }: { message: string, details?: s
 
 export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, profile, loading, error } = useProfile();
+  const { user, profile, loading: profileLoading } = useProfile();
   const { toast } = useToast();
   const { items: notifications, unreadCount, handleClearNotifications } = useInbox();
+  
+  // --- Data fetching for children, now in the layout ---
+  const [childrenList, setChildrenList] = useState<Student[]>([]);
+  const [childrenLoading, setChildrenLoading] = useState(true);
+  const [childrenError, setChildrenError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!loading && !user) {
+    if (!user?.uid) return;
+    (async () => {
+      const t = await registerFcmToken(user.uid);
+    })();
+  }, [user?.uid]);
+
+  useEffect(() => {
+    const fetchChildrenData = async () => {
+      if (!user || !profile) return;
+      setChildrenLoading(true);
+      setChildrenError(null);
+
+      try {
+        const parentLinkRef = doc(db, "parentStudents", user.uid);
+        const linkDocSnap = await getDoc(parentLinkRef);
+        const studentIds: string[] = (linkDocSnap.exists() && linkDocSnap.data().studentIds) || [];
+
+        if (studentIds.length === 0) {
+          setChildrenList([]);
+          setChildrenLoading(false);
+          return;
+        }
+
+        const CHUNK_SIZE = 30;
+        const studentData: Student[] = [];
+        for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
+            const chunk = studentIds.slice(i, i + CHUNK_SIZE);
+            if (chunk.length === 0) continue;
+            
+            const studentsSnapshot = await getDocs(query(
+                collection(db, "students"), 
+                where("__name__", "in", chunk))
+            );
+
+            const chunkData = studentsSnapshot.docs
+              .map((d) => ({ id: d.id, ...(d.data() as any) }))
+              .filter((s) => s.schoolId === profile.schoolId) as Student[];
+            studentData.push(...chunkData);
+        }
+        setChildrenList(studentData);
+      } catch (e: any) {
+        console.error("Failed to fetch parent data:", e);
+        setChildrenError(e.message || "An unknown error occurred.");
+      } finally {
+        setChildrenLoading(false);
+      }
+    };
+
+    if (!profileLoading && profile) {
+        fetchChildrenData();
+    }
+  }, [user, profile, profileLoading]);
+  
+  // --- End data fetching ---
+
+  useEffect(() => {
+    if (!profileLoading && !user) {
         router.replace("/parent/login");
     }
     
     if (!user?.uid) return;
 
-    // Set up foreground notification listener
     const unsubscribe = onForegroundNotification((notification) => {
         toast({
             title: notification.title,
             description: notification.body,
         });
-
-        // Persist to Firestore for the bell feed
         logBell(user.uid, {
             title: notification.title || "New Notification",
             body: notification.body || "",
@@ -210,9 +283,9 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         unsubscribe();
       }
     }
-  }, [user, loading, router, toast]);
+  }, [user, profileLoading, router, toast]);
 
-  if (loading) {
+  if (profileLoading || childrenLoading) {
     return <LoadingScreen />;
   }
 
@@ -220,8 +293,8 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     return null;
   }
   
-  if (error) {
-    return <AccessDeniedScreen message="Profile Error" details={error.message} />;
+  if (profileError) {
+    return <AccessDeniedScreen message="Profile Error" details={profileError.message} />;
   }
   
   if (!profile) {
@@ -232,13 +305,28 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     return <AccessDeniedScreen message="Access Denied" details={`Your role is '${profile.role}'. You must have the 'parent' role to access this page.`} />;
   }
 
+  const childNameMap = Object.fromEntries(childrenList.map(c => [c.id, c.name]));
+
   return (
     <div className="flex min-h-screen w-full flex-col">
-      <Header notifications={notifications} unreadCount={unreadCount} onClearNotifications={handleClearNotifications} />
+      <Header 
+        notifications={notifications} 
+        unreadCount={unreadCount} 
+        onClearNotifications={handleClearNotifications}
+        childNameMap={childNameMap}
+      />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
-        {children}
+         {/* Pass fetched data down to the actual page component */}
+        <ParentDashboardPage 
+            profile={profile}
+            childrenData={{
+                students: childrenList,
+                loading: childrenLoading,
+                error: childrenError,
+            }}
+        />
       </main>
-      {user && <DebugBanner user={user} profile={profile} loading={loading} />}
+      {user && <DebugBanner user={user} profile={profile} loading={profileLoading} />}
     </div>
   );
 }
