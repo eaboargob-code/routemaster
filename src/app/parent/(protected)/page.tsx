@@ -20,7 +20,7 @@ import {
   orderBy,
   limit,
 } from "firebase/firestore";
-import { registerFcmToken, listenForeground } from "@/lib/notifications";
+import { registerFcmToken } from "@/lib/notifications";
 
 import {
   Card,
