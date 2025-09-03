@@ -16,6 +16,7 @@ import {
   Timestamp,
   orderBy,
   limit,
+  onSnapshot,
 } from "firebase/firestore";
 import { registerFcmToken } from "@/lib/notifications";
 import { listenWithPath } from "@/lib/firestore-helpers";
@@ -65,6 +66,12 @@ interface TripPassenger {
   droppedAt?: Timestamp;
 }
 
+interface TripLocation {
+  lastLocation?: {
+    at?: Timestamp;
+  }
+}
+
 interface ChildStatus extends Student {
   tripStatus?: TripPassenger | null;
   lastLocationUpdate?: Timestamp | null;
@@ -73,78 +80,85 @@ interface ChildStatus extends Student {
 /* -------------------- Child card -------------------- */
 
 function StudentCard({ student: initialStudent }: { student: Student }) {
-  const [status, setStatus] = useState<ChildStatus>({
-    ...initialStudent,
-    tripStatus: null,
-    lastLocationUpdate: null,
-  });
+  const [tripStatus, setTripStatus] = useState<TripPassenger | null>(null);
+  const [lastLocationUpdate, setLastLocationUpdate] = useState<Timestamp | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    let stopTrips: (() => void) | undefined;
-    let stopPassenger: (() => void) | undefined;
-    let stopTripDoc: (() => void) | undefined;
+    let unsubPassenger: (() => void) | undefined;
+    let unsubTrip: (() => void) | undefined;
 
-    const startListening = async () => {
+    const findTripAndListen = async () => {
       setIsLoading(true);
-
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
-      const tripsQ = query(
+
+      const tripsQuery = query(
         collection(db, "trips"),
         where("schoolId", "==", initialStudent.schoolId),
+        where("passengers", "array-contains", initialStudent.id),
         where("startedAt", ">=", Timestamp.fromDate(startOfDay)),
-        orderBy("startedAt", "desc")
+        orderBy("startedAt", "desc"),
+        limit(1)
       );
 
-      stopTrips = listenWithPath(tripsQ, `trips for school ${initialStudent.schoolId}`, (ts) => {
-        // Clean up old listeners before starting new ones
-        stopPassenger?.();
-        stopTripDoc?.();
-        
-        // Find the first trip that includes the student
-        const tripDoc = ts.docs.find(d => d.data().passengers?.includes(initialStudent.id));
+      try {
+        const tripsSnapshot = await getDocs(tripsQuery);
+        const tripDoc = tripsSnapshot.docs[0];
 
-        if (!tripDoc) {
-          setStatus((prev) => ({ ...prev, tripStatus: null, lastLocationUpdate: null }));
-          setIsLoading(false);
-          return;
+        if (tripDoc) {
+          const tripId = tripDoc.id;
+          const tripData = tripDoc.data() as TripLocation;
+
+          // Set initial location data
+          setLastLocationUpdate(tripData.lastLocation?.at ?? null);
+          
+          // Listen to passenger status
+          const passengerRef = doc(db, "trips", tripId, "passengers", initialStudent.id);
+          unsubPassenger = onSnapshot(passengerRef, 
+            (snap) => {
+              console.log(`[LISTENER] Got update for trips/${tripId}/passengers/${initialStudent.id}`);
+              setTripStatus(snap.exists() ? (snap.data() as TripPassenger) : null);
+            },
+            (err) => console.error(`Error listening to passenger ${initialStudent.id}`, err)
+          );
+
+          // Listen to trip for location updates
+          const tripRef = doc(db, "trips", tripId);
+          unsubTrip = onSnapshot(tripRef, 
+            (snap) => {
+               console.log(`[LISTENER] Got update for trips/${tripId}`);
+               const t = snap.data() as TripLocation;
+               setLastLocationUpdate(t.lastLocation?.at ?? null);
+            },
+            (err) => console.error(`Error listening to trip ${tripId}`, err)
+          );
+
+        } else {
+          setTripStatus(null);
+          setLastLocationUpdate(null);
         }
-
-        const tripId = tripDoc.id;
-
-        // 1) Passenger listener
-        const passengerRef = doc(db, "trips", tripId, "passengers", initialStudent.id);
-        stopPassenger = listenWithPath(passengerRef, `trips/${tripId}/passengers/${initialStudent.id}`, (snap) => {
-            const p = snap.exists() ? (snap.data() as TripPassenger) : null;
-            setStatus((prev) => ({ ...prev, tripStatus: p }));
-          }
-        );
-
-        // 2) Trip doc listener (for lastLocation)
-        const tripRef = doc(db, "trips", tripId);
-        stopTripDoc = listenWithPath(tripRef, `trips/${tripId}`, (snap) => {
-            const t = snap.data();
-            setStatus((prev) => ({ ...prev, lastLocationUpdate: t?.lastLocation?.at ?? null }));
-          }
-        );
+      } catch (error) {
+         console.error(`Error querying trips for student "${initialStudent.id}"`, error);
+         setTripStatus(null);
+         setLastLocationUpdate(null);
+      } finally {
         setIsLoading(false);
-      });
+      }
     };
 
-    startListening();
+    findTripAndListen();
 
     return () => {
-      stopTrips?.();
-      stopPassenger?.();
-      stopTripDoc?.();
+      unsubPassenger?.();
+      unsubTrip?.();
     };
   }, [initialStudent.id, initialStudent.schoolId]);
 
   const getStatusBadge = () => {
     if (isLoading) return <Skeleton className="h-6 w-24" />;
 
-    if (!status.tripStatus) {
+    if (!tripStatus) {
       return (
         <Badge variant="outline">
           <HelpCircle className="mr-1 h-3 w-3" />
@@ -153,7 +167,7 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
       );
     }
 
-    switch (status.tripStatus.status) {
+    switch (tripStatus.status) {
       case "boarded":
         return (
           <Badge className="bg-blue-100 text-blue-800 border-blue-200">
@@ -186,16 +200,16 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
     <Card>
       <CardHeader className="flex flex-row items-start justify-between">
         <div>
-          <CardTitle>{status.name}</CardTitle>
+          <CardTitle>{initialStudent.name}</CardTitle>
           <CardDescription className="flex flex-col gap-1 mt-2">
-            {status.busCode && (
+            {initialStudent.busCode && (
               <span className="flex items-center gap-2">
-                <Bus className="h-4 w-4" /> {status.busCode}
+                <Bus className="h-4 w-4" /> {initialStudent.busCode}
               </span>
             )}
-            {status.routeName && (
+            {initialStudent.routeName && (
               <span className="flex items-center gap-2">
-                <RouteIcon className="h-4 w-4" /> {status.routeName}
+                <RouteIcon className="h-4 w-4" /> {initialStudent.routeName}
               </span>
             )}
           </CardDescription>
@@ -203,22 +217,22 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
         {getStatusBadge()}
       </CardHeader>
       <CardContent>
-        {status.lastLocationUpdate && (
+        {lastLocationUpdate && (
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Clock className="h-4 w-4" />
             <span>
               Last bus location update:{" "}
-              {format(status.lastLocationUpdate.toDate(), "p")}
+              {format(lastLocationUpdate.toDate(), "p")}
             </span>
           </div>
         )}
-        {status.tripStatus?.status === "dropped" &&
-          status.tripStatus.droppedAt && (
+        {tripStatus?.status === "dropped" &&
+          tripStatus.droppedAt && (
             <div className="text-sm text-muted-foreground flex items-center gap-2">
               <Clock className="h-4 w-4" />
               <span>
                 Dropped off at:{" "}
-                {format(status.tripStatus.droppedAt.toDate(), "p")}
+                {format(tripStatus.droppedAt.toDate(), "p")}
               </span>
             </div>
           )}
@@ -312,10 +326,10 @@ export default function ParentDashboardPage() {
       }
     };
 
-    if (profile) { // Wait for profile to be loaded
+    if (!profileLoading && profile) { // Wait for profile to be loaded
         fetchChildrenData();
     }
-  }, [user, profile]);
+  }, [user, profile, profileLoading]);
 
   if (isLoading || profileLoading) return <LoadingState />;
 
