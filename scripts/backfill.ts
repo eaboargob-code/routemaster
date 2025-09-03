@@ -1,4 +1,5 @@
 
+
 /**
  * @fileoverview One-time backfill script to normalize Firestore data.
  * 
@@ -93,8 +94,9 @@ async function main() {
     const routesCounters = await backfillRoutes(db, bulkWriter, isDryRun);
     const passengersCounters = await backfillPassengers(db, bulkWriter, isDryRun);
     const studentsCounters = await backfillStudents(db, bulkWriter, isDryRun);
+    const inboxCounters = await backfillInboxItems(db, bulkWriter, isDryRun);
 
-    const totalUpdated = usersCounters.updated + routesCounters.updated + passengersCounters.updated + studentsCounters.updated;
+    const totalUpdated = usersCounters.updated + routesCounters.updated + passengersCounters.updated + studentsCounters.updated + inboxCounters.updated;
 
     if (!isDryRun && totalUpdated > 0) {
         await bulkWriter.close();
@@ -110,6 +112,7 @@ async function main() {
     console.log(`Routes:     ${routesCounters.scanned} scanned, ${routesCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
     console.log(`Passengers: ${passengersCounters.scanned} scanned, ${passengersCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
     console.log(`Students:   ${studentsCounters.scanned} scanned, ${studentsCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
+    console.log(`Inbox Items: ${inboxCounters.scanned} scanned, ${inboxCounters.updated} ${isDryRun ? 'would be updated' : 'updated'}.`);
     console.log('----------------\n');
   } catch (error) {
     console.error('An unexpected error occurred during the backfill process:', error);
@@ -298,6 +301,60 @@ async function backfillStudents(
 
   console.log(`"students" collection scan complete.`);
   return counters;
+}
+
+/**
+ * Backfills parent inbox items to ensure they have a valid studentName.
+ */
+async function backfillInboxItems(
+  db: admin.firestore.Firestore,
+  writer: admin.firestore.BulkWriter,
+  isDryRun: boolean
+): Promise<Counters> {
+    console.log('\nStarting backfill for parent "inbox" subcollections...');
+    const counters: Counters = { scanned: 0, updated: 0 };
+    const schoolId = SCHOOL_ID_TO_BACKFILL;
+
+    // 1. Cache all student names for the school
+    const studentNamesCache = new Map<string, string>();
+    const studentsSnap = await db.collection('students').where('schoolId', '==', schoolId).get();
+    studentsSnap.forEach(doc => {
+        const name = doc.data().name;
+        if (typeof name === 'string' && name.trim()) {
+            studentNamesCache.set(doc.id, name.trim());
+        }
+    });
+    console.log(`Cached ${studentNamesCache.size} student names.`);
+    
+    // 2. Iterate through all parents of the school
+    const parentsSnap = await db.collection('users').where('schoolId', '==', schoolId).where('role', '==', 'parent').get();
+    console.log(`Scanning inboxes for ${parentsSnap.size} parents...`);
+
+    for (const parentDoc of parentsSnap.docs) {
+        const inboxSnap = await parentDoc.ref.collection('inbox').get();
+        if (inboxSnap.empty) continue;
+
+        for (const inboxDoc of inboxSnap.docs) {
+            counters.scanned++;
+            const inboxData = inboxDoc.data();
+            
+            // Check if studentName needs to be fixed
+            if (inboxData.studentId && (typeof inboxData.studentName !== 'string' || !inboxData.studentName.trim())) {
+                const studentId = inboxData.studentId;
+                const studentName = studentNamesCache.get(studentId) || studentId; // Use ID as fallback
+
+                const updates = { studentName };
+                counters.updated++;
+                console.log(` -> [${inboxDoc.ref.path}] ${isDryRun ? 'Needs update:' : 'Updating...'}`, updates);
+                if (!isDryRun) {
+                    writer.update(inboxDoc.ref, updates);
+                }
+            }
+        }
+    }
+
+    console.log(`"inbox" subcollection scan complete.`);
+    return counters;
 }
 
 
