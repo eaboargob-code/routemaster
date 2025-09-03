@@ -10,74 +10,69 @@ export const onPassengerStatusChange = functions.firestore
     const after = change.after.exists ? change.after.data() : null;
     const before = change.before.exists ? change.before.data() : null;
 
-    // Only act on real status changes
-    const beforeStatus = before?.status;
-    const afterStatus  = after?.status;
-    if (!after || !afterStatus || beforeStatus === afterStatus) return;
+    if (!after) return;
+    if (before?.status === after.status) return; // no real change
 
-    const { tripId, studentId } = ctx.params as { tripId: string; studentId: string };
-    const schoolId = (after.schoolId as string) || null;
+    const { tripId, studentId } = ctx.params;
+    const schoolId = after.schoolId || null;
 
-    // 1) Read passenger row (most reliable for studentName)
-    const passengerSnap = await admin.firestore()
-      .doc(`trips/${tripId}/passengers/${studentId}`)
-      .get();
-    const passenger = passengerSnap.exists ? passengerSnap.data() : undefined;
+    // 🔹 Try passenger row for name
+    let studentName: string | null = after.studentName || null;
 
-    // 2) Read student doc (fallback fields)
-    const studentSnap = await admin.firestore()
-      .doc(`students/${studentId}`)
-      .get();
-    const student = studentSnap.exists ? studentSnap.data() : undefined;
+    // 🔹 If not in passenger row, fallback to student doc
+    if (!studentName) {
+      const studentSnap = await admin.firestore().doc(`students/${studentId}`).get();
+      if (studentSnap.exists) {
+        const s = studentSnap.data()!;
+        studentName =
+          (s.name as string) ||
+          (s.displayName as string) ||
+          ([s.firstName, s.lastName].filter(Boolean).join(' ')) ||
+          null;
+      }
+    }
 
-    // 3) Resolve studentName from multiple sources
-    const candidateName =
-      (passenger?.studentName as string | undefined) ||
-      (after.studentName as string | undefined) ||
-      (student?.name as string | undefined) ||
-      (student?.displayName as string | undefined) ||
-      ([student?.firstName, student?.lastName].filter(Boolean).join(' ') || undefined);
+    // 🔹 Last fallback = just show UID
+    if (!studentName) studentName = studentId;
 
-    const studentName = (candidateName && candidateName.trim()) || 'Student';
-
-    // Find parents (Option A: parentStudents/{parentUid}.studentIds contains studentId)
+    // Find linked parents
     const parents = await admin.firestore()
       .collection('parentStudents')
       .where('studentIds', 'array-contains', studentId)
       .get();
-
     if (parents.empty) return;
 
-    const titleMap: Record<string,string> = {
-      boarded: 'On Bus 🚌',
-      dropped: 'Dropped Off ✅',
-      absent:  'Marked Absent 🚫',
-      pending: 'Awaiting Check-in 🕓',
+    const titleMap: Record<string, string> = {
+      boarded: "On Bus 🚌",
+      dropped: "Dropped Off ✅",
+      absent: "Marked Absent 🚫",
+      pending: "Awaiting Check-in 🕓",
     };
-    const title = titleMap[afterStatus] || 'Update';
+    const title = titleMap[after.status] || "Update";
 
-    // **Body now uses the resolved studentName**
-    const body = `Student ${studentName} is ${afterStatus}.`;
+    const body = `Student ${studentName} is ${after.status}.`;
 
     const batch = admin.firestore().batch();
     parents.forEach(p => {
-      const parentUid = p.id;
-      const inboxRef = admin.firestore().collection('users').doc(parentUid)
-        .collection('inbox').doc();
+      const inboxRef = admin.firestore()
+        .collection("users")
+        .doc(p.id)
+        .collection("inbox")
+        .doc();
       batch.set(inboxRef, {
         title,
         body,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         read: false,
         data: {
-          kind: 'passengerStatus',
-          schoolId: schoolId ?? p.get('schoolId') ?? null,
+          kind: "passengerStatus",
+          schoolId,
           tripId,
           studentId,
-          studentName,  // <-- write the resolved name for the UI
-          status: afterStatus,
+          studentName, // ✅ now always stored
+          status: after.status,
         },
-      }, { merge: true });
+      });
     });
 
     await batch.commit();
