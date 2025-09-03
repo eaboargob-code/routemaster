@@ -167,7 +167,22 @@ export default function DriverPage() {
             .map(d => ({ id: d.id, ...(d.data() as any) }))
             .find(t => t.status === 'active') || null;
 
-          setActiveTrip(active as Trip | null);
+          if (active) {
+            setActiveTrip(active as Trip);
+            // If we found an active trip, try to seed it just in case it failed before.
+            // The function is idempotent so it's safe to call multiple times.
+            seedPassengersForTrip({ 
+                tripId: active.id, 
+                schoolId: profile.schoolId,
+                routeId: active.routeId,
+                busId: active.busId,
+            }).catch(err => {
+                console.error("[seed passengers existing trip]", err);
+                // Non-fatal, don't block UI
+            });
+          } else {
+            setActiveTrip(null);
+          }
         } catch (e) {
           console.error('[driver] TRIPS query failed', e);
           setActiveTrip(null); // don’t block the page
@@ -238,16 +253,17 @@ export default function DriverPage() {
                 counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 }
             };
             const docRef = await addDoc(collection(db, "trips"), newTripData);
-            
-            setActiveTrip({ id: docRef.id, ...newTripData });
+            const finalTripData = { id: docRef.id, ...newTripData };
+
+            setActiveTrip(finalTripData);
             toast({ title: "Trip Started!", description: `Your trip is now active.`, className: 'bg-accent text-accent-foreground border-0' });
 
             // Seed passengers in the background
             seedPassengersForTrip({ 
-                tripId: docRef.id, 
-                schoolId: profile.schoolId,
-                routeId: route?.id,
-                busId: bus.id,
+                tripId: finalTripData.id, 
+                schoolId: finalTripData.schoolId,
+                routeId: finalTripData.routeId,
+                busId: finalTripData.busId,
             })
                 .then(({ created }) => {
                     if (created > 0) {
@@ -441,3 +457,5 @@ export default function DriverPage() {
         </div>
     )
 }
+
+    
