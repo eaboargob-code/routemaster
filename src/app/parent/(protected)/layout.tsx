@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge";
-import { formatDistanceToNow } from 'date-fns';
+import { formatRelative } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc } from "firebase/firestore";
 
@@ -29,6 +29,8 @@ interface Notification {
     body: string;
     createdAt: Timestamp;
     read: boolean;
+    studentName?: string;
+    studentId?: string;
 }
 
 // --- useInbox Hook ---
@@ -112,8 +114,8 @@ function Header({ notifications, unreadCount, onClearNotifications }: { notifica
                                 {notifications.map(n => (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
-                                        <div className={`text-xs ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>{n.body}</div>
-                                        <div className="text-xs text-muted-foreground/80 mt-1">{n.createdAt ? formatDistanceToNow(n.createdAt.toDate(), { addSuffix: true }) : ''}</div>
+                                        <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>{n.studentName || n.body}</div>
+                                        <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>
                                 ))}
                                 {unreadCount > 0 && (

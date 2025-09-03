@@ -11,8 +11,8 @@ export const onPassengerStatusChange = onDocumentWritten(
     region: "us-central1", // keep consistent across your functions
   },
   async (event) => {
-    const before = event.data?.before?.data() || null;
-    const after  = event.data?.after?.data()  || null;
+    const after = event.data?.after?.data() || null;
+    const before  = event.data?.before?.data()  || null;
 
     if (!after) {
       logger.info("Deleted passenger doc; skipping.");
@@ -28,38 +28,61 @@ export const onPassengerStatusChange = onDocumentWritten(
     }
 
     const { tripId, studentId } = event.params as { tripId: string; studentId: string };
-
-    // Fetch trip for context/schoolId
-    const tripSnap = await admin.firestore().doc(`trips/${tripId}`).get();
-    if (!tripSnap.exists) {
-      logger.warn("Trip not found; skipping.", { tripId });
-      return;
-    }
-    const trip = tripSnap.data() as any;
-    const schoolId = trip.schoolId;
+    const schoolId = after.schoolId;
     if (!schoolId) {
-        logger.warn("Trip is missing schoolId; skipping.", { tripId });
+        logger.warn("Passenger doc is missing schoolId; skipping.", { tripId, studentId });
         return;
     }
+    
+    const db = admin.firestore();
 
-    // Find parent links that contain this student
-    const linksSnap = await admin.firestore()
+    // 🔹 fetch the student's name
+    const studentSnap = await db.collection("students").doc(studentId).get();
+    const studentName = studentSnap.exists ? (studentSnap.data()?.name as string) : studentId;
+
+    // Fetch trip for context/routeName
+    const tripSnap = await db.doc(`trips/${tripId}`).get();
+    const routeName = tripSnap.exists() ? (tripSnap.data()?.routeName as string) : "";
+
+    // 🔹 find parents
+    const parentsSnap = await db
       .collection("parentStudents")
       .where("studentIds", "array-contains", studentId)
       .where("schoolId", "==", schoolId)
       .get();
 
-    if (linksSnap.empty) {
+    if (parentsSnap.empty) {
       logger.info("No parent links for student; skipping.", { studentId, schoolId });
       return;
     }
 
-    // Gather tokens from each parent user doc
-    const parentIds = linksSnap.docs.map((d) => d.id);
+    // --- Prepare Notifications ---
+    const parentUids = parentsSnap.docs.map((d) => d.id);
     const parentDocs = await admin.firestore().getAll(
-      ...parentIds.map((id) => admin.firestore().doc(`users/${id}`))
+        ...parentUids.map((id) => db.doc(`users/${id}`))
     );
 
+    const titleByStatus: Record<string, string> = {
+      boarded: `${studentName} boarded the bus`,
+      dropped: `${studentName} arrived at destination`,
+      absent: `${studentName} marked absent`,
+      pending: `${studentName} status updated`,
+    };
+    const title = titleByStatus[newStatus] ?? `${studentName} status updated`;
+    const body = routeName
+      ? `Route ${routeName} • ${new Date().toLocaleTimeString()}`
+      : new Date().toLocaleTimeString();
+    
+    const messageData = {
+        tripId,
+        studentId,
+        status: String(newStatus),
+        schoolId: String(schoolId),
+        kind: "passengerStatus",
+        studentName, // include student name
+    };
+
+    // --- Send Push Notifications ---
     const tokens: string[] = [];
     parentDocs.forEach((snap) => {
         if (!snap.exists) return;
@@ -69,31 +92,6 @@ export const onPassengerStatusChange = onDocumentWritten(
         }
     });
 
-    
-    // Enrich with student name
-    const studentSnap = await admin.firestore().doc(`students/${studentId}`).get();
-    const childName = (studentSnap.get("name") as string) || "Your child";
-
-    const titleByStatus: Record<string, string> = {
-      boarded: `${childName} boarded the bus`,
-      dropped: `${childName} arrived at destination`,
-      absent: `${childName} marked absent`,
-      pending: `${childName} status updated`,
-    };
-    const title = titleByStatus[newStatus] ?? `${childName} status updated`;
-    const body = trip.routeName
-      ? `Route ${trip.routeName} • ${new Date().toLocaleTimeString()}`
-      : new Date().toLocaleTimeString();
-    
-    const messageData = {
-        tripId,
-        studentId,
-        status: String(newStatus),
-        schoolId: String(schoolId),
-        kind: "passengerStatus"
-    };
-
-    // --- Send Push Notifications ---
     if (tokens.length > 0) {
         logger.info("Sending push", {
           tripId, studentId, newStatus, tokensCount: tokens.length,
@@ -110,11 +108,7 @@ export const onPassengerStatusChange = onDocumentWritten(
         };
 
         const res = await admin.messaging().sendEachForMulticast(message);
-
-        logger.info("Push result", {
-          successCount: res.successCount,
-          failureCount: res.failureCount,
-        });
+        logger.info("Push result", { successCount: res.successCount, failureCount: res.failureCount });
 
         // Clean up invalid tokens
         const invalidTokens = res.responses
@@ -123,33 +117,31 @@ export const onPassengerStatusChange = onDocumentWritten(
 
         if (invalidTokens.length > 0) {
           logger.warn("Removing invalid tokens", { invalidTokensCount: invalidTokens.length });
-          // remove from all parent docs (simple fan-out)
-          const batch = admin.firestore().batch();
+          const batch = db.batch();
           parentDocs.forEach((snap) => {
               if (!snap.exists) return;
-              batch.update(snap.ref, {
-                  fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens),
-              });
+              batch.update(snap.ref, { fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens) });
           });
           await batch.commit().catch(e => logger.error("Failed to remove invalid tokens", { e }));
         }
     } else {
-         logger.info("No tokens found for parents; skipping push.", { parentIds });
+         logger.info("No tokens found for parents; skipping push.", { parentUids });
     }
     
     // --- Write to Inbox ---
-    const inboxWritePromises = parentDocs.map(parentDoc => {
-        if (!parentDoc.exists) return Promise.resolve();
-        return parentDoc.ref.collection("inbox").add({
+    const inboxBatch = db.batch();
+    parentDocs.forEach(parentDoc => {
+        if (!parentDoc.exists) return;
+        const inboxRef = parentDoc.ref.collection("inbox").doc();
+        inboxBatch.set(inboxRef, {
+            ...messageData,
             title,
             body,
-            data: messageData,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             read: false,
         });
     });
-
-    await Promise.all(inboxWritePromises);
-    logger.info(`Wrote ${inboxWritePromises.length} inbox item(s)`);
+    await inboxBatch.commit();
+    logger.info(`Wrote ${parentDocs.length} inbox item(s)`);
   }
 );
