@@ -66,9 +66,9 @@ export const onPassengerStatusChange = onDocumentWritten(
     );
 
     const titleByStatus: Record<string, string> = {
-      boarded: `${studentName} boarded the bus`,
-      dropped: `${studentName} arrived at destination`,
-      absent: `${studentName} marked absent`,
+      boarded: `${studentName} boarded the bus 🚌`,
+      dropped: `${studentName} arrived at destination ✅`,
+      absent: `${studentName} marked absent ⚠️`,
       pending: `${studentName} status updated`,
     };
     const title = titleByStatus[newStatus] ?? `${studentName} status updated`;
