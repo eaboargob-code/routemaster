@@ -2,17 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/firebase";
-import { useProfile } from "@/lib/useProfile";
-import { registerFcmToken } from "@/lib/notifications";
-
+import type { UserProfile } from "@/lib/useProfile";
 import {
-  collection,
   collectionGroup,
   query,
   where,
   getDocs,
-  getDoc,
-  doc,
   onSnapshot,
   orderBy,
   limit,
@@ -216,7 +211,7 @@ function StudentCard({ student }: { student: Student }) {
 
   return (
     <Card>
-      <CardHeader className="flex items-start justify-between">
+      <CardHeader className="flex flex-row items-start justify-between">
         <div>
           <CardTitle>{student.name}</CardTitle>
           <CardDescription className="flex flex-col gap-1 mt-2">
@@ -275,62 +270,19 @@ function LoadingState() {
 
 /* --------------- page --------------- */
 
-export default function ParentDashboardPage() {
-  const { user, profile, loading: profileLoading } = useProfile();
-  const [children, setChildren] = useState<Student[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+interface ParentDashboardPageProps {
+  profile: UserProfile;
+  childrenData: {
+    students: Student[];
+    loading: boolean;
+    error: string | null;
+  };
+}
 
-  // FCM once
-  useEffect(() => {
-    if (user?.uid) {
-      registerFcmToken(user.uid).catch(() => {});
-    }
-  }, [user?.uid]);
+export default function ParentDashboardPage({ profile, childrenData }: ParentDashboardPageProps) {
+  const { students, loading, error } = childrenData;
 
-  // Load linked children and their student docs
-  useEffect(() => {
-    (async () => {
-      if (!user || !profile) return;
-      setLoading(true);
-      setError(null);
-
-      try {
-        // Read parent link
-        const linkRef = doc(db, "parentStudents", user.uid);
-        const linkSnap = await getDoc(linkRef);
-        const studentIds: string[] = (linkSnap.exists() && linkSnap.data().studentIds) || [];
-
-        if (studentIds.length === 0) {
-          setChildren([]);
-          setLoading(false);
-          return;
-        }
-
-        // Fetch students in chunks of 10 (IN clause limit)
-        const chunks: string[][] = [];
-        for (let i = 0; i < studentIds.length; i += 10) chunks.push(studentIds.slice(i, i + 10));
-
-        const results: Student[] = [];
-        for (const ids of chunks) {
-          const qx = query(collection(db, "students"), where("__name__", "in", ids));
-          const ss = await getDocs(qx);
-          ss.forEach((d) => {
-            const s = { id: d.id, ...(d.data() as any) } as Student;
-            if (s.schoolId === profile.schoolId) results.push(s);
-          });
-        }
-
-        setChildren(results);
-      } catch (e: any) {
-        setError(e.message || "Failed to load children.");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [user, profile]);
-
-  if (profileLoading || loading) return <LoadingState />;
+  if (loading) return <LoadingState />;
 
   return (
     <div className="grid gap-6">
@@ -355,7 +307,7 @@ export default function ParentDashboardPage() {
             </Alert>
           )}
 
-          {!error && children.length === 0 && (
+          {!error && students.length === 0 && (
             <div className="mt-4 border rounded-lg p-8 text-center text-muted-foreground">
               <Frown className="mx-auto h-12 w-12" />
               <p className="mt-4 font-semibold">No Children Found</p>
@@ -363,7 +315,7 @@ export default function ParentDashboardPage() {
             </div>
           )}
 
-          {children.map((c) => (
+          {students.map((c) => (
             <StudentCard key={c.id} student={c} />
           ))}
         </CardContent>
