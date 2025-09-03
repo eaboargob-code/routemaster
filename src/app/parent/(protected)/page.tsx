@@ -93,24 +93,24 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
       const tripsQ = query(
         collection(db, "trips"),
         where("schoolId", "==", initialStudent.schoolId),
-        where("passengers", "array-contains", initialStudent.id),
         where("startedAt", ">=", Timestamp.fromDate(startOfDay)),
-        orderBy("startedAt", "desc"),
-        limit(1)
+        orderBy("startedAt", "desc")
       );
 
-      stopTrips = listenWithPath(tripsQ, `trips for student ${initialStudent.id}`, (ts) => {
+      stopTrips = listenWithPath(tripsQ, `trips for school ${initialStudent.schoolId}`, (ts) => {
         // Clean up old listeners before starting new ones
         stopPassenger?.();
         stopTripDoc?.();
+        
+        // Find the first trip that includes the student
+        const tripDoc = ts.docs.find(d => d.data().passengers?.includes(initialStudent.id));
 
-        if (ts.empty) {
+        if (!tripDoc) {
           setStatus((prev) => ({ ...prev, tripStatus: null, lastLocationUpdate: null }));
           setIsLoading(false);
           return;
         }
 
-        const tripDoc = ts.docs[0];
         const tripId = tripDoc.id;
 
         // 1) Passenger listener

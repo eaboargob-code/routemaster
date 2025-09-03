@@ -1,4 +1,3 @@
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
@@ -43,7 +42,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['fcmTokens']);
     }
 
-    /* ---------- users/{uid}/inbox (bell items) ---------- */
+    /* ---------- users/{uid}/notifications (bell items) ---------- */
     match /users/{uid}/notifications/{noteId} {
       // Owner can read/list their own notifications
       allow read: if authed() && request.auth.uid == uid;
@@ -109,9 +108,15 @@ service cloud.firestore {
         && resource.data.driverId == request.auth.uid
         && resource.data.schoolId == mySchool();
 
-      // Supervisor/Parent can READ trips in their school
-      allow list, read: if (isSupervisor() || isParent())
-        && mySchool() != null;
+      // Supervisor/Parent can READ trips in their school.
+      // NOTE: LIST operations require a broader rule below.
+      allow get: if (isSupervisor() || isParent())
+        && resource.data.schoolId == mySchool();
+      
+      // Allow LIST for parents/supervisors on their school's trips,
+      // as long as the query includes a schoolId filter.
+      allow list: if (isParent() || isSupervisor())
+        && request.query.get("where[0].value") == mySchool();
 
       // Supervisor: limited counters update on their own trip
       allow update: if isSupervisor()
