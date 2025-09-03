@@ -78,53 +78,57 @@ async function seedPassengersForTrip(
 ) {
   const studentsCol = collection(fs, "students");
   const parentStudentsCol = collection(fs, "parentStudents");
-  const queries = [];
+  
+  console.debug('[ROSTER] trip', trip.id, trip.routeId, trip.busId);
 
   // Query by route if it exists
-  if (trip.routeId) {
-    console.debug("[ROSTER] Querying students by route", trip.routeId);
-    queries.push(query(
+  const byRouteQ = trip.routeId 
+    ? query(
         studentsCol,
         where("schoolId", "==", trip.schoolId),
         where("assignedRouteId", "==", trip.routeId)
-    ));
-  }
+      )
+    : null;
 
   // Query by bus if it exists
-  if (trip.busId) {
-    console.debug("[ROSTER] Querying students by bus", trip.busId);
-    queries.push(query(
+  const byBusQ = trip.busId
+    ? query(
         studentsCol,
         where("schoolId", "==", trip.schoolId),
         where("assignedBusId", "==", trip.busId)
-    ));
-  }
+      )
+    : null;
   
-  if (queries.length === 0) {
+  if (!byRouteQ && !byBusQ) {
     console.debug("[ROSTER] No route or bus ID on trip. Cannot seed passengers.");
     return 0;
   }
 
-  const querySnapshots = await Promise.all(queries.map(q => getDocs(q)));
+  const [byRouteSnap, byBusSnap] = await Promise.all([
+      byRouteQ ? getDocs(byRouteQ) : Promise.resolve({ docs: [] }),
+      byBusQ ? getDocs(byBusQ) : Promise.resolve({ docs: [] })
+  ]);
   
-  const studentDocsById = new Map<string, QueryDocumentSnapshot<DocumentData>>();
-  querySnapshots[0]?.docs.forEach(doc => studentDocsById.set(doc.id, doc));
-  console.debug('[ROSTER] students by route', querySnapshots[0]?.docs.length || 0);
-  querySnapshots[1]?.docs.forEach(doc => studentDocsById.set(doc.id, doc));
-  console.debug('[ROSTER] students by bus', querySnapshots[1]?.docs.length || 0);
+  const byRouteStudents = byRouteSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const byBusStudents = byBusSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  const studentDocs = Array.from(studentDocsById.values());
-  console.debug('[ROSTER] merged students', studentDocs.length);
+  console.debug('[ROSTER] students by route', byRouteStudents.length);
+  console.debug('[ROSTER] students by bus', byBusStudents.length);
+
+  const studentMap = new Map<string, DocumentData>();
+  [...byRouteStudents, ...byBusStudents].forEach(s => studentMap.set(s.id, s));
+  const students = Array.from(studentMap.values());
+  console.debug('[ROSTER] merged students', students.length);
 
 
   // Find all parent links for these students in a single query
-  const studentIdsArray = Array.from(studentDocsById.keys());
+  const studentIds = Array.from(studentMap.keys());
   const parentLinksByStudent = new Map<string, string[]>();
-  if (studentIdsArray.length > 0) {
+  if (studentIds.length > 0) {
       // Chunk the array because 'array-contains-any' is limited to 10 items
       const CHUNK_SIZE = 10;
-      for (let i = 0; i < studentIdsArray.length; i += CHUNK_SIZE) {
-        const chunk = studentIdsArray.slice(i, i + CHUNK_SIZE);
+      for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
+        const chunk = studentIds.slice(i, i + CHUNK_SIZE);
         if (chunk.length === 0) continue;
 
         const parentQuery = query(parentStudentsCol, where('schoolId', '==', trip.schoolId), where('studentIds', 'array-contains-any', chunk));
@@ -133,7 +137,7 @@ async function seedPassengersForTrip(
             const parentId = doc.id;
             const data = doc.data();
             data.studentIds.forEach((studentId: string) => {
-                if (studentDocsById.has(studentId)) {
+                if (studentMap.has(studentId)) {
                     if (!parentLinksByStudent.has(studentId)) {
                         parentLinksByStudent.set(studentId, []);
                     }
@@ -145,33 +149,31 @@ async function seedPassengersForTrip(
   }
 
   const batch = writeBatch(fs);
-  studentDocs.forEach(s => {
+  for (const s of students) {
     const pRef = doc(fs, `trips/${trip.id}/passengers/${s.id}`);
-    const data = s.data();
     batch.set(pRef, {
       studentId: s.id,
-      studentName: data.name ?? s.id, // <-- Caching studentName
+      studentName: s.name ?? s.id,
       schoolId: trip.schoolId,
-      parentUids: parentLinksByStudent.get(s.id) || [], // <-- New field
+      parentUids: parentLinksByStudent.get(s.id) || [],
       status: "pending",
       boardedAt: null,
       droppedAt: null,
-      updatedBy: trip.driverId,
       updatedAt: serverTimestamp(),
     }, { merge: true });
-  });
+  }
 
   await batch.commit();
 
   // After seeding, update the trip's metadata
-  if (studentDocsById.size > 0) {
+  if (studentMap.size > 0) {
       await updateDoc(doc(fs, 'trips', trip.id), {
-          'counts.pending': studentDocsById.size,
-          'passengers': Array.from(studentDocsById.keys()),
+          'counts.pending': studentMap.size,
+          'passengers': Array.from(studentMap.keys()),
       });
   }
 
-  return studentDocsById.size;
+  return studentMap.size;
 }
 
 
@@ -302,8 +304,7 @@ export default function DriverPage() {
     const handleStartTrip = async () => {
         if (!user || !profile || !bus) return;
         setIsSubmitting(true);
-        console.debug('[ROSTER] Starting trip...', { busId: bus.id, routeId: route?.id });
-
+        
         try {
             // Prevent duplicate active trips
             const existingQ = query(
@@ -354,6 +355,11 @@ export default function DriverPage() {
                             title: "Roster Ready!",
                             description: `${count} passengers have been added to your roster.`,
                             className: 'bg-accent text-accent-foreground border-0',
+                        });
+                    } else {
+                         toast({
+                            title: "Empty Roster",
+                            description: `No students are assigned to this route or bus.`,
                         });
                     }
                 })
