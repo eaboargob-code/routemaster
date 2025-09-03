@@ -201,7 +201,6 @@ export function ParentGuard({ children }: { children: ReactNode }) {
             title: notification.title || "New Notification",
             body: notification.body || "",
             data: notification.data,
-            studentName: notification.data?.studentName,
         });
     });
 
