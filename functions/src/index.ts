@@ -69,10 +69,6 @@ export const onPassengerStatusChange = onDocumentWritten(
         }
     });
 
-    if (tokens.length === 0) {
-      logger.info("No tokens found for parents; skipping.", { parentIds });
-      return;
-    }
     
     // Enrich with student name
     const studentSnap = await admin.firestore().doc(`students/${studentId}`).get();
@@ -88,51 +84,72 @@ export const onPassengerStatusChange = onDocumentWritten(
     const body = trip.routeName
       ? `Route ${trip.routeName} • ${new Date().toLocaleTimeString()}`
       : new Date().toLocaleTimeString();
-
-
-    logger.info("Sending push", {
-      tripId, studentId, newStatus, tokensCount: tokens.length,
-    });
-
-    const message: admin.messaging.MulticastMessage = {
-      notification: { title, body },
-      data: {
+    
+    const messageData = {
         tripId,
         studentId,
         status: String(newStatus),
         schoolId: String(schoolId),
         kind: "passengerStatus"
-      },
-      tokens,
-      android: { priority: "high" },
-      webpush: {
-        fcmOptions: { link: "/parent" },
-      },
     };
 
-    const res = await admin.messaging().sendEachForMulticast(message);
+    // --- Send Push Notifications ---
+    if (tokens.length > 0) {
+        logger.info("Sending push", {
+          tripId, studentId, newStatus, tokensCount: tokens.length,
+        });
 
-    logger.info("Push result", {
-      successCount: res.successCount,
-      failureCount: res.failureCount,
+        const message: admin.messaging.MulticastMessage = {
+          notification: { title, body },
+          data: messageData,
+          tokens,
+          android: { priority: "high" },
+          webpush: {
+            fcmOptions: { link: "/parent" },
+          },
+        };
+
+        const res = await admin.messaging().sendEachForMulticast(message);
+
+        logger.info("Push result", {
+          successCount: res.successCount,
+          failureCount: res.failureCount,
+        });
+
+        // Clean up invalid tokens
+        const invalidTokens = res.responses
+          .map((r, i) => (r.success ? null : tokens[i]))
+          .filter((t): t is string => !!t);
+
+        if (invalidTokens.length > 0) {
+          logger.warn("Removing invalid tokens", { invalidTokensCount: invalidTokens.length });
+          // remove from all parent docs (simple fan-out)
+          const batch = admin.firestore().batch();
+          parentDocs.forEach((snap) => {
+              if (!snap.exists) return;
+              batch.update(snap.ref, {
+                  fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens),
+              });
+          });
+          await batch.commit().catch(e => logger.error("Failed to remove invalid tokens", { e }));
+        }
+    } else {
+         logger.info("No tokens found for parents; skipping push.", { parentIds });
+    }
+    
+    // --- Write to Inbox ---
+    const inboxWritePromises = parentDocs.map(parentDoc => {
+        if (!parentDoc.exists) return Promise.resolve();
+        return parentDoc.ref.collection("inbox").add({
+            title,
+            body,
+            data: messageData,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            read: false,
+        });
     });
 
-    // Clean up invalid tokens
-    const invalidTokens = res.responses
-      .map((r, i) => (r.success ? null : tokens[i]))
-      .filter((t): t is string => !!t);
-
-    if (invalidTokens.length > 0) {
-      logger.warn("Removing invalid tokens", { invalidTokensCount: invalidTokens.length });
-      // remove from all parent docs (simple fan-out)
-      const batch = admin.firestore().batch();
-      parentDocs.forEach((snap) => {
-          if (!snap.exists) return;
-          batch.update(snap.ref, {
-              fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens),
-          });
-      });
-      await batch.commit().catch(e => logger.error("Failed to remove invalid tokens", { e }));
-    }
+    await Promise.all(inboxWritePromises);
+    logger.info(`Wrote ${inboxWritePromises.length} inbox item(s)`);
   }
 );
