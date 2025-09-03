@@ -1,8 +1,7 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { formatDistanceToNowStrict } from "date-fns";
-import type { Timestamp } from "firebase/firestore";
 import { relativeFrom } from "./datetime";
+import type { Timestamp } from "firebase/firestore";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

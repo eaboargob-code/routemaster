@@ -1,14 +1,13 @@
 
-
 "use client";
 
-import { useEffect, useState, type ReactNode, useCallback }from "react";
+import { useEffect, useState, type ReactNode, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
-import { LogOut, ShieldAlert, HeartHandshake, Bell, CheckCheck } from "lucide-react";
+import { LogOut, ShieldAlert, HeartHandshake, Bell } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
 import { onForegroundNotification, logBell, registerFcmToken } from "@/lib/notifications";
 import {
@@ -18,7 +17,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs, serverTimestamp } from "firebase/firestore";
@@ -48,7 +47,6 @@ interface Student {
   schoolId: string;
 }
 
-
 // --- useInbox Hook ---
 function useInbox() {
   const { user } = useProfile();
@@ -61,7 +59,7 @@ function useInbox() {
     const q = query(
       collection(db, "users", user.uid, "inbox"),
       orderBy("createdAt", "desc"),
-      limit(20)
+      limit(25)
     );
 
     const unsub = onSnapshot(q, (snap) => {
@@ -93,8 +91,7 @@ function useInbox() {
   return { items, unreadCount, handleMarkAsRead };
 }
 
-
-function Header({ notifications, unreadCount, onMarkAsRead }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void }) {
+function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void, childNameMap: Map<string, string> }) {
     const router = useRouter();
     const handleLogout = async () => {
         await signOut(auth);
@@ -128,8 +125,8 @@ function Header({ notifications, unreadCount, onMarkAsRead }: { notifications: N
                         {notifications.length > 0 ? (
                             <>
                                 {notifications.map(n => {
-                                     const studentIdentifier = n.data?.studentName || n.data?.studentId;
-                                     const body = `Student ${studentIdentifier} is ${n.data?.status || 'updated'}.`;
+                                     const name = n.data?.studentName || childNameMap.get(n.data?.studentId || '') || 'Student';
+                                     const body = `Student ${name} is ${n.data?.status || 'updated'}.`;
                                      return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
@@ -202,7 +199,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user?.uid) return;
     (async () => {
-      const t = await registerFcmToken(user.uid);
+      await registerFcmToken(user.uid);
     })();
   }, [user?.uid]);
 
@@ -252,6 +249,8 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         fetchChildrenData();
     }
   }, [user, profile, profileLoading]);
+  
+  const childNameMap = useMemo(() => new Map(childrenList.map(s => [s.id, s.name])), [childrenList]);
   
   // --- End data fetching ---
 
@@ -307,6 +306,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         notifications={notifications} 
         unreadCount={unreadCount} 
         onMarkAsRead={handleMarkAsRead}
+        childNameMap={childNameMap}
       />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
          {/* Pass fetched data down to the actual page component */}
