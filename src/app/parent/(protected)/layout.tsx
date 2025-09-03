@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import { useEffect, useState, type ReactNode, useCallback }from "react";
@@ -124,12 +125,13 @@ function Header({ notifications, unreadCount, onClearNotifications, childNameMap
                         {notifications.length > 0 ? (
                             <>
                                 {notifications.map(n => {
-                                     const displayName = n.studentName ?? childNameMap[n.studentId ?? ''] ?? n.body;
+                                     const displayName = n.studentName ?? childNameMap[n.studentId ?? ''] ?? 'Student';
+                                     const body = n.body.replace(n.studentId ?? '', displayName); // Replace ID in body if present
                                      return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
                                         <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
-                                            {displayName}
+                                            {body}
                                         </div>
                                         <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>

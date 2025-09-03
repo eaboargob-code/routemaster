@@ -24,27 +24,30 @@ export const onPassengerStatusChange = functions.firestore
     const { tripId, studentId } = ctx.params as { tripId: string; studentId: string };
     const schoolId: string = after.schoolId;
 
-    // 1) Get student name
-    let studentName = studentId;
-    try {
-      const studentSnap = await db.doc(`students/${studentId}`).get();
-      if (studentSnap.exists) {
-        const s = studentSnap.data()!;
-        if (typeof s.name === "string" && s.name.trim().length > 0) {
-          studentName = s.name.trim();
+    // 1) Get student name (with fallback)
+    let studentName = after.studentName; // Prefer name from passenger doc
+    if (!studentName || typeof studentName !== 'string' || !studentName.trim()) {
+        try {
+            const studentSnap = await db.doc(`students/${studentId}`).get();
+            if (studentSnap.exists) {
+                const s = studentSnap.data()!;
+                if (typeof s.name === "string" && s.name.trim().length > 0) {
+                    studentName = s.name.trim();
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch student name:", e);
         }
-      }
-    } catch (e) {
-      console.error("Failed to fetch student name:", e);
     }
+    // Final fallback to student ID
+    if (!studentName) studentName = studentId;
 
-    // 2) Find all parents that have this student linked (Option A shape)
-    const parentsSnap = await db
-      .collection("parentStudents")
-      .where("studentIds", "array-contains", studentId)
-      .get();
-
-    if (parentsSnap.empty) return;
+    // 2) Get parent UIDs from the passenger document
+    const parentUids: string[] = after.parentUids || [];
+    if (parentUids.length === 0) {
+        console.log(`No parentUids found for student ${studentId} on trip ${tripId}. Skipping notification.`);
+        return;
+    }
 
     // 3) Prepare common payload
     const title =
@@ -58,20 +61,18 @@ export const onPassengerStatusChange = functions.firestore
 
     const body = `${studentName} is ${statusNow}.`;
 
-    // 4) Write inbox doc + (optional) FCM fan-out
+    // 4) Write inbox doc + (optional) FCM fan-out for each parent
     const writes: Promise<any>[] = [];
+    const batch = db.batch();
 
-    for (const pDoc of parentsSnap.docs) {
-      const parentUid = pDoc.id;
-
+    for (const parentUid of parentUids) {
       // 4a) Inbox document (this powers the bell dropdown)
       const inboxRef = db.collection("users").doc(parentUid).collection("inbox").doc();
-      writes.push(
-        inboxRef.set({
+      batch.set(inboxRef, {
           title,
           body,
           studentId,
-          studentName,               // <-- the field we were missing
+          studentName,
           tripId,
           schoolId,
           status: statusNow,
@@ -84,11 +85,9 @@ export const onPassengerStatusChange = functions.firestore
             tripId,
             status: statusNow,
           },
-        })
-      );
+      });
 
       // 4b) (Optional) Web push via FCM
-      // If you already send pushes elsewhere, keep that. Otherwise:
       writes.push(
         (async () => {
           try {
@@ -113,6 +112,8 @@ export const onPassengerStatusChange = functions.firestore
         })()
       );
     }
-
+    
+    writes.push(batch.commit());
     await Promise.all(writes);
   });
+

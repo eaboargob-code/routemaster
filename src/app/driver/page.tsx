@@ -77,6 +77,7 @@ async function seedPassengersForTrip(
     trip: Omit<Trip, 'id'> & { id: string },
 ) {
   const studentsCol = collection(fs, "students");
+  const parentStudentsCol = collection(fs, "parentStudents");
   const queries = [];
 
   // Query by route if it exists
@@ -102,28 +103,50 @@ async function seedPassengersForTrip(
   const querySnapshots = await Promise.all(queries.map(q => getDocs(q)));
   
   const seenStudentIds = new Set<string>();
-  const batch = writeBatch(fs);
+  const studentDocs: QueryDocumentSnapshot<DocumentData>[] = [];
+  querySnapshots.forEach(snap => snap.forEach(doc => {
+      if (!seenStudentIds.has(doc.id)) {
+          seenStudentIds.add(doc.id);
+          studentDocs.push(doc);
+      }
+  }));
 
-  const addStudentToBatch = (s: QueryDocumentSnapshot<DocumentData>) => {
-    if (seenStudentIds.has(s.id)) return;
-    seenStudentIds.add(s.id);
+  // Find all parent links for these students in a single query
+  const studentIdsArray = Array.from(seenStudentIds);
+  const parentLinksByStudent = new Map<string, string[]>();
+  if (studentIdsArray.length > 0) {
+      const parentQuery = query(parentStudentsCol, where('schoolId', '==', trip.schoolId), where('studentIds', 'array-contains-any', studentIdsArray));
+      const parentLinksSnap = await getDocs(parentQuery);
+      parentLinksSnap.forEach(doc => {
+          const parentId = doc.id;
+          const data = doc.data();
+          data.studentIds.forEach((studentId: string) => {
+              if (seenStudentIds.has(studentId)) {
+                  if (!parentLinksByStudent.has(studentId)) {
+                      parentLinksByStudent.set(studentId, []);
+                  }
+                  parentLinksByStudent.get(studentId)!.push(parentId);
+              }
+          });
+      });
+  }
+
+  const batch = writeBatch(fs);
+  studentDocs.forEach(s => {
     const pRef = doc(fs, `trips/${trip.id}/passengers/${s.id}`);
     const data = s.data();
     batch.set(pRef, {
       studentId: s.id,
-      name: data.name ?? "",
-      schoolId: trip.schoolId, // Denormalize schoolId
-      routeId: trip.routeId || null,
-      busId: trip.busId,
+      name: data.name ?? s.id,
+      schoolId: trip.schoolId,
+      parentUids: parentLinksByStudent.get(s.id) || [], // <-- New field
       status: "pending",
       boardedAt: null,
       droppedAt: null,
-      updatedBy: trip.driverId, // Attributed to the driver who started the trip
+      updatedBy: trip.driverId,
       updatedAt: serverTimestamp(),
     }, { merge: true });
-  };
-
-  querySnapshots.forEach(snap => snap.forEach(addStudentToBatch));
+  });
 
   await batch.commit();
 
@@ -131,7 +154,7 @@ async function seedPassengersForTrip(
   if (seenStudentIds.size > 0) {
       await updateDoc(doc(fs, 'trips', trip.id), {
           'counts.pending': seenStudentIds.size,
-          'passengers': Array.from(seenStudentIds), // Add the array of student IDs
+          'passengers': Array.from(seenStudentIds),
       });
   }
 
