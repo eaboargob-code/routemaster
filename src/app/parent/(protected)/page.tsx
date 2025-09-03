@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -13,14 +12,13 @@ import {
   doc,
   getDoc,
   documentId,
-  onSnapshot,
   DocumentData,
   Timestamp,
-  collectionGroup,
   orderBy,
   limit,
 } from "firebase/firestore";
 import { registerFcmToken } from "@/lib/notifications";
+import { listenWithPath } from "@/lib/firestore-helpers";
 
 import {
   Card,
@@ -61,7 +59,7 @@ interface Student {
   schoolId: string;
 }
 
-interface TripPassenger extends DocumentData {
+interface TripPassenger {
   status: "boarded" | "absent" | "dropped" | "pending";
   boardedAt?: Timestamp;
   droppedAt?: Timestamp;
@@ -86,74 +84,57 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
     let stopTrips: (() => void) | undefined;
     let stopPassenger: (() => void) | undefined;
     let stopTripDoc: (() => void) | undefined;
-    let cancelled = false;
 
-    (async () => {
+    const startListening = async () => {
       setIsLoading(true);
 
-      const start = new Date(); start.setHours(0,0,0,0);
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
       const tripsQ = query(
         collection(db, "trips"),
         where("schoolId", "==", initialStudent.schoolId),
         where("passengers", "array-contains", initialStudent.id),
-        where("startedAt", ">=", Timestamp.fromDate(start)),
+        where("startedAt", ">=", Timestamp.fromDate(startOfDay)),
         orderBy("startedAt", "desc"),
         limit(1)
       );
 
-      stopTrips = onSnapshot(tripsQ, (ts) => {
-        if (cancelled) return;
-
-        // rewire listeners
-        stopPassenger?.(); stopPassenger = undefined;
-        stopTripDoc?.();  stopTripDoc  = undefined;
+      stopTrips = listenWithPath(tripsQ, `trips for student ${initialStudent.id}`, (ts) => {
+        // Clean up old listeners before starting new ones
+        stopPassenger?.();
+        stopTripDoc?.();
 
         if (ts.empty) {
-          // no trip today containing this student
-          setStatus(prev => ({ ...prev, tripStatus: null, lastLocationUpdate: null }));
+          setStatus((prev) => ({ ...prev, tripStatus: null, lastLocationUpdate: null }));
           setIsLoading(false);
           return;
         }
 
-        const tripId = ts.docs[0].id;
-        const passengerPath = `trips/${tripId}/passengers/${initialStudent.id}`;
-        console.log("[Parent] Listening passenger:", passengerPath);
+        const tripDoc = ts.docs[0];
+        const tripId = tripDoc.id;
 
         // 1) Passenger listener
         const passengerRef = doc(db, "trips", tripId, "passengers", initialStudent.id);
-        stopPassenger = onSnapshot(
-          passengerRef,
-          (snap) => {
+        stopPassenger = listenWithPath(passengerRef, `trips/${tripId}/passengers/${initialStudent.id}`, (snap) => {
             const p = snap.exists() ? (snap.data() as TripPassenger) : null;
-            setStatus(prev => ({ ...prev, tripStatus: p }));
-          },
-          (err) => {
-            console.error("Error listening to passenger", passengerPath, err);
+            setStatus((prev) => ({ ...prev, tripStatus: p }));
           }
         );
 
         // 2) Trip doc listener (for lastLocation)
         const tripRef = doc(db, "trips", tripId);
-        stopTripDoc = onSnapshot(
-          tripRef,
-          (snap) => {
-            const t = snap.data() as any;
-            setStatus(prev => ({ ...prev, lastLocationUpdate: t?.lastLocation?.at ?? null }));
-          },
-          (err) => {
-            console.error("Error listening to trip", tripId, err);
+        stopTripDoc = listenWithPath(tripRef, `trips/${tripId}`, (snap) => {
+            const t = snap.data();
+            setStatus((prev) => ({ ...prev, lastLocationUpdate: t?.lastLocation?.at ?? null }));
           }
         );
-
-        setIsLoading(false);
-      }, (err) => {
-        console.error("Error querying trips for student", initialStudent.id, err);
         setIsLoading(false);
       });
-    })();
+    };
+
+    startListening();
 
     return () => {
-      cancelled = true;
       stopTrips?.();
       stopPassenger?.();
       stopTripDoc?.();
@@ -275,7 +256,7 @@ function LoadingState() {
 /* -------------------- Page -------------------- */
 
 export default function ParentDashboardPage() {
-  const { user, profile } = useProfile();
+  const { user, profile, loading: profileLoading } = useProfile();
   const [children, setChildren] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -312,7 +293,6 @@ export default function ParentDashboardPage() {
         }
 
         // 2) Fetch the specific student docs by ID.
-        // Using only __name__ IN to avoid composite index; filter by school client-side.
         const studentsQuery = query(
           collection(db, "students"),
           where(documentId(), "in", linkedIds)
@@ -337,7 +317,7 @@ export default function ParentDashboardPage() {
     }
   }, [user, profile]);
 
-  if (isLoading) return <LoadingState />;
+  if (isLoading || profileLoading) return <LoadingState />;
 
   return (
     <div className="grid gap-6">

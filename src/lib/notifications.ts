@@ -64,4 +64,3 @@ export async function logBell(uid: string, n: { title: string; body: string; dat
     read: false,
   });
 }
-

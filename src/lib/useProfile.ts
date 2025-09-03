@@ -3,19 +3,9 @@
 
 import { useState, useEffect } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import { doc, onSnapshot, collection, query, orderBy, limit, type DocumentData, type Timestamp } from 'firebase/firestore';
+import { doc, collection, query, orderBy, limit, type Timestamp } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
-
-function listenWithPath(ref: any, label: string, onData: (snap: any)=>void) {
-  try {
-    return onSnapshot(ref, (snap) => onData(snap), (err) => {
-      console.error(`[PROFILE-LISTEN ERROR] ${label}`, err);
-    });
-  } catch (e) {
-    console.error(`[PROFILE-START ERROR] ${label}`, e);
-    return () => {};
-  }
-}
+import { listenWithPath } from './firestore-helpers';
 
 export type UserRole = "admin" | "driver" | "supervisor" | "parent";
 
@@ -83,14 +73,14 @@ export function useProfile(): UseProfileReturn {
         setProfile(snap.data() as UserProfile);
       } else {
         setProfile(null);
+        setError(new Error("User profile does not exist."));
       }
-      setError(null);
       setLoading(false);
     }));
 
-    const inboxRef = collection(db, "users", user.uid, "inbox");
+    const inboxRef = collection(db, "users", user.uid, "notifications");
     const inboxQ = query(inboxRef, orderBy("createdAt","desc"), limit(20));
-    unsubs.push(listenWithPath(inboxQ, `users/${user.uid}/inbox/*`, (snap) => {
+    unsubs.push(listenWithPath(inboxQ, `users/${user.uid}/notifications/*`, (snap) => {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as BellItem));
         setBellItems(items);
         setBellCount(items.filter(item => !item.read).length);

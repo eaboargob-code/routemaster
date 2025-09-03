@@ -11,6 +11,7 @@ import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import { registerFcmToken } from '@/lib/notifications';
+import { getUsersByIds } from "@/lib/firestoreQueries";
 
 import {
   Card,
@@ -101,48 +102,41 @@ export default function SupervisorPage() {
       fetchedTrips.sort((a,b) => b.startedAt.toMillis() - a.startedAt.toMillis());
       setTrips(fetchedTrips);
   
-      try {
-        const userIds = Array.from(new Set(fetchedTrips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
-        const busIds  = Array.from(new Set(fetchedTrips.map(t => t.busId).filter(Boolean)));
-        const routeIds= Array.from(new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[]));
-  
-        const [userMap, busMap, routeMap] = await Promise.all([
-          (async () => {
-            if (userIds.length === 0) return {};
-            const entries = await Promise.all(userIds.map(async (id: string) => {
-              try {
-                const s = await getDoc(doc(db, 'users', id));
-                return [id, s.exists() ? s.data() : null] as const;
-              } catch { return [id, null] as const; }
-            }));
-            return Object.fromEntries(entries.filter(e => e[1]));
-          })(),
-          (async () => {
-             if (busIds.length === 0) return {};
-            const entries = await Promise.all(busIds.map(async (id: string) => {
-              try {
-                const s = await getDoc(doc(db, 'buses', id));
-                return [id, s.exists() ? s.data() : null] as const;
-              } catch { return [id, null] as const; }
-            }));
-            return Object.fromEntries(entries.filter(e => e[1]));
-          })(),
-          (async () => {
-            if (routeIds.length === 0) return {};
-            const entries = await Promise.all(routeIds.map(async (id: string) => {
-              try {
-                const s = await getDoc(doc(db, 'routes', id));
-                return [id, s.exists() ? s.data() : null] as const;
-              } catch { return [id, null] as const; }
-            }));
-            return Object.fromEntries(entries.filter(e => e[1]));
-          })(),
-        ]);
-  
-        setReferenceData({ userMap, busMap, routeMap });
-      } catch (e) {
-        console.warn('[supervisor] refs fetch failed (non-blocking):', e);
-        setReferenceData({ userMap: {}, busMap: {}, routeMap: {} });
+      if (fetchedTrips.length > 0) {
+        try {
+          const userIds = Array.from(new Set(fetchedTrips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
+          const busIds  = Array.from(new Set(fetchedTrips.map(t => t.busId).filter(Boolean)));
+          const routeIds= Array.from(new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[]));
+    
+          const [userMap, busMap, routeMap] = await Promise.all([
+            getUsersByIds(userIds),
+            (async () => {
+               if (busIds.length === 0) return {};
+              const entries = await Promise.all(busIds.map(async (id: string) => {
+                try {
+                  const s = await getDoc(doc(db, 'buses', id));
+                  return [id, s.exists() ? s.data() : null] as const;
+                } catch { return [id, null] as const; }
+              }));
+              return Object.fromEntries(entries.filter(e => e[1]));
+            })(),
+            (async () => {
+              if (routeIds.length === 0) return {};
+              const entries = await Promise.all(routeIds.map(async (id: string) => {
+                try {
+                  const s = await getDoc(doc(db, 'routes', id));
+                  return [id, s.exists() ? s.data() : null] as const;
+                } catch { return [id, null] as const; }
+              }));
+              return Object.fromEntries(entries.filter(e => e[1]));
+            })(),
+          ]);
+    
+          setReferenceData({ userMap, busMap, routeMap });
+        } catch (e) {
+          console.warn('[supervisor] refs fetch failed (non-blocking):', e);
+          setReferenceData({ userMap: {}, busMap: {}, routeMap: {} });
+        }
       }
   
       if (fetchedTrips.length === 0) {
