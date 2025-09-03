@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
+import { formatRelative } from "@/lib/utils";
 
 /* -------------------- Types -------------------- */
 
@@ -227,13 +228,13 @@ function StudentCard({ student: initialStudent }: { student: Student }) {
             </span>
           </div>
         )}
-        {tripStatus?.status === "dropped" &&
+        {tripStatus?.status === 'dropped' &&
           tripStatus.droppedAt && (
             <div className="text-sm text-muted-foreground flex items-center gap-2">
               <Clock className="h-4 w-4" />
               <span>
                 Dropped off at:{" "}
-                {format(tripStatus.droppedAt.toDate(), "p")}
+                {formatRelative(tripStatus.droppedAt)}
               </span>
             </div>
           )}
