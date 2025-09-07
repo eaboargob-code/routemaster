@@ -68,8 +68,11 @@ async function getDocsByIds(collectionName: string, ids: string[]): Promise<Reco
   const CHUNK_SIZE = 30;
   const dataMap: Record<string, DocumentData> = {};
 
-  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + CHUNK_SIZE);
+  // Using a Set to ensure IDs are unique before querying
+  const uniqueIds = [...new Set(ids)];
+
+  for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
+      const chunk = uniqueIds.slice(i, i + CHUNK_SIZE);
       if (chunk.length === 0) continue;
       const q = query(collection(db, collectionName), where("__name__", "in", chunk));
       const snapshot = await getDocs(q);
@@ -135,6 +138,7 @@ export default function SupervisorPage() {
           setReferenceData({ userMap, busMap, routeMap });
         } catch (e) {
           console.warn('[supervisor] refs fetch failed (non-blocking):', e);
+          toast({ variant: "destructive", title: "Reference Data Failed", description: "Could not load all related trip information." });
           setReferenceData({ userMap: {}, busMap: {}, routeMap: {} });
         }
       }
@@ -149,7 +153,7 @@ export default function SupervisorPage() {
       console.error('[supervisor] trip fetch failed', err?.code, err?.message);
       setUiState({ status: 'error', errorMessage: 'Missing or insufficient permissions.' });
     }
-  }, [user, profile]);
+  }, [user, profile, toast]);
 
   useEffect(() => {
     if (!profileLoading && user && profile) {
@@ -178,7 +182,7 @@ export default function SupervisorPage() {
         </Badge>
       );
     }
-    const supervisor = referenceData.userMap?.[trip.supervisorId as string] as UserInfo;
+    const supervisor = trip.supervisorId ? referenceData.userMap?.[trip.supervisorId] as UserInfo : null;
     if (supervisor) {
       return supervisor.displayName || supervisor.email;
     }
@@ -267,3 +271,5 @@ export default function SupervisorPage() {
     </Card>
   );
 }
+
+    
