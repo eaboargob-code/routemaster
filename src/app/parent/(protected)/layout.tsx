@@ -126,12 +126,12 @@ function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { no
                             <>
                                 {notifications.map(n => {
                                      const name = n.data?.studentName || childNameMap.get(n.data?.studentId || '') || 'Student';
-                                     const body = `Student ${name} is ${n.data?.status || 'updated'}.`;
+                                     const statusText = n.data?.status === 'boarded' ? 'is boarded' : n.data?.status === 'dropped' ? 'is dropped' : n.body ?? '';
                                      return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
                                         <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
-                                            {n.body || body}
+                                            {n.body || `${name} ${statusText}`}
                                         </div>
                                         <div className="text-xs text-muted-foreground/80 mt-1">{relativeFrom(n.createdAt)}</div>
                                     </DropdownMenuItem>

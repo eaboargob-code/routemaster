@@ -43,44 +43,52 @@ exports.onPassengerStatusChange = functions.firestore
     .onWrite(async (change, ctx) => {
     const after = change.after.exists ? change.after.data() : null;
     const before = change.before.exists ? change.before.data() : null;
-    if (!after)
+    // 1. Exit early if this is not a meaningful status change
+    if (!after || after.status === before?.status) {
         return;
-    if (before?.status === after.status)
-        return; // no real change
+    }
     const { tripId, studentId } = ctx.params;
     const schoolId = after.schoolId || null;
-    // 🔹 Try passenger row for name
-    let studentName = after.studentName || null;
-    // 🔹 If not in passenger row, fallback to student doc
-    if (!studentName) {
+    const status = after.status;
+    const meaningful = status === "boarded" || status === "dropped" || status === "absent";
+    if (!meaningful)
+        return;
+    // 2. Resolve student name with robust fallbacks
+    let studentName = null;
+    try {
         const studentSnap = await admin.firestore().doc(`students/${studentId}`).get();
         if (studentSnap.exists) {
             const s = studentSnap.data();
-            studentName =
-                s.name ||
-                    s.displayName ||
-                    ([s.firstName, s.lastName].filter(Boolean).join(' ')) ||
-                    null;
+            // Use the first available name field
+            studentName = s.name ||
+                s.displayName ||
+                ([s.firstName, s.lastName].filter(Boolean).join(' ')) ||
+                null;
         }
     }
-    // 🔹 Last fallback = just show UID
+    catch (e) {
+        console.error(`Error fetching student doc for ${studentId}:`, e);
+    }
+    // Final fallback to the student's ID if no name is found
     if (!studentName)
         studentName = studentId;
-    // Find linked parents
+    // 3. Find all linked parents for this student
     const parents = await admin.firestore()
         .collection('parentStudents')
         .where('studentIds', 'array-contains', studentId)
         .get();
-    if (parents.empty)
-        return;
+    if (parents.empty) {
+        return; // No parents to notify
+    }
+    // 4. Build notification content
     const titleMap = {
         boarded: "On Bus 🚌",
         dropped: "Dropped Off ✅",
         absent: "Marked Absent 🚫",
-        pending: "Awaiting Check-in 🕓",
     };
-    const title = titleMap[after.status] || "Update";
-    const body = `Student ${studentName} is ${after.status}.`;
+    const title = titleMap[status] || "Update";
+    const body = `${studentName} is ${status}.`;
+    // 5. Create inbox notifications for all linked parents in a batch
     const batch = admin.firestore().batch();
     parents.forEach(p => {
         const inboxRef = admin.firestore()
@@ -98,8 +106,8 @@ exports.onPassengerStatusChange = functions.firestore
                 schoolId,
                 tripId,
                 studentId,
-                studentName, // ✅ now always stored
-                status: after.status,
+                studentName,
+                status,
             },
         });
     });
