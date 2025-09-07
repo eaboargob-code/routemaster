@@ -311,7 +311,10 @@ export default function ParentDashboardPage({ profile, childrenData }: ParentDas
 
 /**
  * 🔧 Composite index needed (create once via console link if prompted):
- * collection: trips
- * where: schoolId ==, passengers array-contains, startedAt >=
- * orderBy: startedAt desc
+ * Collection: trips
+ * Fields:
+ * 1. schoolId (==)
+ * 2. passengers (array-contains)
+ * 3. startedAt (>=)
+ * 4. startedAt (desc)
  */
