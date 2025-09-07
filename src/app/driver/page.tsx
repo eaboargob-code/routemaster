@@ -146,105 +146,59 @@ export default function DriverPage() {
     if (!user || !profile) return;
     setUiState({ status: "loading" });
 
-    // 1) Find my bus
-    let foundBus: BusDoc | null = null;
     try {
+      // 1. Find the bus assigned to this driver
       const busQ = query(
         collection(db, "buses"),
         where("schoolId", "==", profile.schoolId),
         where("driverId", "==", user.uid),
         limit(1)
       );
-      const s = await getDocs(busQ);
-      if (s.empty) {
-        setBus(null);
-        setRoute(null);
+      const busSnap = await getDocs(busQ);
+      if (busSnap.empty) {
         setUiState({ status: "empty" });
         return;
       }
-      foundBus = { id: s.docs[0].id, ...(s.docs[0].data() as any) };
+      const foundBus = { id: busSnap.docs[0].id, ...busSnap.docs[0].data() } as BusDoc;
       setBus(foundBus);
-    } catch {
-      setUiState({
-        status: "error",
-        errorMessage: "Permission denied reading your bus.",
-      });
-      return;
-    }
 
-    // 2) Optional route card
-    if (foundBus?.assignedRouteId) {
-      const rSnap = await getDoc(doc(db, "routes", foundBus.assignedRouteId));
-      if (rSnap.exists()) {
-        setRoute({ id: rSnap.id, ...(rSnap.data() as any) });
-      } else {
-        setRoute(null);
-      }
-    } else {
-      setRoute(null);
-    }
-
-    // 3) Optional supervisor card
-    if (foundBus?.supervisorId) {
-      const supSnap = await getDoc(doc(db, "users", foundBus.supervisorId));
-      if (supSnap.exists()) {
-        setSupervisor({ id: supSnap.id, ...(supSnap.data() as any) });
-      } else {
-        setSupervisor(null);
-      }
-    } else {
-      setSupervisor(null);
-    }
-
-    // 4) Find today's active trip
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-
-    try {
+      // 2. Find any active trip for this driver
       const tripQ = query(
         collection(db, "trips"),
         where("schoolId", "==", profile.schoolId),
         where("driverId", "==", user.uid),
-        where("startedAt", ">=", Timestamp.fromDate(startOfDay)),
-        orderBy("startedAt", "desc"),
-        limit(10)
+        where("status", "==", "active"),
+        limit(1)
       );
       const tripSnap = await getDocs(tripQ);
-      const active =
-        tripSnap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .find((t) => t.status === "active") || null;
+      const activeTripDoc = tripSnap.docs[0];
+      const foundTrip = activeTripDoc ? { id: activeTripDoc.id, ...activeTripDoc.data() } as Trip : null;
+      setActiveTrip(foundTrip);
 
-      if (active) {
-        setActiveTrip(active as Trip);
-        
-        // 5) Ensure roster exists (idempotent). Log result; don't block UI.
-        seedPassengersForTrip({
-          tripId: active.id,
-          schoolId: active.schoolId,
-          routeId: active.routeId ?? null,
-          busId: active.busId ?? null,
-        })
-          .then(({ created }) => {
-            if (created > 0) {
-              console.debug(
-                `[seed] existing trip ${active.id}: created ${created} passengers`
-              );
-            }
-          })
-          .catch((err) =>
-            console.error("[seed passengers existing trip]", err)
-          );
+      // 3. Fetch related route and supervisor info (can be done in parallel)
+      const [routeData, supervisorData] = await Promise.all([
+        foundBus.assignedRouteId ? getDoc(doc(db, "routes", foundBus.assignedRouteId)) : Promise.resolve(null),
+        foundBus.supervisorId ? getDoc(doc(db, "users", foundBus.supervisorId)) : Promise.resolve(null),
+      ]);
 
+      if (routeData?.exists()) {
+        setRoute({ id: routeData.id, ...routeData.data() } as RouteInfo);
       } else {
-        setActiveTrip(null);
+        setRoute(null);
       }
-    } catch (e) {
-      console.error("[driver] TRIPS query failed", e);
-      setActiveTrip(null);
-    }
 
-    setUiState({ status: "ready" });
+      if (supervisorData?.exists()) {
+        setSupervisor({ id: supervisorData.id, ...supervisorData.data() } as Supervisor);
+      } else {
+        setSupervisor(null);
+      }
+
+      setUiState({ status: "ready" });
+
+    } catch (e: any) {
+      console.error("[DriverPage] Fetch data error:", e);
+      setUiState({ status: "error", errorMessage: e.message || "Could not load your assignment." });
+    }
   }, [user, profile]);
 
   useEffect(() => {
@@ -282,28 +236,6 @@ export default function DriverPage() {
     setIsSubmitting(true);
 
     try {
-      // guard against duplicates
-      const existingQ = query(
-        collection(db, "trips"),
-        where("schoolId", "==", profile.schoolId),
-        where("driverId", "==", user.uid),
-        where("status", "==", "active"),
-        limit(1)
-      );
-      const existing = await getDocs(existingQ);
-      if (!existing.empty) {
-        const doc0 = existing.docs[0];
-        setActiveTrip({ id: doc0.id, ...(doc0.data() as any) });
-        toast({
-          variant: "default",
-          title: "Active Trip Found",
-          description: "Your existing active trip has been loaded.",
-          className: "bg-accent text-accent-foreground border-0",
-        });
-        setIsSubmitting(false);
-        return;
-      }
-
       const newTripData = {
         driverId: user.uid,
         busId: bus.id,
@@ -365,11 +297,7 @@ export default function DriverPage() {
         status: "ended",
       });
       setActiveTrip(null);
-      fetchData();
-      toast({
-        title: "Trip Ended",
-        description: "Your trip has been successfully logged.",
-      });
+      // No full fetchData needed, just clear the trip from state
     } catch (error) {
       console.error("[end trip]", error);
       toast({
