@@ -63,27 +63,6 @@ type UiState = {
     errorMessage?: string;
 }
 
-async function getDocsByIds(collectionName: string, ids: string[]): Promise<Record<string, DocumentData>> {
-  if (ids.length === 0) return {};
-  const CHUNK_SIZE = 30;
-  const dataMap: Record<string, DocumentData> = {};
-
-  // Using a Set to ensure IDs are unique before querying
-  const uniqueIds = [...new Set(ids)];
-
-  for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
-      const chunk = uniqueIds.slice(i, i + CHUNK_SIZE);
-      if (chunk.length === 0) continue;
-      const q = query(collection(db, collectionName), where("__name__", "in", chunk));
-      const snapshot = await getDocs(q);
-      snapshot.forEach(d => {
-          dataMap[d.id] = d.data();
-      });
-  }
-  return dataMap;
-}
-
-
 export default function SupervisorPage() {
   const { user, profile, loading: profileLoading, error: profileError } = useProfile();
   const { toast } = useToast();
@@ -124,22 +103,25 @@ export default function SupervisorPage() {
       setTrips(fetchedTrips);
   
       if (fetchedTrips.length > 0) {
+        // More robust fetching for reference data
         try {
           const userIds = Array.from(new Set(fetchedTrips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
-          const busIds  = Array.from(new Set(fetchedTrips.map(t => t.busId).filter(Boolean)));
-          const routeIds= Array.from(new Set(fetchedTrips.map(t => t.routeId).filter(Boolean) as string[]));
-    
-          const [userMap, busMap, routeMap] = await Promise.all([
+          
+          const [userMap, busesSnap, routesSnap] = await Promise.all([
             getUsersByIds(userIds),
-            getDocsByIds('buses', busIds),
-            getDocsByIds('routes', routeIds)
+            getDocs(query(collection(db, "buses"), where("schoolId", "==", profile.schoolId))),
+            getDocs(query(collection(db, "routes"), where("schoolId", "==", profile.schoolId))),
           ]);
+
+          const busMap = new Map(busesSnap.docs.map(d => [d.id, d.data()]));
+          const routeMap = new Map(routesSnap.docs.map(d => [d.id, d.data()]));
     
           setReferenceData({ userMap, busMap, routeMap });
+
         } catch (e) {
           console.warn('[supervisor] refs fetch failed (non-blocking):', e);
           toast({ variant: "destructive", title: "Reference Data Failed", description: "Could not load all related trip information." });
-          setReferenceData({ userMap: {}, busMap: {}, routeMap: {} });
+          setReferenceData({ userMap: {}, busMap: new Map(), routeMap: new Map() });
         }
       }
   
@@ -226,8 +208,8 @@ export default function SupervisorPage() {
               ) : trips.length > 0 ? (
                 trips.map(trip => {
                   const driver = referenceData.userMap?.[trip.driverId] as UserInfo;
-                  const bus = referenceData.busMap?.[trip.busId];
-                  const route = trip.routeId ? referenceData.routeMap?.[trip.routeId] : null;
+                  const bus = referenceData.busMap?.get(trip.busId);
+                  const route = trip.routeId ? referenceData.routeMap?.get(trip.routeId) : null;
                   return (
                     <TableRow key={trip.id}>
                       <TableCell>{driver?.displayName ?? driver?.email ?? '—'}</TableCell>
@@ -272,4 +254,3 @@ export default function SupervisorPage() {
   );
 }
 
-    
