@@ -1,69 +1,168 @@
-const functions = require('firebase-functions');
-const admin = require('firebase-admin');
+import * as admin from "firebase-admin";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { defineString } from "firebase-functions/params";
+
 admin.initializeApp();
-const db = admin.firestore();
 
-exports.onPassengerStatusChange = functions.firestore
-  .document('trips/{tripId}/passengers/{studentId}')
-  .onWrite(async (change, ctx) => {
-    const before = change.before.exists ? change.before.data() : null;
-    const after  = change.after.exists  ? change.after.data()  : null;
+/* ---------- Helpers ---------- */
 
-    const oldStatus = before?.status;
-    const newStatus = after?.status;
-    if (!after || oldStatus === newStatus) return;
+type Passenger = {
+  status?: "pending" | "boarded" | "dropped" | "absent";
+  studentId?: string;
+  schoolId?: string;
+  updatedAt?: admin.firestore.Timestamp;
+};
 
-    const { tripId, studentId } = ctx.params;
+type StudentDoc = {
+  name?: string;
+  fullName?: string;
+  displayName?: string;
+  firstName?: string;
+  lastName?: string;
+  schoolId?: string;
+};
 
-    const tripSnap = await db.doc(`trips/${tripId}`).get();
-    if (!tripSnap.exists) return;
-    const trip = tripSnap.data() || {};
-    const schoolId = trip.schoolId || '';
+type UserDoc = {
+  fcmTokens?: string[];
+  displayName?: string;
+};
 
-    // Find parents linked to this student in the same school
-    const parentsQ = await db.collection('parentStudents')
-      .where('schoolId', '==', schoolId)
-      .where('studentIds', 'array-contains', studentId)
-      .get();
+/** Resolve a human student name with sensible fallbacks. */
+async function getStudentName(db: FirebaseFirestore.Firestore, studentId: string): Promise<string> {
+  try {
+    const snap = await db.collection("students").doc(studentId).get();
+    if (!snap.exists) return studentId;
 
-    if (parentsQ.empty) return;
+    const s = snap.data() as StudentDoc;
+    const joined = [s.firstName, s.lastName].filter(Boolean).join(" ").trim();
+    return s.name || s.fullName || s.displayName || joined || studentId;
+  } catch {
+    return studentId;
+  }
+}
 
-    // Collect tokens
-    const parentUids = parentsQ.docs.map(d => d.id);
-    const userSnaps = await db.getAll(...parentUids.map(uid => db.doc(`users/${uid}`)));
-    const tokens = [];
-    userSnaps.forEach(s => { (s.data()?.fcmTokens || []).forEach(t => tokens.push(t)); });
-    if (tokens.length === 0) return;
+/** Find all parent userIds that link to this student in the same school. */
+async function getParentUserIds(
+  db: FirebaseFirestore.Firestore,
+  studentId: string,
+  schoolId: string
+): Promise<string[]> {
+  const q = db
+    .collection("parentStudents")
+    .where("schoolId", "==", schoolId)
+    .where("studentIds", "array-contains", studentId);
 
-    const title =
-      newStatus === 'boarded' ? 'On Bus 🚌' :
-      newStatus === 'dropped' ? 'Dropped Off ✅' :
-      newStatus === 'absent'  ? 'Marked Absent ⚠️' :
-      'Status Updated';
-    const body = `Student ${studentId} is ${newStatus}${trip.routeName ? ` on ${trip.routeName}` : ''}`;
+  const snap = await q.get();
+  if (snap.empty) return [];
+  return snap.docs.map((d) => d.id); // doc id is the parent uid (per your schema)
+}
 
-    const message = {
+/** Title + body for the notification. */
+function buildNote(status: Passenger["status"], studentName: string) {
+  let title = "Update";
+  if (status === "boarded") title = "On Bus 🚌";
+  else if (status === "dropped") title = "Dropped Off ✅";
+  else if (status === "absent") title = "Marked Absent 🚫";
+
+  // IMPORTANT: only the name, no “Student ” prefix.
+  const body = `${studentName} is ${status}.`;
+  return { title, body };
+}
+
+/** Send push to an array of tokens (best-effort; non-fatal). */
+async function pushToTokens(
+  tokens: string[] | undefined,
+  title: string,
+  body: string
+) {
+  if (!tokens || tokens.length === 0) return;
+  try {
+    await admin.messaging().sendEachForMulticast({
       tokens,
       notification: { title, body },
-      data: {
-        kind: 'passengerStatus',
-        studentId,
-        status: String(newStatus),
-        tripId,
-        schoolId
+      webpush: {
+        headers: { Urgency: "high" },
+        notification: {
+          title,
+          body,
+          badge: "/badge.png",
+          icon: "/icon-192.png",
+        },
       },
-      android: { priority: 'high' },
-      webpush: { fcmOptions: { link: '/parent' } }
-    };
+      data: { kind: "passengerStatus" },
+    });
+  } catch (e) {
+    console.warn("[FCM] multicast send failed:", (e as Error).message);
+  }
+}
 
-    const res = await admin.messaging().sendEachForMulticast(message);
+/* ---------- Trigger ---------- */
 
-    // Optional: write bell item so you can see it even if push blocked
-    await Promise.all(parentUids.map(uid =>
-      db.collection('users').doc(uid).collection('notifications').add({
-        title, body, data: message.data, createdAt: admin.firestore.FieldValue.serverTimestamp(), read: false
-      })
-    ));
+export const onPassengerStatusChange = onDocumentWritten(
+  {
+    region: "us-central1",
+    document: "trips/{tripId}/passengers/{studentId}",
+    // increase retries if you like:
+    // retry: true,
+  },
+  async (event) => {
+    const db = admin.firestore();
 
-    console.log('Push sent:', res.successCount, 'ok /', res.failureCount, 'fail');
-  });
+    const before = event.data?.before.exists ? (event.data!.before.data() as Passenger) : undefined;
+    const after = event.data?.after.exists ? (event.data!.after.data() as Passenger) : undefined;
+
+    if (!after) {
+      // deleted → nothing to notify
+      return;
+    }
+
+    const { status, studentId, schoolId } = after;
+    const tripId = event.params.tripId as string;
+
+    // Only notify when status becomes boarded/dropped/absent, and only if it changed
+    const meaningful = status === "boarded" || status === "dropped" || status === "absent";
+    const changed = before?.status !== after.status;
+    if (!meaningful || !changed || !studentId || !schoolId) return;
+
+    // Resolve student name
+    const studentName = await getStudentName(db, studentId);
+    const { title, body } = buildNote(status, studentName);
+
+    // Find parents
+    const parentUids = await getParentUserIds(db, studentId, schoolId);
+    if (parentUids.length === 0) return;
+
+    // Prepare write batch for bell items
+    const batch = db.batch();
+
+    for (const parentUid of parentUids) {
+      // 1) Create inbox (bell) entry
+      const inboxRef = db.collection("users").doc(parentUid).collection("inbox").doc();
+      batch.set(inboxRef, {
+        title,
+        body, // e.g. "Ali is boarded."
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        read: false,
+        data: {
+          kind: "passengerStatus",
+          status,
+          studentId,
+          studentName,
+          tripId,
+          schoolId,
+        },
+      });
+
+      // 2) Optionally send push (best effort)
+      try {
+        const userSnap = await db.collection("users").doc(parentUid).get();
+        const user = userSnap.exists ? (userSnap.data() as UserDoc) : undefined;
+        await pushToTokens(user?.fcmTokens, title, body);
+      } catch (e) {
+        console.warn(`[FCM] skipping parent ${parentUid}:`, (e as Error).message);
+      }
+    }
+
+    await batch.commit();
+  }
+);
