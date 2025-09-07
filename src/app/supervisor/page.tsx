@@ -63,6 +63,24 @@ type UiState = {
     errorMessage?: string;
 }
 
+async function getDocsByIds(collectionName: string, ids: string[]): Promise<Record<string, DocumentData>> {
+  if (ids.length === 0) return {};
+  const CHUNK_SIZE = 30;
+  const dataMap: Record<string, DocumentData> = {};
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + CHUNK_SIZE);
+      if (chunk.length === 0) continue;
+      const q = query(collection(db, collectionName), where("__name__", "in", chunk));
+      const snapshot = await getDocs(q);
+      snapshot.forEach(d => {
+          dataMap[d.id] = d.data();
+      });
+  }
+  return dataMap;
+}
+
+
 export default function SupervisorPage() {
   const { user, profile, loading: profileLoading, error: profileError } = useProfile();
   const { toast } = useToast();
@@ -110,26 +128,8 @@ export default function SupervisorPage() {
     
           const [userMap, busMap, routeMap] = await Promise.all([
             getUsersByIds(userIds),
-            (async () => {
-               if (busIds.length === 0) return {};
-              const entries = await Promise.all(busIds.map(async (id: string) => {
-                try {
-                  const s = await getDoc(doc(db, 'buses', id));
-                  return [id, s.exists() ? s.data() : null] as const;
-                } catch { return [id, null] as const; }
-              }));
-              return Object.fromEntries(entries.filter(e => e[1]));
-            })(),
-            (async () => {
-              if (routeIds.length === 0) return {};
-              const entries = await Promise.all(routeIds.map(async (id: string) => {
-                try {
-                  const s = await getDoc(doc(db, 'routes', id));
-                  return [id, s.exists() ? s.data() : null] as const;
-                } catch { return [id, null] as const; }
-              }));
-              return Object.fromEntries(entries.filter(e => e[1]));
-            })(),
+            getDocsByIds('buses', busIds),
+            getDocsByIds('routes', routeIds)
           ]);
     
           setReferenceData({ userMap, busMap, routeMap });
