@@ -5,7 +5,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   collection, query, where, getDocs, getDoc, doc,
-  Timestamp, type DocumentData, orderBy
+  Timestamp, type DocumentData
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";

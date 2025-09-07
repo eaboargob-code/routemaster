@@ -126,35 +126,38 @@ export async function getActiveOrTodayTripsForDriver(schoolId: string, driverUid
 
 export async function getSupervisorTrips(schoolId: string, supervisorUid: string) {
   const tripsRef = collection(db, "trips");
-  
-  const qMine = query(
+  const today = startOfToday();
+
+  // Query 1: Trips where the user is the explicitly assigned supervisor.
+  const assignedQuery = query(
     tripsRef,
     where("schoolId", "==", schoolId),
     where("supervisorId", "==", supervisorUid),
-    where("startedAt", ">=", startOfToday()),
-    orderBy("startedAt", "desc")
+    where("startedAt", ">=", today)
   );
 
-  const qDriverAsSup = query(
+  // Query 2: Trips where the driver is allowed to act as supervisor.
+  // This query needs to be scoped to the school, assuming rules allow this.
+  const driverIsSupervisingQuery = query(
     tripsRef,
     where("schoolId", "==", schoolId),
     where("allowDriverAsSupervisor", "==", true),
-    where("startedAt", ">=", startOfToday()),
-    orderBy("startedAt", "desc")
+    where("startedAt", ">=", today)
   );
-
-  const [mineSnapshot, driverAsSupSnapshot] = await Promise.all([
-    getDocs(qMine),
-    getDocs(qDriverAsSup),
+  
+  // Run queries in parallel
+  const [assignedSnap, driverAsSupSnap] = await Promise.all([
+    getDocs(assignedQuery),
+    getDocs(driverIsSupervisingQuery),
   ]);
 
-  const seen = new Set<string>();
-  const allDocs = [...mineSnapshot.docs, ...driverAsSupSnapshot.docs].filter(d => 
-    !seen.has(d.id) && seen.add(d.id)
-  );
+  // Merge results and remove duplicates
+  const allTrips = new Map<string, DocumentData>();
+  assignedSnap.docs.forEach(doc => allTrips.set(doc.id, { id: doc.id, ...doc.data() }));
+  driverAsSupSnap.docs.forEach(doc => allTrips.set(doc.id, { id: doc.id, ...doc.data() }));
 
-  return allDocs
-    .map(d => ({ id: d.id, ...d.data() }))
+  // Sort by start time descending
+  return Array.from(allTrips.values())
     .sort((a, b) => (b.startedAt as Timestamp).toMillis() - (a.startedAt as Timestamp).toMillis());
 }
 
