@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs, serverTimestamp } from "firebase/firestore";
 import ParentDashboardPage from "./page";
-import { relativeFrom } from "@/lib/datetime";
+import { formatRelative } from "@/lib/utils";
 
 interface Notification {
     id: string;
@@ -133,7 +133,7 @@ function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { no
                                         <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
                                             {n.body || `${name} ${statusText}`}
                                         </div>
-                                        <div className="text-xs text-muted-foreground/80 mt-1">{relativeFrom(n.createdAt)}</div>
+                                        <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>
                                      )
                                 })}
