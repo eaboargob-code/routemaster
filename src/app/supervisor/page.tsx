@@ -11,7 +11,7 @@ import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import { registerFcmToken } from '@/lib/notifications';
-import { getUsersByIds } from "@/lib/firestoreQueries";
+import { getUsersByIds, getSupervisorTrips } from "@/lib/firestoreQueries";
 
 import {
   Card,
@@ -94,19 +94,8 @@ export default function SupervisorPage() {
       const busMap = new Map(busesSnap.docs.map(d => [d.id, d.data()]));
       const routeMap = new Map(routesSnap.docs.map(d => [d.id, d.data()]));
 
-      // Step 2: Fetch trips assigned to this supervisor.
-      const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
-      const tripsQ = query(
-        collection(db, 'trips'),
-        where('schoolId', '==', profile.schoolId),
-        where('supervisorId', '==', user.uid),
-        where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
-        orderBy('startedAt', 'desc')
-      );
-      const tripsSnap = await getDocs(tripsQ);
-      const fetchedTrips = tripsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-      
+      // Step 2: Fetch trips assigned to this supervisor OR where driver is supervising
+      const fetchedTrips = await getSupervisorTrips(profile.schoolId, user.uid);
       setTrips(fetchedTrips);
   
       // Step 3: Fetch only the required user data.
@@ -160,10 +149,6 @@ export default function SupervisorPage() {
           Driver as Supervisor
         </Badge>
       );
-    }
-    const supervisor = trip.supervisorId ? referenceData.userMap?.[trip.supervisorId] as UserInfo : null;
-    if (supervisor) {
-      return supervisor.displayName || supervisor.email;
     }
     // If the logged-in user is the supervisor but their info isn't in the map (e.g., they are the only user), show their name.
     if (trip.supervisorId === user.uid) {
