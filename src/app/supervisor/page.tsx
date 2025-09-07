@@ -70,8 +70,8 @@ export default function SupervisorPage() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [referenceData, setReferenceData] = useState<Record<string, any>>({
     userMap: {},
-    busMap: {},
-    routeMap: {},
+    busMap: new Map(),
+    routeMap: new Map(),
   });
   const [uiState, setUiState] = useState<UiState>({ status: 'loading' });
 
@@ -86,45 +86,41 @@ export default function SupervisorPage() {
     setUiState({ status: 'loading' });
   
     try {
+      // Step 1: Pre-fetch all buses and routes for the school and cache them.
+      const [busesSnap, routesSnap] = await Promise.all([
+        getDocs(query(collection(db, "buses"), where("schoolId", "==", profile.schoolId))),
+        getDocs(query(collection(db, "routes"), where("schoolId", "==", profile.schoolId))),
+      ]);
+      const busMap = new Map(busesSnap.docs.map(d => [d.id, d.data()]));
+      const routeMap = new Map(routesSnap.docs.map(d => [d.id, d.data()]));
+
+      // Step 2: Fetch trips assigned to this supervisor.
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
-  
       const tripsQ = query(
         collection(db, 'trips'),
         where('schoolId', '==', profile.schoolId),
         where('supervisorId', '==', user.uid),
-        where('startedAt', '>=', Timestamp.fromDate(startOfDay))
+        where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
+        orderBy('startedAt', 'desc')
       );
-  
       const tripsSnap = await getDocs(tripsQ);
       const fetchedTrips = tripsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
       
-      fetchedTrips.sort((a,b) => b.startedAt.toMillis() - a.startedAt.toMillis());
       setTrips(fetchedTrips);
   
+      // Step 3: Fetch only the required user data.
+      let userMap = {};
       if (fetchedTrips.length > 0) {
-        // More robust fetching for reference data
-        try {
-          const userIds = Array.from(new Set(fetchedTrips.flatMap(t => [t.driverId, t.supervisorId].filter(Boolean) as string[])));
-          
-          const [userMap, busesSnap, routesSnap] = await Promise.all([
-            getUsersByIds(userIds),
-            getDocs(query(collection(db, "buses"), where("schoolId", "==", profile.schoolId))),
-            getDocs(query(collection(db, "routes"), where("schoolId", "==", profile.schoolId))),
-          ]);
-
-          const busMap = new Map(busesSnap.docs.map(d => [d.id, d.data()]));
-          const routeMap = new Map(routesSnap.docs.map(d => [d.id, d.data()]));
-    
-          setReferenceData({ userMap, busMap, routeMap });
-
-        } catch (e) {
-          console.warn('[supervisor] refs fetch failed (non-blocking):', e);
-          toast({ variant: "destructive", title: "Reference Data Failed", description: "Could not load all related trip information." });
-          setReferenceData({ userMap: {}, busMap: new Map(), routeMap: new Map() });
+        const userIds = Array.from(new Set(fetchedTrips.map(t => t.driverId).filter(Boolean)));
+        if (userIds.length > 0) {
+            userMap = await getUsersByIds(userIds);
         }
       }
-  
+      
+      // Step 4: Set all state at once.
+      setReferenceData({ userMap, busMap, routeMap });
+
       if (fetchedTrips.length === 0) {
         setUiState({ status: 'empty' });
       } else {
@@ -132,8 +128,9 @@ export default function SupervisorPage() {
       }
   
     } catch (err: any) {
-      console.error('[supervisor] trip fetch failed', err?.code, err?.message);
-      setUiState({ status: 'error', errorMessage: 'Missing or insufficient permissions.' });
+      console.error('[supervisor] trip fetch failed', err);
+      setUiState({ status: 'error', errorMessage: 'Could not load trip data. This may be due to a permissions issue.' });
+      toast({ variant: "destructive", title: "Data Loading Error", description: "Failed to fetch trip information." });
     }
   }, [user, profile, toast]);
 
@@ -167,6 +164,10 @@ export default function SupervisorPage() {
     const supervisor = trip.supervisorId ? referenceData.userMap?.[trip.supervisorId] as UserInfo : null;
     if (supervisor) {
       return supervisor.displayName || supervisor.email;
+    }
+    // If the logged-in user is the supervisor but their info isn't in the map (e.g., they are the only user), show their name.
+    if (trip.supervisorId === user.uid) {
+        return profile.displayName || profile.email;
     }
     return <span className="text-muted-foreground">No supervisor</span>;
   };
@@ -253,4 +254,3 @@ export default function SupervisorPage() {
     </Card>
   );
 }
-
