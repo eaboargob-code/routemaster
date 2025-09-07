@@ -37,6 +37,7 @@ import {
   XCircle,
   Footprints,
   HelpCircle,
+  Hourglass,
 } from "lucide-react";
 import { formatRelative } from "@/lib/utils";
 
@@ -149,9 +150,18 @@ function StudentCard({ student }: { student: Student }) {
 
   const statusBadge = useMemo(() => {
     if (loading) return <Skeleton className="h-6 w-24" />;
+    
     const s = state.tripStatus?.status;
-    if (!state.tripId || !s) {
+    if (!state.tripId) {
       return (
+        <Badge variant="outline">
+          <Hourglass className="mr-1 h-3 w-3" />
+          No active trip
+        </Badge>
+      );
+    }
+    if (!s) {
+       return (
         <Badge variant="outline">
           <HelpCircle className="mr-1 h-3 w-3" />
           No trip data
