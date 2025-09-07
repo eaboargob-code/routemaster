@@ -87,14 +87,11 @@ function StudentCard({ student }: { student: Student }) {
     const fetchTripAndListen = async () => {
         setLoading(true);
 
-        const startOfDay = new Date();
-        startOfDay.setHours(0,0,0,0);
-
         const tripsQ = query(
           collection(db, 'trips'),
           where('schoolId', '==', student.schoolId),
+          where('status', '==', 'active'), // <-- This is the important change
           where('passengers', 'array-contains', student.id),
-          where('startedAt', '>=', Timestamp.fromDate(startOfDay)),
           orderBy('startedAt', 'desc'),
           limit(1)
         );
@@ -151,7 +148,6 @@ function StudentCard({ student }: { student: Student }) {
   const statusBadge = useMemo(() => {
     if (loading) return <Skeleton className="h-6 w-24" />;
     
-    const s = state.tripStatus?.status;
     if (!state.tripId) {
       return (
         <Badge variant="outline">
@@ -160,6 +156,8 @@ function StudentCard({ student }: { student: Student }) {
         </Badge>
       );
     }
+    
+    const s = state.tripStatus?.status;
     if (!s) {
        return (
         <Badge variant="outline">
@@ -320,11 +318,11 @@ export default function ParentDashboardPage({ profile, childrenData }: ParentDas
 }
 
 /**
- * 🔧 Composite index needed (create once via console link if prompted):
+ * 🔧 Composite index needed for the query on this page (create once via console link if prompted):
  * Collection: trips
  * Fields:
  * 1. schoolId (==)
- * 2. passengers (array-contains)
- * 3. startedAt (>=)
+ * 2. status (==)
+ * 3. passengers (array-contains)
  * 4. startedAt (desc)
  */
