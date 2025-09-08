@@ -207,7 +207,7 @@ function ParentsList({ schoolId }: { schoolId: string }) {
         setIsLoading(true);
 
         try {
-            const parentsQuery = query(collection(db, "users"), where("schoolId", "==", schoolId), where("role", "==", "parent"));
+            const parentsQuery = query(scol(schoolId, "users"), where("role", "==", "parent"));
             const studentsQuery = scol(schoolId, "students");
             
             const [parentsSnapshot, studentsSnapshot] = await Promise.all([
