@@ -1,204 +1,116 @@
-
-// src/lib/firestoreQueries.ts
 import { db } from "@/lib/firebase";
 import {
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
-  getDocs,
-  doc,
-  getDoc,
-  Timestamp,
-  type DocumentData,
-  type QueryConstraint,
+  collection, query, where, orderBy, limit, getDocs, doc, getDoc,
+  Timestamp, type DocumentData
 } from "firebase/firestore";
-import { scol, sdoc } from "./schoolPath";
-
-
-/* ----------------------------- time helpers ----------------------------- */
+import { scol, sdoc } from "@/lib/schoolPath";
 
 export const startOfToday = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
+  const d = new Date(); d.setHours(0,0,0,0);
   return Timestamp.fromDate(d);
 };
-
 export const endOfToday = () => {
-  const d = new Date();
-  d.setHours(23, 59, 59, 999);
+  const d = new Date(); d.setHours(23,59,59,999);
   return Timestamp.fromDate(d);
 };
-
-/* ------------------------------ users lookup ----------------------------- */
 
 export async function getUsersByIds(uids: string[]): Promise<Record<string, DocumentData>> {
-  const out: Record<string, any> = {};
-  const ids = [...new Set(uids)].filter(Boolean);
-  if (ids.length === 0) return {};
-  
-  const snap = await getDocs(query(collection(db, "users"), where("__name__", "in", ids)));
-  snap.forEach(doc => out[doc.id] = doc.data());
-  return out;
+  const byId: Record<string, any> = {};
+  if (!uids || uids.length === 0) return byId;
+
+  const CHUNK = 30;
+  for (let i = 0; i < uids.length; i += CHUNK) {
+    const unique = [...new Set(uids.slice(i, i + CHUNK))];
+    if (!unique.length) continue;
+    const q = query(collection(db, "users"), where("__name__", "in", unique));
+    (await getDocs(q)).forEach(d => (byId[d.id] = d.data()));
+  }
+  return byId;
 }
 
-/* --------------------------- simple list helpers ------------------------- */
-
-export async function listUsersForSchool(
-  schoolId: string,
-  role?: "admin" | "driver" | "supervisor" | "parent"
-) {
-  const cons: QueryConstraint[] = [where("schoolId", "==", schoolId)];
-  if (role) cons.push(where("role", "==", role));
-  const qRef = query(collection(db, "users"), ...cons);
-  const snap = await getDocs(qRef);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-}
-
+// School-scoped lookups
 export async function listBusesForSchool(schoolId: string) {
-  const qRef = query(scol(schoolId, "buses"));
-  const snap = await getDocs(qRef);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return (await getDocs(scol(schoolId, "buses"))).docs.map(d => ({ id: d.id, ...d.data() }));
 }
-
 export async function listRoutesForSchool(schoolId: string) {
-  const qRef = query(scol(schoolId, "routes"));
-  const snap = await getDocs(qRef);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return (await getDocs(scol(schoolId, "routes"))).docs.map(d => ({ id: d.id, ...d.data() }));
 }
-
 export async function listStudentsForSchool(schoolId: string) {
-  const qRef = query(scol(schoolId, "students"));
-  const snap = await getDocs(qRef);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return (await getDocs(scol(schoolId, "students"))).docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-/* ------------------------------ trips: school ---------------------------- */
+export async function listUsersForSchool(schoolId: string, role?: 'driver' | 'supervisor') {
+  const constraints = [];
+  if (role) {
+    constraints.push(where("role", "==", role));
+  }
+  const q = query(scol(schoolId, "users"), ...constraints);
+  return (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
+}
 
-export async function listTodaysTripsForSchool(
-  schoolId: string,
-  filters: { status?: "active" | "ended" | "all" } = {}
-) {
-  const cons: QueryConstraint[] = [
+export async function listTodaysTripsForSchool(schoolId: string, filters: { status?: "active"|"ended"|"all" } = {}) {
+  const constraints = [
     where("startedAt", ">=", startOfToday()),
     orderBy("startedAt", "desc"),
   ];
-
-  const qRef = query(scol(schoolId, "trips"), ...cons);
-  const snap = await getDocs(qRef);
-
-  let rows = snap.docs;
+  const qTrips = query(scol(schoolId, "trips"), ...constraints);
+  let docs = (await getDocs(qTrips)).docs;
   if (filters.status && filters.status !== "all") {
-    rows = rows.filter((d) => d.data().status === filters.status);
+    docs = docs.filter(d => d.data().status === filters.status);
   }
-  return rows.map((d) => ({ id: d.id, ...d.data() }));
+  return docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-/* -------------------------- driver: assignment --------------------------- */
-
-export async function getAssignedBusForDriver(
-  schoolId: string,
-  driverUid: string
-) {
-  const qRef = query(
+export async function getAssignedBusForDriver(schoolId: string, driverUid: string) {
+  const qBus = query(
     scol(schoolId, "buses"),
     where("driverId", "==", driverUid),
     limit(1)
   );
-  const snap = await getDocs(qRef);
-  if (snap.empty) return null;
-  return { id: snap.docs[0].id, ...snap.docs[0].data() };
+  const snap = await getDocs(qBus);
+  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
 }
 
-export async function getRouteById(schoolId: string, routeId?: string | null) {
+export async function getRouteById(schoolId: string, routeId?: string|null) {
   if (!routeId) return null;
-  const s = await getDoc(sdoc(schoolId, "routes", routeId));
-  return s.exists() ? { id: s.id, ...s.data() } : null;
+  const snap = await getDoc(sdoc(schoolId, "routes", routeId));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
-export async function getActiveOrTodayTripsForDriver(
-  schoolId: string,
-  driverUid: string
-) {
-  const qRef = query(
+export async function getActiveOrTodayTripsForDriver(schoolId: string, driverUid: string) {
+  const qTrips = query(
     scol(schoolId, "trips"),
     where("driverId", "==", driverUid),
     where("startedAt", ">=", startOfToday()),
     orderBy("startedAt", "desc")
   );
-  const snap = await getDocs(qRef);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const s = await getDocs(qTrips);
+  return s.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-/* ------------------------ supervisor: today’s trips ---------------------- */
-/**
- * Fetches trips for a supervisor. This includes trips where they are
- * explicitly assigned. This query is designed to be compliant with
- * Firestore rules that scope access to a user's own data.
- */
 export async function getSupervisorTrips(schoolId: string, supervisorUid: string) {
-  const tripsRef = scol(schoolId, "trips");
+  const base = scol(schoolId, "trips");
+  const qMine = query(base, where("supervisorId", "==", supervisorUid), where("startedAt", ">=", startOfToday()), orderBy("startedAt","desc"));
+  const qDriverAsSup = query(base, where("allowDriverAsSupervisor","==",true), where("startedAt", ">=", startOfToday()), orderBy("startedAt","desc"));
 
-  // Query for trips where the supervisor is directly assigned.
-  // This is a secure and efficient query.
-  const qAssigned = query(
-    tripsRef,
-    where("supervisorId", "==", supervisorUid),
-    where("startedAt", ">=", startOfToday()),
-    orderBy("startedAt", "desc"),
-    limit(50)
-  );
-
-  const assignedSnap = await getDocs(qAssigned);
-  const trips = assignedSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-  return trips;
+  const [a, b] = await Promise.all([getDocs(qMine), getDocs(qDriverAsSup)]);
+  const seen = new Set<string>();
+  const docs = [...a.docs, ...b.docs].filter(d => (seen.has(d.id) ? false : (seen.add(d.id), true)));
+  return docs.map(d => ({ id: d.id, ...d.data() }))
+             .sort((x:any,y:any)=> (y.startedAt as Timestamp).toMillis() - (x.startedAt as Timestamp).toMillis());
 }
-
-
-/* ------------------------------- trip detail ----------------------------- */
 
 export async function getTripDetails(tripId: string, schoolId: string) {
-  const tripRef = sdoc(schoolId, "trips", tripId);
-  const tripSnap = await getDoc(tripRef);
-
+  const tripSnap = await getDoc(sdoc(schoolId, "trips", tripId));
   if (!tripSnap.exists()) return null;
+  const trip = { id: tripSnap.id, ...tripSnap.data() };
 
-  const tripData = { id: tripSnap.id, ...tripSnap.data() };
+  const busSnap = await getDoc(sdoc(schoolId, "buses", (trip as any).busId));
+  const routeSnap = (trip as any).routeId ? await getDoc(sdoc(schoolId, "routes", (trip as any).routeId)) : null;
 
-  const busSnap = await getDoc(sdoc(schoolId, "buses", tripData.busId));
-  const bus = busSnap.exists() ? busSnap.data() : null;
-
-  const routeSnap = tripData.routeId
-    ? await getDoc(sdoc(schoolId, "routes", tripData.routeId))
-    : null;
-  const route = routeSnap && routeSnap.exists() ? routeSnap.data() : null;
-
-  return { trip: tripData, bus, route };
+  return {
+    trip,
+    bus: busSnap.exists() ? busSnap.data() : null,
+    route: routeSnap && routeSnap.exists() ? routeSnap.data() : null,
+  };
 }
-
-/* ---------------------- parent: latest trip for student ------------------ */
-/**
- * Returns the latest trip (today) that includes the given student.
- * Requires a composite index when combined with orderBy:
- *   trips: passengers array_contains, startedAt desc
- */
-export async function getLatestTripForStudent(
-  schoolId: string,
-  studentId: string
-) {
-  const qRef = query(
-    scol(schoolId, "trips"),
-    where("passengers", "array-contains", studentId),
-    where("startedAt", ">=", startOfToday()),
-    orderBy("startedAt", "desc"),
-    limit(1)
-  );
-  const snap = await getDocs(qRef);
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...d.data() };
-}
-
-    
