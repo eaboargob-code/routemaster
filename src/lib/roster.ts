@@ -62,10 +62,12 @@ export async function seedPassengersForTrip(opts: {
     }
 
     const name =
-      s.data.displayName ||
       s.data.name ||
       s.data.fullName ||
-      "Student";
+      s.data.displayName ||
+      (s.data.firstName && s.data.lastName
+        ? `${s.data.firstName} ${s.data.lastName}`
+        : "Student");
 
     const passengerRef = doc(passengersCol, s.id);
     batch.set(passengerRef, {
