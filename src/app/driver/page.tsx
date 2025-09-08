@@ -204,9 +204,9 @@ export default function DriverPage() {
   /* -------------------- Actions -------------------- */
 
   const handleSetActingAsSupervisor = async (acting: boolean) => {
-    if (!activeTrip) return;
+    if (!activeTrip || !profile) return;
     try {
-      await updateDoc(sdoc(profile!.schoolId, "trips", activeTrip.id), {
+      await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
         allowDriverAsSupervisor: acting,
       });
       setActiveTrip((prev) =>
@@ -542,5 +542,3 @@ export default function DriverPage() {
     </div>
   );
 }
-
-    
