@@ -45,7 +45,7 @@ export function Dashboard({ schoolId }: DashboardProps) {
     if (!schoolId) return;
 
     const subscriptions = [
-      onSnapshot(query(collection(db, "users"), where("schoolId", "==", schoolId)), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as User)))),
+      onSnapshot(scol(schoolId, "users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as User)))),
       onSnapshot(scol(schoolId, "buses"), (snap) => setBuses(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(scol(schoolId, "routes"), (snap) => setRoutes(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(scol(schoolId, "students"), (snap) => setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
