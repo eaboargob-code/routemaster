@@ -12,6 +12,7 @@ import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import { registerFcmToken } from '@/lib/notifications';
 import { getUsersByIds, getSupervisorTrips } from "@/lib/firestoreQueries";
+import { scol } from "@/lib/schoolPath";
 
 import {
   Card,
@@ -88,8 +89,8 @@ export default function SupervisorPage() {
     try {
       // Step 1: Pre-fetch all buses and routes for the school and cache them.
       const [busesSnap, routesSnap] = await Promise.all([
-        getDocs(query(collection(db, "buses"), where("schoolId", "==", profile.schoolId))),
-        getDocs(query(collection(db, "routes"), where("schoolId", "==", profile.schoolId))),
+        getDocs(scol(profile.schoolId, "buses")),
+        getDocs(scol(profile.schoolId, "routes")),
       ]);
       const busMap = new Map(busesSnap.docs.map(d => [d.id, d.data()]));
       const routeMap = new Map(routesSnap.docs.map(d => [d.id, d.data()]));

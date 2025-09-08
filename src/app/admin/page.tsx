@@ -2,7 +2,7 @@
 "use client";
 
 import { useProfile } from "@/lib/useProfile";
-import { Dashboard } from "./components/Dashboard";
+import { Dashboard } from "./dashboard/components/Dashboard";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
