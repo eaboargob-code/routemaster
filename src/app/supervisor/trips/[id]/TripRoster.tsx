@@ -15,6 +15,7 @@ import { boardStudent, dropStudent, markAbsent } from "@/lib/roster";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { Bus, UserX, ArrowDownCircle } from "lucide-react";
 
 type PassengerRow = {
   id: string;
@@ -203,14 +204,16 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
                   disabled={busy === r.id}
                   onClick={() => doBoard(r.id)}
                 >
+                  <Bus className="h-4 w-4 mr-1" />
                   Board
                 </Button>
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="destructive"
                   disabled={busy === r.id}
                   onClick={() => doAbsent(r.id)}
                 >
+                  <UserX className="h-4 w-4 mr-1" />
                   Absent
                 </Button>
                 <Button
@@ -219,6 +222,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
                   disabled={busy === r.id}
                   onClick={() => doDrop(r.id)}
                 >
+                  <ArrowDownCircle className="h-4 w-4 mr-1" />
                   Drop
                 </Button>
               </div>
