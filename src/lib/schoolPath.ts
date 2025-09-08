@@ -1,10 +1,13 @@
+// src/lib/schoolPath.ts
+import { collection, doc, type Firestore } from "firebase/firestore";
+import { db } from "./firebase";
 
-import { db } from "@/lib/firebase";
-import { collection, doc } from "firebase/firestore";
+/** school collection path, e.g. schools/TRP001/trips */
+export function scol(schoolId: string, coll: string) {
+  return collection(db, "schools", schoolId, coll);
+}
 
-// use after you read profile.schoolId from /users/{uid}
-export const scol = (schoolId: string, ...path: string[]) =>
-  collection(db, "schools", schoolId, ...path);
-
-export const sdoc = (schoolId: string, ...path: string[]) =>
-  doc(db, "schools", schoolId, ...path);
+/** school doc path, e.g. schools/TRP001/trips/abc */
+export function sdoc(schoolId: string, coll: string, id: string) {
+  return doc(db, "schools", schoolId, coll, id);
+}

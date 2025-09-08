@@ -95,7 +95,7 @@ export default function SupervisorPage() {
       const busMap = new Map(busesSnap.docs.map(d => [d.id, d.data()]));
       const routeMap = new Map(routesSnap.docs.map(d => [d.id, d.data()]));
 
-      // Step 2: Fetch trips assigned to this supervisor OR where driver is supervising
+      // Step 2: Fetch trips assigned to this supervisor
       const fetchedTrips = await getSupervisorTrips(profile.schoolId, user.uid);
       setTrips(fetchedTrips);
   
