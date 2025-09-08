@@ -23,7 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import { registerFcmToken } from "@/lib/notifications";
 import { seedPassengersForTrip } from "@/lib/roster";
 import { getAssignedBusForDriver, getRouteById } from "@/lib/firestoreQueries";
-import { sdoc } from "@/lib/schoolPath";
+import { sdoc, scol } from "@/lib/schoolPath";
 
 import {
   Card,
@@ -159,8 +159,7 @@ export default function DriverPage() {
 
       // 2. Find any active trip for this driver
       const tripQ = query(
-        collection(db, "trips"),
-        where("schoolId", "==", profile.schoolId),
+        scol(profile.schoolId, "trips"),
         where("driverId", "==", user.uid),
         where("status", "==", "active"),
         limit(1)
@@ -207,7 +206,7 @@ export default function DriverPage() {
   const handleSetActingAsSupervisor = async (acting: boolean) => {
     if (!activeTrip) return;
     try {
-      await updateDoc(doc(db, "trips", activeTrip.id), {
+      await updateDoc(sdoc(profile!.schoolId, "trips", activeTrip.id), {
         allowDriverAsSupervisor: acting,
       });
       setActiveTrip((prev) =>
@@ -241,8 +240,9 @@ export default function DriverPage() {
         supervisorId: bus.supervisorId || null,
         allowDriverAsSupervisor: false,
         driverSupervisionLocked: false,
+        passengers: [],
       };
-      const docRef = await addDoc(collection(db, "trips"), newTripData);
+      const docRef = await addDoc(scol(profile.schoolId, "trips"), newTripData);
       const finalTrip = { id: docRef.id, ...newTripData } as Trip;
 
       setActiveTrip(finalTrip);
@@ -284,10 +284,10 @@ export default function DriverPage() {
   };
 
   const handleEndTrip = async () => {
-    if (!activeTrip) return;
+    if (!activeTrip || !profile) return;
     setIsSubmitting(true);
     try {
-      await updateDoc(doc(db, "trips", activeTrip.id), {
+      await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
         endedAt: Timestamp.now(),
         status: "ended",
       });
@@ -306,7 +306,7 @@ export default function DriverPage() {
   };
 
   const handleSendLocation = () => {
-    if (!activeTrip) {
+    if (!activeTrip || !profile) {
       toast({
         variant: "destructive",
         title: "No Active Trip",
@@ -319,7 +319,7 @@ export default function DriverPage() {
       async (position) => {
         const { latitude, longitude } = position.coords;
         try {
-          await updateDoc(doc(db, "trips", activeTrip.id), {
+          await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
             lastLocation: { lat: latitude, lng: longitude, at: serverTimestamp() },
           });
           toast({
@@ -512,7 +512,7 @@ export default function DriverPage() {
         </Card>
       </div>
 
-      {activeTrip && (
+      {activeTrip && profile && (
         <Card className="lg:col-span-1">
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
@@ -535,10 +535,12 @@ export default function DriverPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Roster tripId={activeTrip.id} canEdit={!!activeTrip.allowDriverAsSupervisor} />
+            <Roster tripId={activeTrip.id} schoolId={profile.schoolId} canEdit={!!activeTrip.allowDriverAsSupervisor} />
           </CardContent>
         </Card>
       )}
     </div>
   );
 }
+
+    

@@ -50,15 +50,15 @@ interface Student {
 
 // --- useInbox Hook ---
 function useInbox() {
-  const { user } = useProfile();
+  const { user, profile } = useProfile();
   const [items, setItems] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid || !profile?.schoolId) return;
 
     const q = query(
-      collection(db, "users", user.uid, "inbox"),
+      scol(profile.schoolId, "users", user.uid, "inbox"),
       orderBy("createdAt", "desc"),
       limit(25)
     );
@@ -73,21 +73,21 @@ function useInbox() {
     });
 
     return () => unsub();
-  }, [user?.uid]);
+  }, [user?.uid, profile?.schoolId]);
   
   const handleMarkAsRead = useCallback(async () => {
-    if (!user?.uid) return;
+    if (!user?.uid || !profile?.schoolId) return;
     const toMark = items.filter(i => !i.read).slice(0, 25);
     if (toMark.length === 0) return;
 
     const batch = writeBatch(db);
     toMark.forEach(n => {
-        const notifRef = doc(db, `users/${user.uid}/inbox`, n.id);
+        const notifRef = sdoc(profile!.schoolId, "users", user.uid, "inbox", n.id);
         batch.update(notifRef, { read: true, readAt: serverTimestamp() });
     });
     
     await batch.commit().catch(err => console.error("Failed to mark notifications as read", err));
-  }, [user?.uid, items]);
+  }, [user?.uid, profile?.schoolId, items]);
 
   return { items, unreadCount, handleMarkAsRead };
 }
@@ -252,14 +252,14 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         router.replace("/parent/login");
     }
     
-    if (!user?.uid) return;
+    if (!user?.uid || !profile?.schoolId) return;
 
     const unsubscribe = onForegroundNotification((notification) => {
         toast({
             title: notification.title,
             description: notification.body,
         });
-        logBell(user.uid, {
+        logBell(user.uid, profile!.schoolId, {
             title: notification.title || "New Notification",
             body: notification.body || "",
             data: notification.data,
@@ -271,7 +271,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         unsubscribe();
       }
     }
-  }, [user, profileLoading, router, toast]);
+  }, [user, profile, profileLoading, router, toast]);
 
   if (profileLoading || childrenLoading) {
     return <LoadingScreen />;
@@ -320,3 +320,5 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 export default function ProtectedParentLayout({ children }: { children: ReactNode }) {
     return <ParentGuard>{children}</ParentGuard>
 }
+
+    

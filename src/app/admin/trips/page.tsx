@@ -14,7 +14,7 @@ import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { format } from "date-fns";
 import Link from "next/link";
-import { getUsersByIds, listBusesForSchool, listRoutesForSchool, listTodaysTripsForSchool } from "@/lib/firestoreQueries";
+import { scol } from "@/lib/schoolPath";
 
 import {
   Card,
@@ -95,10 +95,10 @@ export default function TripsPage() {
     setIsLoading(true);
     
     // Set up real-time listeners
-    const tripsQuery = query(collection(db, "trips"), where("schoolId", "==", schoolId));
+    const tripsQuery = scol(schoolId, "trips");
     const usersQuery = query(collection(db, "users"), where("schoolId", "==", schoolId));
-    const busesQuery = query(collection(db, "buses"), where("schoolId", "==", schoolId));
-    const routesQuery = query(collection(db, "routes"), where("schoolId", "==", schoolId));
+    const busesQuery = scol(schoolId, "buses");
+    const routesQuery = scol(schoolId, "routes");
 
     const unsubTrips = onSnapshot(tripsQuery, 
         (snapshot) => {
@@ -315,3 +315,5 @@ export default function TripsPage() {
     </Card>
   );
 }
+
+    

@@ -21,6 +21,7 @@ import {
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { listUsersForSchool } from "@/lib/firestoreQueries";
+import { scol } from "@/lib/schoolPath";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -150,8 +151,8 @@ function InviteUserDialog({ onUserInvited, schoolId }: { onUserInvited: () => vo
         
         // If the new user is a parent, also create their parentStudents doc
         if (data.role === 'parent') {
-            const parentLinkRef = doc(db, "parentStudents", newUserRef.id);
-            batch.set(parentLinkRef, { schoolId: schoolId, studentIds: [] });
+            const parentLinkRef = doc(scol(schoolId, "parentStudents"), newUserRef.id);
+            batch.set(parentLinkRef, { studentIds: [] });
         }
         
         await batch.commit();
@@ -494,3 +495,5 @@ export default function UsersPage() {
         </div>
     );
 }
+
+    

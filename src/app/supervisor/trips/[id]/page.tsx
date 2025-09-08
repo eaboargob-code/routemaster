@@ -151,3 +151,5 @@ export default function TripDetailsPage({ params }: { params: { id: string }}) {
     const { id } = use(params);
     return <TripDetailsClientPage tripId={id} />;
 }
+
+    

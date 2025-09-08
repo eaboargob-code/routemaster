@@ -3,8 +3,10 @@
 
 import { useState, useEffect } from "react";
 import { doc, updateDoc, collection, query, where, getDocs, Timestamp } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { listUsersForSchool } from "@/lib/firestoreQueries";
+import { sdoc } from "@/lib/schoolPath";
 
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -61,7 +63,7 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
     const handleUpdate = async (updateData: Record<string, any>, successMessage: string) => {
         setIsSubmitting(true);
         try {
-            const tripRef = doc(db, "trips", trip.id);
+            const tripRef = sdoc(trip.schoolId, "trips", trip.id);
             await updateDoc(tripRef, updateData);
             toast({
                 title: "Success",
@@ -80,7 +82,7 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
     const handleEndTrip = async () => {
         setIsSubmitting(true);
         try {
-            const tripRef = doc(db, "trips", trip.id);
+            const tripRef = sdoc(trip.schoolId, "trips", trip.id);
             await updateDoc(tripRef, { status: "ended", endedAt: Timestamp.now() });
             toast({ title: "Success", description: "The trip has been manually ended.", className: 'bg-accent text-accent-foreground border-0' });
             onTripUpdate();
@@ -195,3 +197,5 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
         </Card>
     );
 }
+
+    

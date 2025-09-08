@@ -87,8 +87,7 @@ function StudentCard({ student }: { student: Student }) {
         setLoading(true);
 
         const tripsQ = query(
-          collection(db, 'trips'),
-          where('schoolId', '==', student.schoolId),
+          scol(student.schoolId, 'trips'),
           where('status', '==', 'active'), 
           where('passengers', 'array-contains', student.id),
           orderBy('startedAt', 'desc'),
@@ -110,7 +109,7 @@ function StudentCard({ student }: { student: Student }) {
             setState(prev => ({ ...prev, tripId }));
 
             // Listener for passenger status
-            const passengerRef = doc(db, 'trips', tripId, 'passengers', student.id);
+            const passengerRef = doc(db, 'schools', student.schoolId, 'trips', tripId, 'passengers', student.id);
             unsubPassenger = onSnapshot(passengerRef, (snap) => {
                 if (!cancelled) {
                     setState(prev => ({ ...prev, tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null }));
@@ -118,7 +117,7 @@ function StudentCard({ student }: { student: Student }) {
             }, (err) => console.error(`[Parent] Passenger listener for ${student.id} failed:`, err));
 
             // Listener for trip's last location update
-            const tripRef = doc(db, 'trips', tripId);
+            const tripRef = doc(db, 'schools', student.schoolId, 'trips', tripId);
             unsubTrip = onSnapshot(tripRef, (snap) => {
                  if (!cancelled) {
                     const tripData = snap.data() as DocumentData | undefined;
@@ -325,3 +324,5 @@ export default function ParentDashboardPage({ profile, childrenData }: ParentDas
  * 3. passengers (array-contains)
  * 4. startedAt (desc)
  */
+
+    

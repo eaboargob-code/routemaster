@@ -6,6 +6,7 @@ import { collection, onSnapshot, doc, getDoc, writeBatch, increment, serverTimes
 import { db } from '@/lib/firebase';
 import { useProfile, type UserProfile } from '@/lib/useProfile';
 import { useToast } from '@/hooks/use-toast';
+import { sdoc } from '@/lib/schoolPath';
 
 import {
   Table,
@@ -36,13 +37,14 @@ interface Passenger {
 }
 
 async function updatePassengerStatus(
+  schoolId: string,
   tripId: string,
   studentId: string,
   actor: { uid: string, role: UserProfile['role'] },
   newStatus: 'pending' | 'boarded' | 'absent' | 'dropped'
 ) {
-  const passengerRef = doc(db, `trips/${tripId}/passengers`, studentId);
-  const tripRef      = doc(db, `trips`, tripId);
+  const passengerRef = sdoc(schoolId, `trips/${tripId}/passengers`, studentId);
+  const tripRef      = sdoc(schoolId, `trips`, tripId);
 
   const passengerSnap = await getDoc(passengerRef);
   if (!passengerSnap.exists()) throw new Error("Passenger not found in roster.");
@@ -81,7 +83,7 @@ export function Roster({ tripId, schoolId, canEdit }: RosterProps) {
 
     useEffect(() => {
         setIsLoading(true);
-        const passengersRef = collection(db, "trips", tripId, "passengers");
+        const passengersRef = collection(db, "schools", schoolId, "trips", tripId, "passengers");
         const unsubscribe = onSnapshot(passengersRef, (snapshot) => {
             const passengerData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Passenger));
             setPassengers(passengerData);
@@ -93,12 +95,12 @@ export function Roster({ tripId, schoolId, canEdit }: RosterProps) {
         });
 
         return () => unsubscribe();
-    }, [tripId]);
+    }, [tripId, schoolId]);
 
     const handleAction = async (studentId: string, status: Passenger['status']) => {
         if (!user || !profile) return;
         try {
-            await updatePassengerStatus(tripId, studentId, { uid: user.uid, role: profile.role }, status);
+            await updatePassengerStatus(schoolId, tripId, studentId, { uid: user.uid, role: profile.role }, status);
             toast({
                 title: `Student marked as ${status}`,
                 className: 'bg-accent text-accent-foreground border-0',
@@ -206,3 +208,5 @@ export function Roster({ tripId, schoolId, canEdit }: RosterProps) {
         </div>
     )
 }
+
+    

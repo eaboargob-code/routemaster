@@ -1,5 +1,4 @@
 
-
 /**
  * @fileoverview One-time backfill script to normalize Firestore data.
  * 
@@ -166,7 +165,7 @@ async function backfillRoutes(
   isDryRun: boolean
 ): Promise<Counters> {
   console.log('\nStarting backfill for "routes" collection...');
-  const routesRef = db.collection('routes');
+  const routesRef = db.collection(`schools/${SCHOOL_ID_TO_BACKFILL}/routes`);
   const snapshot = await routesRef.get();
   const counters: Counters = { scanned: 0, updated: 0 };
 
@@ -175,9 +174,7 @@ async function backfillRoutes(
     const data = doc.data();
     const updates: { [key: string]: any } = {};
     
-    if (data.schoolId === undefined && data.schoolid === undefined) {
-      updates.schoolId = SCHOOL_ID_TO_BACKFILL;
-    }
+    // No longer needed as path implies schoolId
     
     if (Object.keys(updates).length > 0) {
         counters.updated++;
@@ -216,15 +213,6 @@ async function backfillPassengers(
     const passengerData = passengerDoc.data();
     const updates: { [key: string]: any } = {};
 
-    // Ensure schoolId exists
-    if (!passengerData.schoolId) {
-      const tripRef = passengerDoc.ref.parent.parent!;
-      const tripSnap = await tripRef.get();
-      if (tripSnap.exists() && tripSnap.data()?.schoolId) {
-        updates.schoolId = tripSnap.data()!.schoolId;
-      }
-    }
-    
     // Ensure studentId field exists
     if (!passengerData.studentId) {
       updates.studentId = passengerDoc.id;
@@ -279,16 +267,16 @@ async function backfillStudents(
   const routesCache = new Map<string, string>();
   const busesCache = new Map<string, string>();
 
-  const routesSnap = await db.collection('routes').where('schoolId', '==', schoolId).get();
+  const routesSnap = await db.collection(`schools/${schoolId}/routes`).get();
   routesSnap.forEach(doc => routesCache.set(doc.id, doc.data().name));
   console.log(`Cached ${routesCache.size} routes.`);
 
-  const busesSnap = await db.collection('buses').where('schoolId', '==', schoolId).get();
+  const busesSnap = await db.collection(`schools/${schoolId}/buses`).get();
   busesSnap.forEach(doc => busesCache.set(doc.id, doc.data().busCode));
   console.log(`Cached ${busesCache.size} buses.`);
 
   // 2. Iterate through all students (not just one school)
-  const studentsSnap = await db.collection('students').get();
+  const studentsSnap = await db.collection(`schools/${schoolId}/students`).get();
   console.log(`Scanning ${studentsSnap.size} total students...`);
 
   for (const studentDoc of studentsSnap.docs) {
@@ -296,31 +284,24 @@ async function backfillStudents(
     const studentData = studentDoc.data();
     const updates: { [key: string]: any } = {};
     
-    // Add schoolId if missing
-    if (!studentData.schoolId) {
-        updates.schoolId = schoolId;
-    }
-
     // Check and update routeName if student belongs to the target school
-    if (studentData.schoolId === schoolId || updates.schoolId === schoolId) {
-        if (studentData.assignedRouteId && routesCache.has(studentData.assignedRouteId)) {
-            const expectedRouteName = routesCache.get(studentData.assignedRouteId);
-            if (studentData.routeName !== expectedRouteName) {
-                updates.routeName = expectedRouteName;
-            }
-        } else if (studentData.routeName) {
-            updates.routeName = admin.firestore.FieldValue.delete();
+    if (studentData.assignedRouteId && routesCache.has(studentData.assignedRouteId)) {
+        const expectedRouteName = routesCache.get(studentData.assignedRouteId);
+        if (studentData.routeName !== expectedRouteName) {
+            updates.routeName = expectedRouteName;
         }
-        
-        // Check and update busCode if student belongs to the target school
-        if (studentData.assignedBusId && busesCache.has(studentData.assignedBusId)) {
-            const expectedBusCode = busesCache.get(studentData.assignedBusId);
-            if (studentData.busCode !== expectedBusCode) {
-                updates.busCode = expectedBusCode;
-            }
-        } else if (studentData.busCode) {
-            updates.busCode = admin.firestore.FieldValue.delete();
+    } else if (studentData.routeName) {
+        updates.routeName = admin.firestore.FieldValue.delete();
+    }
+    
+    // Check and update busCode if student belongs to the target school
+    if (studentData.assignedBusId && busesCache.has(studentData.assignedBusId)) {
+        const expectedBusCode = busesCache.get(studentData.assignedBusId);
+        if (studentData.busCode !== expectedBusCode) {
+            updates.busCode = expectedBusCode;
         }
+    } else if (studentData.busCode) {
+        updates.busCode = admin.firestore.FieldValue.delete();
     }
 
 
@@ -351,7 +332,7 @@ async function backfillInboxItems(
 
     // 1. Cache all student names for the school
     const studentNamesCache = new Map<string, string>();
-    const studentsSnap = await db.collection('students').where('schoolId', '==', schoolId).get();
+    const studentsSnap = await db.collection(`schools/${schoolId}/students`).get();
     studentsSnap.forEach(doc => {
         const name = doc.data().name;
         if (typeof name === 'string' && name.trim()) {

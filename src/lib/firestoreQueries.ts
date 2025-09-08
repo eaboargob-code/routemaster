@@ -81,12 +81,11 @@ export async function listTodaysTripsForSchool(
   filters: { status?: "active" | "ended" | "all" } = {}
 ) {
   const cons: QueryConstraint[] = [
-    where("schoolId", "==", schoolId),
     where("startedAt", ">=", startOfToday()),
     orderBy("startedAt", "desc"),
   ];
 
-  const qRef = query(collection(db, "trips"), ...cons);
+  const qRef = query(scol(schoolId, "trips"), ...cons);
   const snap = await getDocs(qRef);
 
   let rows = snap.docs;
@@ -123,8 +122,7 @@ export async function getActiveOrTodayTripsForDriver(
   driverUid: string
 ) {
   const qRef = query(
-    collection(db, "trips"),
-    where("schoolId", "==", schoolId),
+    scol(schoolId, "trips"),
     where("driverId", "==", driverUid),
     where("startedAt", ">=", startOfToday()),
     orderBy("startedAt", "desc")
@@ -140,13 +138,12 @@ export async function getActiveOrTodayTripsForDriver(
  * Firestore rules that scope access to a user's own data.
  */
 export async function getSupervisorTrips(schoolId: string, supervisorUid: string) {
-  const tripsRef = collection(db, "trips");
+  const tripsRef = scol(schoolId, "trips");
 
   // Query for trips where the supervisor is directly assigned.
   // This is a secure and efficient query.
   const qAssigned = query(
     tripsRef,
-    where("schoolId", "==", schoolId),
     where("supervisorId", "==", supervisorUid),
     where("startedAt", ">=", startOfToday()),
     orderBy("startedAt", "desc"),
@@ -163,10 +160,10 @@ export async function getSupervisorTrips(schoolId: string, supervisorUid: string
 /* ------------------------------- trip detail ----------------------------- */
 
 export async function getTripDetails(tripId: string, schoolId: string) {
-  const tripRef = doc(db, "trips", tripId);
+  const tripRef = sdoc(schoolId, "trips", tripId);
   const tripSnap = await getDoc(tripRef);
 
-  if (!tripSnap.exists() || tripSnap.data().schoolId !== schoolId) return null;
+  if (!tripSnap.exists()) return null;
 
   const tripData = { id: tripSnap.id, ...tripSnap.data() };
 
@@ -185,15 +182,14 @@ export async function getTripDetails(tripId: string, schoolId: string) {
 /**
  * Returns the latest trip (today) that includes the given student.
  * Requires a composite index when combined with orderBy:
- *   trips: schoolId ==, passengers array_contains, startedAt desc
+ *   trips: passengers array_contains, startedAt desc
  */
 export async function getLatestTripForStudent(
   schoolId: string,
   studentId: string
 ) {
   const qRef = query(
-    collection(db, "trips"),
-    where("schoolId", "==", schoolId),
+    scol(schoolId, "trips"),
     where("passengers", "array-contains", studentId),
     where("startedAt", ">=", startOfToday()),
     orderBy("startedAt", "desc"),
@@ -204,3 +200,5 @@ export async function getLatestTripForStudent(
   const d = snap.docs[0];
   return { id: d.id, ...d.data() };
 }
+
+    

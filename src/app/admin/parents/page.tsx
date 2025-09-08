@@ -13,6 +13,7 @@ import {
   getDoc,
   arrayUnion,
   arrayRemove,
+  collection,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -206,7 +207,7 @@ function ParentsList({ schoolId }: { schoolId: string }) {
         setIsLoading(true);
 
         try {
-            const parentsQuery = query(db, "users"), where("schoolId", "==", schoolId), where("role", "==", "parent"));
+            const parentsQuery = query(collection(db, "users"), where("schoolId", "==", schoolId), where("role", "==", "parent"));
             const studentsQuery = scol(schoolId, "students");
             
             const [parentsSnapshot, studentsSnapshot] = await Promise.all([
@@ -374,3 +375,5 @@ export default function ParentsPage() {
         </div>
     );
 }
+
+    

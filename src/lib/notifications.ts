@@ -3,6 +3,7 @@
 import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging";
 import { arrayUnion, arrayRemove, doc, updateDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { db, app } from "@/lib/firebase";
+import { sdoc } from "./schoolPath";
 
 const VAPID = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
 
@@ -63,10 +64,12 @@ export function onForegroundNotification(
 }
 
 // Optional: write to a bell feed (works even without push)
-export async function logBell(uid: string, n: { title: string; body: string; data?: any }) {
-  await addDoc(collection(db, "users", uid, "inbox"), {
+export async function logBell(uid: string, schoolId: string, n: { title: string; body: string; data?: any }) {
+  await addDoc(collection(db, "schools", schoolId, "users", uid, "inbox"), {
     ...n,
     createdAt: serverTimestamp(),
     read: false,
   });
 }
+
+    

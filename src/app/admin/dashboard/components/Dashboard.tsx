@@ -49,8 +49,7 @@ export function Dashboard({ schoolId }: DashboardProps) {
       onSnapshot(scol(schoolId, "buses"), (snap) => setBuses(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(scol(schoolId, "routes"), (snap) => setRoutes(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(scol(schoolId, "students"), (snap) => setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      // Trips are root-level, but schoolId is a property
-      onSnapshot(query(collection(db, "trips"), where("schoolId", "==", schoolId)), (snap) => setAllTrips(snap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)))),
+      onSnapshot(scol(schoolId, "trips"), (snap) => setAllTrips(snap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)))),
     ];
     
     const timer = setTimeout(() => setLoading(false), 1500);
@@ -98,3 +97,5 @@ export function Dashboard({ schoolId }: DashboardProps) {
     </div>
   );
 }
+
+    

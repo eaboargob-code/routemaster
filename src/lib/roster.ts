@@ -15,7 +15,7 @@ import {
   arrayUnion,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { scol } from "./schoolPath";
+import { scol, sdoc } from "./schoolPath";
 
 interface SeedArgs {
   tripId: string;
@@ -55,11 +55,11 @@ export async function seedPassengersForTrip(opts: {
   if (students.length === 0) return { created: 0 };
 
   const batch = writeBatch(db);
-  const tripRef = doc(db, 'trips', tripId);
+  const tripRef = sdoc(schoolId, 'trips', tripId);
   let created = 0;
 
   for (const s of students) {
-    const passengerRef = doc(db, 'trips', tripId, 'passengers', s.id);
+    const passengerRef = sdoc(schoolId, 'trips', tripId, 'passengers', s.id);
     const data = s as any;
 
     const exists = await getDoc(passengerRef);
@@ -87,3 +87,5 @@ export async function seedPassengersForTrip(opts: {
   
   return { created };
 }
+
+    

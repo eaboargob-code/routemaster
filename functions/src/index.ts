@@ -1,7 +1,6 @@
 
 import * as admin from "firebase-admin";
 import { onDocumentWritten, onDocumentCreated } from "firebase-functions/v2/firestore";
-import { defineString } from "firebase-functions/params";
 
 admin.initializeApp();
 
@@ -91,26 +90,23 @@ async function pushToTokens(
 
 /* ---------- Triggers ---------- */
 
-// Note: This trigger path must remain at the root level because Cloud Functions
-// cannot use wildcards for parent collection IDs in this way. The logic inside
-// will handle the school-based separation.
 export const onTripCreate = onDocumentCreated(
     {
       region: "us-central1",
-      document: "trips/{tripId}",
+      document: "schools/{schoolId}/trips/{tripId}",
     },
     async (event) => {
         const db = admin.firestore();
         const tripData = event.data?.data();
         if (!tripData) return;
 
-        const { schoolId, routeId } = tripData;
-        const tripId = event.params.tripId;
+        const { schoolId, tripId } = event.params;
+        const { routeId } = tripData;
         
         // The passenger list is populated just after trip creation.
         // A small delay ensures the data is available.
         await sleep(1500);
-        const tripDoc = await db.collection('trips').doc(tripId).get();
+        const tripDoc = await db.doc(`schools/${schoolId}/trips/${tripId}`).get();
         const passengers: string[] = tripDoc.data()?.passengers || [];
 
         if (passengers.length === 0) {
@@ -141,7 +137,7 @@ export const onTripCreate = onDocumentCreated(
 
         for (const parentUid of Array.from(allParentUids)) {
              // 1) Create inbox (bell) entry
-            const inboxRef = db.doc(`users/${parentUid}/inbox/${tripId}-start`);
+            const inboxRef = db.doc(`schools/${schoolId}/users/${parentUid}/inbox/${tripId}-start`);
             batch.set(inboxRef, {
                 title,
                 body,
@@ -170,11 +166,10 @@ export const onTripCreate = onDocumentCreated(
 );
 
 
-// Note: This trigger path must remain at the root level.
 export const onPassengerStatusChange = onDocumentWritten(
   {
     region: "us-central1",
-    document: "trips/{tripId}/passengers/{studentId}",
+    document: "schools/{schoolId}/trips/{tripId}/passengers/{studentId}",
   },
   async (event) => {
     const db = admin.firestore();
@@ -187,17 +182,11 @@ export const onPassengerStatusChange = onDocumentWritten(
       return;
     }
 
-    const { studentId } = after;
-    let { status } = after;
-    const tripId = event.params.tripId as string;
+    const { schoolId, tripId, studentId: eventStudentId } = event.params;
+    let { status, studentId } = after;
     
-    // We need schoolId for almost everything, so let's fetch it from the trip.
-    const tripSnap = await db.doc(`trips/${tripId}`).get();
-    const schoolId = tripSnap.data()?.schoolId;
-    if (!schoolId) {
-        console.warn(`Could not find schoolId for trip ${tripId}. Aborting notification.`);
-        return;
-    }
+    // Ensure studentId from event params is used if not present in data
+    studentId = studentId || eventStudentId;
 
     if (before?.status === 'dropped' && after.status !== 'dropped') {
         // This logic prevents re-notification spam if an admin reverts a dropped-off student.
@@ -231,7 +220,7 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     for (const parentUid of parentUids) {
       // 1) Create inbox (bell) entry
-      const inboxRef = db.doc(`users/${parentUid}/inbox/${tripId}-${studentId}`);
+      const inboxRef = db.doc(`schools/${schoolId}/users/${parentUid}/inbox/${tripId}-${studentId}`);
       batch.set(inboxRef, {
         title,
         body,
@@ -260,3 +249,5 @@ export const onPassengerStatusChange = onDocumentWritten(
     await batch.commit();
   }
 );
+
+    

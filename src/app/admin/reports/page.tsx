@@ -16,6 +16,7 @@ import { useProfile } from "@/lib/useProfile";
 import { format, subDays } from "date-fns";
 import Link from "next/link";
 import type { DateRange } from "react-day-picker";
+import { scol } from "@/lib/schoolPath";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -79,8 +80,8 @@ export default function ReportsPage() {
     setIsLoading(true);
     try {
         const [routesSnap, busesSnap, usersSnap] = await Promise.all([
-            getDocs(query(collection(db, "routes"), where("schoolId", "==", schId))),
-            getDocs(query(collection(db, "buses"), where("schoolId", "==", schId))),
+            getDocs(scol(schId, "routes")),
+            getDocs(scol(schId, "buses")),
             getDocs(query(collection(db, "users"), where("schoolId", "==", schId))),
         ]);
 
@@ -89,7 +90,7 @@ export default function ReportsPage() {
         
         const allUsers = usersSnap.docs.map(d => ({ id: d.id, ...d.data() } as UserInfo));
         setUsers(Object.fromEntries(allUsers.map(u => [u.id, u])));
-        setDrivers(allUsers.filter(u => u.role === 'driver'));
+        setDrivers(allUsers.filter(u => (u as any).role === 'driver'));
 
     } catch (e) {
         console.error("[Reports] Fetch initial data error:", e);
@@ -106,15 +107,14 @@ export default function ReportsPage() {
       setIsLoading(true);
       try {
         const constraints = [
-            where("schoolId", "==", schId),
             where("startedAt", ">=", Timestamp.fromDate(range.from)),
             orderBy("startedAt", "desc")
         ];
         if (range.to) {
-            constraints.splice(2, 0, where("startedAt", "<=", Timestamp.fromDate(range.to)));
+            constraints.splice(1, 0, where("startedAt", "<=", Timestamp.fromDate(range.to)));
         }
 
-        const tripsQuery = query(collection(db, "trips"), ...constraints);
+        const tripsQuery = query(scol(schId, "trips"), ...constraints);
         const tripsSnap = await getDocs(tripsQuery);
         setTrips(tripsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)));
 
@@ -340,3 +340,5 @@ export default function ReportsPage() {
     </Card>
   );
 }
+
+    
