@@ -188,20 +188,19 @@ export default function DriverPage() {
       setActiveTrip(foundTrip);
 
       // 3) Related route + supervisor (parallel). Both must be school-scoped.
-      const [routeData, usersMap] = await Promise.all([
+      const [routeData, supervisorData] = await Promise.all([
         foundBus.assignedRouteId
           ? getRouteById(profile.schoolId, foundBus.assignedRouteId)
           : Promise.resolve(null),
         foundBus.supervisorId
-          ? getSchoolUsersByIds(profile.schoolId, [foundBus.supervisorId])
-          : Promise.resolve({}),
+          ? getDoc(sdoc(profile.schoolId, "users", foundBus.supervisorId))
+          : Promise.resolve(null),
       ]);
-      const supData = foundBus.supervisorId ? usersMap[foundBus.supervisorId] : null;
 
       setRoute(routeData ? (routeData as RouteInfo) : null);
       setSupervisor(
-        supData
-          ? ({ id: foundBus.supervisorId, ...supData } as Supervisor)
+        supervisorData && supervisorData.exists()
+          ? ({ id: foundBus.supervisorId, ...supervisorData.data() } as Supervisor)
           : null
       );
 
@@ -381,6 +380,8 @@ export default function DriverPage() {
   /* -------------------- UI helpers -------------------- */
 
   const getSupervisorContent = () => {
+    const supervisorLabel = supervisor?.displayName || supervisor?.email || bus?.supervisorId || "No supervisor assigned";
+    
     if (activeTrip?.allowDriverAsSupervisor) {
       return (
         <div className="flex items-center gap-2">
@@ -389,23 +390,13 @@ export default function DriverPage() {
         </div>
       );
     }
-    if (supervisor) {
-      return (
-        <div className="flex items-center gap-2">
-          <Eye className="h-5 w-5 text-primary" />
-          <div>
-            <h3 className="font-semibold">Your Supervisor</h3>
-            <p className="pl-0">{supervisor.displayName || supervisor.email}</p>
-          </div>
-        </div>
-      );
-    }
+    
     return (
       <div className="flex items-center gap-2">
         <Eye className="h-5 w-5 text-primary" />
         <div>
           <h3 className="font-semibold">Your Supervisor</h3>
-          <p className="pl-0 text-muted-foreground">No supervisor assigned</p>
+          <p className="pl-0">{supervisorLabel}</p>
         </div>
       </div>
     );
