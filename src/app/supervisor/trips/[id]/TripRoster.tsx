@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 
 type PassengerRow = {
   id: string;
+  studentName?: string;
   status: "pending" | "boarded" | "dropped" | "absent";
   boardedAt?: any | null;
   droppedAt?: any | null;
@@ -41,7 +42,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
     setLoading(true);
     const q = query(
       collection(db, `schools/${schoolId}/trips/${tripId}/passengers`),
-      orderBy("__name__") // stable order by studentId
+      orderBy("studentName") // stable order by student name
     );
 
     const unsub = onSnapshot(
@@ -51,6 +52,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
           const data = d.data() as DocumentData;
           return {
             id: d.id,
+            studentName: data.studentName ?? d.id,
             status: (data.status ?? "pending") as PassengerRow["status"],
             boardedAt: data.boardedAt ?? null,
             droppedAt: data.droppedAt ?? null,
@@ -177,7 +179,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
             className="flex items-center justify-between px-3 py-2 text-sm"
           >
             <div className="flex items-center gap-3">
-              <span className="font-medium">{r.id}</span>
+              <span className="font-medium">{r.studentName}</span>
               <Badge
                 variant={
                   r.status === "boarded"
