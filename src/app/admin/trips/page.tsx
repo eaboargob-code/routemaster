@@ -96,7 +96,7 @@ export default function TripsPage() {
     
     // Set up real-time listeners
     const tripsQuery = scol(schoolId, "trips");
-    const usersQuery = query(collection(db, "users"), where("schoolId", "==", schoolId));
+    const usersQuery = scol(schoolId, "users");
     const busesQuery = scol(schoolId, "buses");
     const routesQuery = scol(schoolId, "routes");
 
@@ -315,5 +315,3 @@ export default function TripsPage() {
     </Card>
   );
 }
-
-    
