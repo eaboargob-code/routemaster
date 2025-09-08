@@ -58,7 +58,7 @@ function useInbox() {
     if (!user?.uid || !profile?.schoolId) return;
 
     const q = query(
-      scol(profile.schoolId, "users", user.uid, "inbox"),
+      scol(profile.schoolId, `users/${user.uid}/inbox`),
       orderBy("createdAt", "desc"),
       limit(25)
     );
@@ -82,7 +82,7 @@ function useInbox() {
 
     const batch = writeBatch(db);
     toMark.forEach(n => {
-        const notifRef = sdoc(profile!.schoolId, "users", user.uid, "inbox", n.id);
+        const notifRef = sdoc(profile!.schoolId, `users/${user.uid}/inbox`, n.id);
         batch.update(notifRef, { read: true, readAt: serverTimestamp() });
     });
     
@@ -320,5 +320,3 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 export default function ProtectedParentLayout({ children }: { children: ReactNode }) {
     return <ParentGuard>{children}</ParentGuard>
 }
-
-    

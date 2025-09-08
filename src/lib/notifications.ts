@@ -71,5 +71,3 @@ export async function logBell(uid: string, schoolId: string, n: { title: string;
     read: false,
   });
 }
-
-    

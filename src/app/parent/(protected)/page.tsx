@@ -14,8 +14,9 @@ import {
   Timestamp,
   DocumentData,
   doc,
+  collection,
 } from "firebase/firestore";
-import { scol } from "@/lib/schoolPath";
+import { scol, sdoc } from "@/lib/schoolPath";
 
 import {
   Card,
@@ -109,7 +110,7 @@ function StudentCard({ student }: { student: Student }) {
             setState(prev => ({ ...prev, tripId }));
 
             // Listener for passenger status
-            const passengerRef = doc(db, 'schools', student.schoolId, 'trips', tripId, 'passengers', student.id);
+            const passengerRef = sdoc(student.schoolId, 'trips', tripId, 'passengers', student.id);
             unsubPassenger = onSnapshot(passengerRef, (snap) => {
                 if (!cancelled) {
                     setState(prev => ({ ...prev, tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null }));
@@ -117,7 +118,7 @@ function StudentCard({ student }: { student: Student }) {
             }, (err) => console.error(`[Parent] Passenger listener for ${student.id} failed:`, err));
 
             // Listener for trip's last location update
-            const tripRef = doc(db, 'schools', student.schoolId, 'trips', tripId);
+            const tripRef = sdoc(student.schoolId, 'trips', tripId);
             unsubTrip = onSnapshot(tripRef, (snap) => {
                  if (!cancelled) {
                     const tripData = snap.data() as DocumentData | undefined;
@@ -324,5 +325,3 @@ export default function ParentDashboardPage({ profile, childrenData }: ParentDas
  * 3. passengers (array-contains)
  * 4. startedAt (desc)
  */
-
-    
