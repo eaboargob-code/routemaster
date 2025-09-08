@@ -83,7 +83,11 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await boardStudent(schoolId, tripId, studentId);
-        toast({ title: "Boarded", description: "Student marked as boarded." });
+        toast({
+          title: "Boarded",
+          description: "Student marked as boarded.",
+          className: "bg-green-600 text-white border-0",
+        });
       } catch (e: any) {
         console.error(e);
         toast({
@@ -103,7 +107,11 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await dropStudent(schoolId, tripId, studentId);
-        toast({ title: "Dropped", description: "Student marked as dropped." });
+        toast({
+          title: "Dropped",
+          description: "Student marked as dropped.",
+          className: "bg-blue-600 text-white border-0",
+        });
       } catch (e: any) {
         console.error(e);
         toast({
