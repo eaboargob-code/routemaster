@@ -324,7 +324,7 @@ function EditableUserRow({ user, onUpdate }: { user: User, onUpdate: () => void 
         }
     };
     
-    const RoleIcon = roleIcons[user.role];
+    const RoleIcon = roleIcons[user.role] || Users;
     
     const getStatusBadge = () => {
         if (user.pending) {
