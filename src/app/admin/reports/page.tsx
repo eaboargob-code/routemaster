@@ -17,6 +17,8 @@ import { format, subDays } from "date-fns";
 import Link from "next/link";
 import type { DateRange } from "react-day-picker";
 import { scol } from "@/lib/schoolPath";
+import { getSchoolUsersByIds } from "@/lib/firestoreQueries";
+
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -116,7 +118,20 @@ export default function ReportsPage() {
 
         const tripsQuery = query(scol(schId, "trips"), ...constraints);
         const tripsSnap = await getDocs(tripsQuery);
-        setTrips(tripsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Trip)));
+        const loadedTrips = tripsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Trip));
+        setTrips(loadedTrips);
+
+        // After loading trips, get the user info
+        const ids = new Set<string>();
+        loadedTrips.forEach(t => {
+            if (t.driverId) ids.add(t.driverId);
+            if (t.supervisorId) ids.add(t.supervisorId);
+        });
+
+        if (ids.size > 0 && profile?.schoolId) {
+            const usersMap = await getSchoolUsersByIds(profile.schoolId, Array.from(ids));
+            setUsers(usersMap as Record<string, UserInfo>);
+        }
 
       } catch (e: any) {
          console.error("[Reports] Fetch trips error:", e);
@@ -130,7 +145,7 @@ export default function ReportsPage() {
         setIsLoading(false);
       }
 
-  }, [toast]);
+  }, [toast, profile?.schoolId]);
 
   useEffect(() => {
     if (schoolId) {
@@ -340,4 +355,5 @@ export default function ReportsPage() {
     </Card>
   );
 }
+
 
