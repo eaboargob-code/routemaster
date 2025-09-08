@@ -15,7 +15,7 @@ import { boardStudent, dropStudent, markAbsent } from "@/lib/roster";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { Bus, UserX, ArrowDownCircle } from "lucide-react";
+import { Bus, UserX, ArrowDownCircle, Clock } from "lucide-react";
 
 type PassengerRow = {
   id: string;
@@ -162,6 +162,13 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       </div>
     );
   }
+  
+  const statusContent: Record<PassengerRow["status"], React.ReactNode> = {
+    pending: <><Clock className="h-3 w-3 mr-1 inline" />Pending</>,
+    boarded: <><Bus className="h-3 w-3 mr-1 inline" />Boarded</>,
+    dropped: <><ArrowDownCircle className="h-3 w-3 mr-1 inline" />Dropped</>,
+    absent: <><UserX className="h-3 w-3 mr-1 inline" />Absent</>,
+  };
 
   return (
     <div className="space-y-3">
@@ -192,7 +199,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
                     : "outline"
                 }
               >
-                {r.status[0].toUpperCase() + r.status.slice(1)}
+                {statusContent[r.status] || r.status}
               </Badge>
             </div>
 
