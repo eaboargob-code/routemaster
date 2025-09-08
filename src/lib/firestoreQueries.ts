@@ -205,3 +205,23 @@ export async function getTripDetails(tripId: string, schoolId: string) {
     route: routeSnap && routeSnap.exists() ? routeSnap.data() : null,
   };
 }
+
+export async function getSchoolUsersByIds(
+  schoolId: string,
+  uids: string[]
+): Promise<Record<string, DocumentData>> {
+  const byId: Record<string, DocumentData> = {};
+  if (!uids?.length) return byId;
+
+  const CHUNK = 30;
+  for (let i = 0; i < uids.length; i += CHUNK) {
+    const unique = [...new Set(uids.slice(i, i + CHUNK))];
+    if (!unique.length) continue;
+    const q = query(
+      collection(db, "schools", schoolId, "users"),
+      where("__name__", "in", unique)
+    );
+    (await getDocs(q)).forEach(d => (byId[d.id] = d.data()));
+  }
+  return byId;
+}
