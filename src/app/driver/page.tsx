@@ -22,7 +22,7 @@ import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
 import { registerFcmToken } from "@/lib/notifications";
 import { seedPassengersForTrip } from "@/lib/roster";
-import { getAssignedBusForDriver, getRouteById } from "@/lib/firestoreQueries";
+import { getRouteById, startOfToday } from "@/lib/firestoreQueries";
 import { sdoc, scol } from "@/lib/schoolPath";
 
 import {
@@ -150,23 +150,31 @@ export default function DriverPage() {
 
     try {
       // 1. Find the bus assigned to this driver
-      const foundBus = await getAssignedBusForDriver(profile.schoolId, user.uid);
-      if (!foundBus) {
+      const busQ = query(
+        collection(db, "schools", profile.schoolId, "buses"),
+        where("driverId", "==", user.uid),
+        limit(1)
+      );
+      const busSnap = await getDocs(busQ);
+
+      if (busSnap.empty) {
         setUiState({ status: "empty" });
         return;
       }
-      setBus(foundBus as BusDoc);
+      const foundBus = { id: busSnap.docs[0].id, ...busSnap.docs[0].data() } as BusDoc;
+      setBus(foundBus);
 
-      // 2. Find any active trip for this driver
-      const tripQ = query(
-        scol(profile.schoolId, "trips"),
+      // 2. Find any trips from today for this driver
+      const tripsQ = query(
+        collection(db, "schools", profile.schoolId, "trips"),
         where("driverId", "==", user.uid),
-        where("status", "==", "active"),
-        limit(1)
+        where("startedAt", ">=", startOfToday()),
+        orderBy("startedAt", "desc")
       );
-      const tripSnap = await getDocs(tripQ);
-      const activeTripDoc = tripSnap.docs[0];
-      const foundTrip = activeTripDoc ? { id: activeTripDoc.id, ...activeTripDoc.data() } as Trip : null;
+      const tripsSnap = await getDocs(tripsQ);
+      const todaysTrips = tripsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Trip);
+      const foundTrip = todaysTrips.find(t => t.status === 'active') || null;
+
       setActiveTrip(foundTrip);
 
       // 3. Fetch related route and supervisor info (can be done in parallel)
