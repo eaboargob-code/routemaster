@@ -103,15 +103,17 @@ function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { p
         const studentIdsToLink = Array.from(selectedStudentIds);
         try {
             const parentLinkRef = doc(db, "parentStudents", parent.id);
-            const batch = writeBatch(db);
 
-            // Use set with merge:true to create doc if it doesn't exist, without overwriting if it does.
-            batch.set(parentLinkRef, { schoolId: parent.schoolId, studentIds: [] }, { merge: true });
+            // Ensure the document exists before updating with arrayUnion
+            const docSnap = await getDoc(parentLinkRef);
+            if (!docSnap.exists()) {
+                await setDoc(parentLinkRef, { schoolId: parent.schoolId, studentIds: [] });
+            }
 
-            // Then, union all the new children.
-            batch.update(parentLinkRef, { studentIds: arrayUnion(...studentIdsToLink) });
-
-            await batch.commit();
+            // Now, safely update the array
+            await updateDoc(parentLinkRef, {
+                studentIds: arrayUnion(...studentIdsToLink)
+            });
 
             toast({
                 title: "Students Linked!",
@@ -122,7 +124,7 @@ function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { p
             onLink();
             setIsOpen(false);
         } catch (error) {
-            console.error("[link students batch]", error);
+            console.error("[link students]", error);
             toast({ variant: "destructive", title: "Linking failed", description: (error as Error).message });
         } finally {
             setIsSubmitting(false);
