@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -82,6 +83,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await boardStudent(schoolId, tripId, studentId);
+        toast({ title: "Boarded", description: "Student marked as boarded." });
       } catch (e: any) {
         console.error(e);
         toast({
@@ -101,6 +103,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await dropStudent(schoolId, tripId, studentId);
+        toast({ title: "Dropped", description: "Student marked as dropped." });
       } catch (e: any) {
         console.error(e);
         toast({
@@ -120,6 +123,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await markAbsent(schoolId, tripId, studentId);
+        toast({ title: "Absent", description: "Student marked as absent." });
       } catch (e: any) {
         console.error(e);
         toast({
