@@ -5,7 +5,7 @@ import { useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { useProfile, fetchProfile } from "@/lib/useProfile";
+import { useProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
 import { LogOut, ShieldAlert, Eye } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
@@ -71,7 +71,7 @@ function AccessDeniedScreen({ message, details }: { message: string, details?: s
 
 export function SupervisorGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, profile, setProfile, loading, error, setError } = useProfile();
+  const { user, profile, loading, error } = useProfile();
 
   useEffect(() => {
     // If loading is finished and there's no user, redirect to login.
@@ -79,20 +79,6 @@ export function SupervisorGuard({ children }: { children: ReactNode }) {
         router.replace("/supervisor/login");
     }
   }, [user, loading, router]);
-
-  useEffect(() => {
-    if (user && !profile && !error) {
-        const loadProfile = async () => {
-            const fetchedProfile = await fetchProfile(user.uid);
-            if (fetchedProfile) {
-                setProfile(fetchedProfile);
-            } else {
-                setError(new Error("Profile not found."));
-            }
-        };
-        loadProfile();
-    }
-  }, [user, profile, error, setProfile, setError]);
 
   // While checking auth state, show a loading screen.
   if (loading) {

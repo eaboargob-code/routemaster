@@ -1,38 +1,59 @@
-
 "use client";
 
 import { useProfile } from "@/lib/useProfile";
-import { Dashboard } from "./dashboard/components/Dashboard";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2 } from "lucide-react";
 
-export default function AdminPage() {
-    const { profile, loading, error } = useProfile();
+export default function AdminSectionLayout({ children }: { children: React.ReactNode }) {
+  const { loading, user, profile, error } = useProfile();
 
-    if (loading) {
-        return (
-            <div className="grid gap-4 md:gap-8">
-                 <Card>
-                    <CardHeader>
-                        <Skeleton className="h-8 w-1/4" />
-                        <Skeleton className="h-4 w-1/2" />
-                    </CardHeader>
-                    <CardContent>
-                        <Skeleton className="h-40 w-full" />
-                    </CardContent>
-                </Card>
-            </div>
-        )
-    }
+  if (loading) {
+    return (
+      <div className="min-h-screen grid place-items-center">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Authenticating…</span>
+        </div>
+      </div>
+    );
+  }
 
-    if (error) {
-        return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{error.message}</AlertDescription></Alert>;
-    }
+  if (error) {
+    return (
+      <div className="min-h-screen grid place-items-center">
+        <div className="text-center">
+          <p className="font-semibold">Authentication Error</p>
+          <p className="text-sm text-muted-foreground">{error.message}</p>
+          <a href="/login" className="text-primary underline mt-3 inline-block">
+            Go to login
+          </a>
+        </div>
+      </div>
+    );
+  }
 
-    if (!profile) {
-        return <Alert><AlertTitle>Profile Not Found</AlertTitle><AlertDescription>Admin profile could not be loaded.</AlertDescription></Alert>;
-    }
+  if (!user || !profile) {
+    return (
+      <div className="min-h-screen grid place-items-center">
+        <div className="text-center">
+          <p className="font-semibold">Not signed in</p>
+          <a href="/login" className="text-primary underline mt-3 inline-block">
+            Go to login
+          </a>
+        </div>
+      </div>
+    );
+  }
 
-    return <Dashboard schoolId={profile.schoolId} />;
+  if (profile.role !== "admin") {
+    return (
+      <div className="min-h-screen grid place-items-center">
+        <div className="text-center">
+          <p className="font-semibold">Access denied</p>
+          <p className="text-sm text-muted-foreground">Admin role required.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
 }
