@@ -82,7 +82,7 @@ export default function ReportsPage() {
         const [routesSnap, busesSnap, usersSnap] = await Promise.all([
             getDocs(scol(schId, "routes")),
             getDocs(scol(schId, "buses")),
-            getDocs(query(collection(db, "users"), where("schoolId", "==", schId))),
+            getDocs(scol(schId, "users")),
         ]);
 
         setRoutes(routesSnap.docs.map(d => ({ id: d.id, ...d.data() } as RouteInfo)));
@@ -341,4 +341,3 @@ export default function ReportsPage() {
   );
 }
 
-    
