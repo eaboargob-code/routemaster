@@ -1,114 +1,90 @@
-{
-  "rules": {
-    "users": {
-      "$uid": {
-        // Admins can write to any user doc. Users can only write to their own.
-        "write": "if isAdmin() || request.auth.uid == $uid;",
-        // Admins can read any user. Users can only read their own profile.
-        "read": "if isAdmin() || request.auth.uid == $uid;",
+rules_version = '2';
 
-        "inbox": {
-          "$inboxId": {
-            // Only the user can read their inbox items.
-            "read": "if request.auth.uid == $uid;",
-            // Inbox items are only created by the Cloud Function (Admin SDK). No client writes.
-            "write": "if false;"
-          }
+service cloud.firestore {
+  match /databases/{database}/documents {
+  
+    // Deny all reads/writes by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Helper functions to check user's role and school from their token claims.
+    function isAuth() {
+      return request.auth != null;
+    }
+    function schoolId() {
+      return request.auth.token.schoolId;
+    }
+    function isRole(role) {
+      return request.auth.token.role == role;
+    }
+    function isRoleIn(roles) {
+      return request.auth.token.role in roles;
+    }
+    function isUser(uid) {
+      return isAuth() && request.auth.uid == uid;
+    }
+    function isMemberOf(schId) {
+      return isAuth() && schoolId() == schId;
+    }
+    function isAdminOf(schId) {
+      return isMemberOf(schId) && isRole('admin');
+    }
+    function isDriverOf(schId) {
+      return isMemberOf(schId) && isRole('driver');
+    }
+    function isSupervisorOf(schId) {
+       return isMemberOf(schId) && isRole('supervisor');
+    }
+    
+    // Allow users to read their own index entry to find their school.
+    match /usersIndex/{uid} {
+      allow get: if isUser(uid);
+    }
+    
+    // Lock down the user collection. Only admins can manage users.
+    // Individual users can read their own profile.
+    match /users/{uid} {
+       allow get: if isUser(uid);
+       allow list, write: if isAdminOf(schoolId());
+    }
+
+    // --- School-Scoped Data ---
+    // All primary data is stored under /schools/{schoolId}/
+    match /schools/{schId} {
+      // Allow any authenticated member of the school to read the school doc itself.
+      allow get: if isMemberOf(schId);
+      
+      // Admins have full control over their school's data.
+      match /{coll}/{docId} {
+        allow read, write: if isAdminOf(schId);
+      }
+      
+      // Drivers can list buses to find their own.
+      match /buses/{busId} {
+        allow list: if isDriverOf(schId);
+      }
+      
+      // Drivers can list their trips for the day.
+      match /trips/{tripId} {
+        allow list: if isDriverOf(schId) || isSupervisorOf(schId);
+        allow get: if isMemberOf(schId) && isRoleIn(['driver', 'supervisor', 'admin']);
+        
+        // Passengers subcollection
+        match /passengers/{studentId} {
+           allow read, write: if isMemberOf(schId) && isRoleIn(['driver', 'supervisor', 'admin']);
         }
       }
-    },
-    "students": {
-      "$studentId": {
-        // Admins can manage all student records.
-        "write": "if isAdmin();",
-        // Admins, and authorized school staff can read.
-        "read": "if (isAdmin() || isDriver() || isSupervisor()) && resource.data.schoolId == mySchool();"
-      },
-      // Drivers and supervisors need to list students for their school to build rosters.
-      "allow list": "if (isDriver() || isSupervisor()) && mySchool() != null;"
-    },
-    "routes": {
-      "$routeId": {
-        // Admins can manage all routes.
-        "write": "if isAdmin();",
-        // Authenticated users of the school can read route info.
-        "read": "if isAuthenticated() && resource.data.schoolId == mySchool();"
+      
+      // Users can read other users in their school (e.g., to get a supervisor's name).
+      match /users/{uid} {
+        allow get: if isMemberOf(schId);
       }
-    },
-    "buses": {
-      "$busId": {
-        // Admins can manage all bus records.
-        "write": "if isAdmin();",
-        // Authenticated users of the school can read bus info.
-        "read": "if isAuthenticated() && resource.data.schoolId == mySchool();"
-      }
-    },
-    "parentStudents": {
-      "$parentId": {
-        // Admins can link/unlink students from any parent.
-        "write": "if isAdmin();",
-        // Only the parent and admins can see the link.
-        "read": "if isAdmin() || request.auth.uid == $parentId;"
-      }
-    },
-    "trips": {
-      "$tripId": {
-        // Admins can manage trips. Drivers can create them.
-        "create": "if isDriver();",
-        // Drivers/supervisors of this trip, or admins, can update.
-        "update": "if isAdmin() || (isDriver() && resource.data.driverId == request.auth.uid) || (isSupervisor() && resource.data.supervisorId == request.auth.uid);",
-        "delete": "if isAdmin();",
-        // Drivers/supervisors of this trip, or admins, can read.
-        "read": "if isAdmin() || (resource.data.driverId == request.auth.uid) || (resource.data.supervisorId == request.auth.uid);"
-      },
-
-      "passengers": {
-        "$passengerId": {
-          "allow read, write": "if false;" // Default deny
-        }
-      }
-    },
-    "trips/{tripId}/passengers": {
-      "$studentId": {
-        "read": "
-          let trip = get(/databases/$(database)/documents/trips/$(tripId)).data;
-          let myParentLink = get(/databases/$(database)/documents/parentStudents/$(request.auth.uid)).data;
-          let isMyChild = exists(/databases/$(database)/documents/parentStudents/$(request.auth.uid)) && myParentLink.studentIds.hasAny([$studentId]);
-          return (
-            (trip.driverId == request.auth.uid || trip.supervisorId == request.auth.uid || isAdmin())
-            && trip.schoolId == mySchool()
-          ) || (isParent() && isMyChild);
-        ",
-        "write": "
-          let trip = get(/databases/$(database)/documents/trips/$(tripId)).data;
-          let isDriverOrSupervisor = trip.driverId == request.auth.uid || trip.supervisorId == request.auth.uid;
-          let isDriverActingAsSupervisor = trip.driverId == request.auth.uid && trip.allowDriverAsSupervisor == true;
-          return (isAdmin() || isDriverOrSupervisor || isDriverActingAsSupervisor) && trip.schoolId == mySchool();
-        "
+      
+      // Parents can read their own link document.
+      match /parentStudents/{uid} {
+        allow get: if isUser(uid) && isMemberOf(schId);
       }
     }
-  },
-  "functions": {
-    "function isAuthenticated() {
-      return request.auth != null;
-    }",
-    "function mySchool() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId;
-    }",
-    "function myRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
-    }",
-    "function isAdmin() {
-      return isAuthenticated() && myRole() == 'admin';
-    }",
-    "function isDriver() {
-      return isAuthenticated() && myRole() == 'driver';
-    }",
-    "function isSupervisor() {
-      return isAuthenticated() && myRole() == 'supervisor';
-    }",
-    "function isParent() {
-      return isAuthenticated() && myRole() == 'parent';
-    }"
   }
 }

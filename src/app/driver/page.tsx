@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -8,7 +7,6 @@ import {
   where,
   getDocs,
   getDoc,
-  doc,
   addDoc,
   updateDoc,
   Timestamp,
@@ -149,7 +147,7 @@ export default function DriverPage() {
     setUiState({ status: "loading" });
 
     try {
-      // 1. Find the bus assigned to this driver
+      // 1) Find the bus assigned to this driver (scoped to school)
       const busQ = query(
         collection(db, "schools", profile.schoolId, "buses"),
         where("driverId", "==", user.uid),
@@ -158,13 +156,20 @@ export default function DriverPage() {
       const busSnap = await getDocs(busQ);
 
       if (busSnap.empty) {
+        setBus(null);
+        setRoute(null);
+        setSupervisor(null);
+        setActiveTrip(null);
         setUiState({ status: "empty" });
         return;
       }
-      const foundBus = { id: busSnap.docs[0].id, ...busSnap.docs[0].data() } as BusDoc;
+      const foundBus = {
+        id: busSnap.docs[0].id,
+        ...busSnap.docs[0].data(),
+      } as BusDoc;
       setBus(foundBus);
 
-      // 2. Find any trips from today for this driver
+      // 2) Fetch today's trips for this driver (scoped to school)
       const tripsQ = query(
         collection(db, "schools", profile.schoolId, "trips"),
         where("driverId", "==", user.uid),
@@ -172,34 +177,36 @@ export default function DriverPage() {
         orderBy("startedAt", "desc")
       );
       const tripsSnap = await getDocs(tripsQ);
-      const todaysTrips = tripsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Trip);
-      const foundTrip = todaysTrips.find(t => t.status === 'active') || null;
-
+      const todaysTrips = tripsSnap.docs.map(
+        (d) => ({ id: d.id, ...d.data() } as Trip)
+      );
+      const foundTrip = todaysTrips.find((t) => t.status === "active") || null;
       setActiveTrip(foundTrip);
 
-      // 3. Fetch related route and supervisor info (can be done in parallel)
-      const [routeData, supervisorData] = await Promise.all([
-        foundBus.assignedRouteId ? getRouteById(profile.schoolId, foundBus.assignedRouteId) : Promise.resolve(null),
-        foundBus.supervisorId ? getDoc(doc(db, "users", foundBus.supervisorId)) : Promise.resolve(null),
+      // 3) Related route + supervisor (parallel). Both must be school-scoped.
+      const [routeData, supSnap] = await Promise.all([
+        foundBus.assignedRouteId
+          ? getRouteById(profile.schoolId, foundBus.assignedRouteId)
+          : Promise.resolve(null),
+        foundBus.supervisorId
+          ? getDoc(sdoc(profile.schoolId, "users", foundBus.supervisorId))
+          : Promise.resolve(null),
       ]);
 
-      if (routeData) {
-        setRoute(routeData as RouteInfo);
-      } else {
-        setRoute(null);
-      }
-
-      if (supervisorData?.exists()) {
-        setSupervisor({ id: supervisorData.id, ...supervisorData.data() } as Supervisor);
-      } else {
-        setSupervisor(null);
-      }
+      setRoute(routeData ? (routeData as RouteInfo) : null);
+      setSupervisor(
+        supSnap && supSnap.exists()
+          ? ({ id: supSnap.id, ...supSnap.data() } as Supervisor)
+          : null
+      );
 
       setUiState({ status: "ready" });
-
     } catch (e: any) {
       console.error("[DriverPage] Fetch data error:", e);
-      setUiState({ status: "error", errorMessage: e.message || "Could not load your assignment." });
+      setUiState({
+        status: "error",
+        errorMessage: e.message || "Could not load your assignment.",
+      });
     }
   }, [user, profile]);
 
@@ -238,7 +245,7 @@ export default function DriverPage() {
     setIsSubmitting(true);
 
     try {
-      const newTripData = {
+      const newTripData: Omit<Trip, "id"> = {
         driverId: user.uid,
         busId: bus.id,
         routeId: route?.id || "",
@@ -249,14 +256,16 @@ export default function DriverPage() {
         allowDriverAsSupervisor: false,
         driverSupervisionLocked: false,
         passengers: [],
+        counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 },
       };
+
       const docRef = await addDoc(scol(profile.schoolId, "trips"), newTripData);
       const finalTrip = { id: docRef.id, ...newTripData } as Trip;
-
       setActiveTrip(finalTrip);
+
       toast({
         title: "Trip Started!",
-        description: `Your trip is now active.`,
+        description: "Your trip is now active.",
         className: "bg-accent text-accent-foreground border-0",
       });
 
@@ -267,17 +276,19 @@ export default function DriverPage() {
         routeId: finalTrip.routeId,
         busId: finalTrip.busId,
       });
+
       if (created > 0) {
         toast({
-            title: "Roster Ready!",
-            description: `${created} passengers have been added to your roster.`,
-            className: "bg-accent text-accent-foreground border-0",
+          title: "Roster Ready!",
+          description: `${created} passengers have been added to your roster.`,
+          className: "bg-accent text-accent-foreground border-0",
         });
       } else {
-          toast({
-            title: "Empty Roster",
-            description: "No students are assigned to this route or bus for your school.",
-          });
+        toast({
+          title: "Empty Roster",
+          description:
+            "No students are assigned to this route or bus for your school.",
+        });
       }
     } catch (error) {
       console.error("[start trip]", error);
@@ -300,7 +311,6 @@ export default function DriverPage() {
         status: "ended",
       });
       setActiveTrip(null);
-      // No full fetchData needed, just clear the trip from state
     } catch (error) {
       console.error("[end trip]", error);
       toast({
@@ -328,13 +338,17 @@ export default function DriverPage() {
         const { latitude, longitude } = position.coords;
         try {
           await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
-            lastLocation: { lat: latitude, lng: longitude, at: serverTimestamp() },
+            lastLocation: {
+              lat: latitude,
+              lng: longitude,
+              at: serverTimestamp(),
+            },
           });
           toast({
             title: "Location Sent!",
-            description: `Coordinates: ${latitude.toFixed(4)}, ${longitude.toFixed(
+            description: `Coordinates: ${latitude.toFixed(
               4
-            )}`,
+            )}, ${longitude.toFixed(4)}`,
             className: "bg-accent text-accent-foreground border-0",
           });
         } catch (error) {
@@ -424,7 +438,8 @@ export default function DriverPage() {
             <Info className="h-4 w-4" />
             <AlertTitle>No Assigned Bus</AlertTitle>
             <AlertDescription>
-              You have not been assigned to a bus yet. Please contact your administrator.
+              You have not been assigned to a bus yet. Please contact your
+              administrator.
             </AlertDescription>
           </Alert>
         </CardContent>
@@ -543,7 +558,11 @@ export default function DriverPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Roster tripId={activeTrip.id} schoolId={profile.schoolId} canEdit={!!activeTrip.allowDriverAsSupervisor} />
+            <Roster
+              tripId={activeTrip.id}
+              schoolId={profile.schoolId}
+              canEdit={!!activeTrip.allowDriverAsSupervisor}
+            />
           </CardContent>
         </Card>
       )}

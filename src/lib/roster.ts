@@ -1,4 +1,3 @@
-
 // src/lib/roster.ts
 import {
   collection,
@@ -6,86 +5,100 @@ import {
   getDoc,
   getDocs,
   query,
-  setDoc,
-  Timestamp,
   where,
   writeBatch,
-  increment,
-  serverTimestamp,
-  arrayUnion,
+  Timestamp,
+  type DocumentData,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { scol, sdoc } from "./schoolPath";
-
-interface SeedArgs {
-  tripId: string;
-  schoolId: string;
-  routeId?: string | null;
-  busId?: string | null;
-}
+import { sdoc, scol } from "@/lib/schoolPath";
 
 /**
- * Seed passenger roster for a trip.
- * Idempotent: safe to call multiple times.
+ * Seeds passengers for a trip from students that match either:
+ *  - assignedRouteId == routeId  OR
+ *  - assignedBusId   == busId
+ *
+ * All docs are scoped under: schools/{schoolId}/...
  */
 export async function seedPassengersForTrip(opts: {
   tripId: string;
   schoolId: string;
-  routeId: string;
-  busId: string;
-}): Promise<{ created: number }> {
+  routeId?: string;
+  busId?: string;
+}) {
   const { tripId, schoolId, routeId, busId } = opts;
 
-  const studentsRef = scol(schoolId, 'students');
+  // 0) Sanity: ensure the trip exists and belongs to this school
+  const tripSnap = await getDoc(sdoc(schoolId, "trips", tripId));
+  if (!tripSnap.exists()) {
+    return { created: 0, reason: "trip-not-found" as const };
+  }
+
+  // 1) Fetch students by route and/or bus (OR done client-side)
+  const qBase = (field: "assignedRouteId" | "assignedBusId", value: string) =>
+    query(
+      collection(db, "schools", schoolId, "students"),
+      where("schoolId", "==", schoolId),
+      where(field, "==", value)
+    );
+
   const queries = [];
-  if (routeId) {
-    queries.push(query(studentsRef, where('assignedRouteId', '==', routeId)));
-  }
-  if (busId) {
-    queries.push(query(studentsRef, where('assignedBusId', '==', busId)));
+  if (routeId) queries.push(getDocs(qBase("assignedRouteId", routeId)));
+  if (busId)   queries.push(getDocs(qBase("assignedBusId",   busId)));
+
+  const snapshots = await Promise.all(queries);
+  const students: Array<{ id: string; data: DocumentData }> = [];
+
+  const seen = new Set<string>();
+  for (const snap of snapshots) {
+    snap.forEach(d => {
+      if (!seen.has(d.id)) {
+        students.push({ id: d.id, data: d.data() });
+        seen.add(d.id);
+      }
+    });
   }
 
-  const snaps = await Promise.all(queries.map(q => getDocs(q)));
-  const merged = new Map<string, any>();
-  for (const s of snaps) {
-    for (const d of s.docs) merged.set(d.id, { id: d.id, ...d.data() });
+  // 2) If nothing matched, bail early
+  if (students.length === 0) {
+    return { created: 0, reason: "no-matching-students" as const };
   }
-  const students = [...merged.values()];
 
-  if (students.length === 0) return { created: 0 };
+  // 3) Avoid duplicates: find any passengers already created for this trip
+  const existingSnap = await getDocs(
+    collection(db, "schools", schoolId, "trips", tripId, "passengers")
+  );
+  const existingIds = new Set<string>(existingSnap.docs.map(d => d.id));
 
+  // 4) Seed pending passengers
   const batch = writeBatch(db);
-  const tripRef = sdoc(schoolId, 'trips', tripId);
   let created = 0;
 
   for (const s of students) {
-    const passengerRef = sdoc(schoolId, 'trips', tripId, 'passengers', s.id);
-    const data = s as any;
+    if (existingIds.has(s.id)) continue;
 
-    const exists = await getDoc(passengerRef);
-    if (!exists.exists()) {
-       // Set with merge so it’s safe to re-run
-        batch.set(passengerRef, {
-            studentId: s.id,
-            studentName: data?.name ?? '',
-            status: 'pending',
-            boardedAt: null,
-            droppedAt: null,
-            updatedAt: serverTimestamp(),
-        }, { merge: true });
+    const pRef = doc(db, "schools", schoolId, "trips", tripId, "passengers", s.id);
+    batch.set(pRef, {
+      studentId: s.id,
+      schoolId,
+      tripId,
+      status: "pending",           // allowed by rules
+      boardedAt: null,
+      droppedAt: null,
+      createdAt: Timestamp.now(),
+      // optional denormalized fields for faster UIs:
+      name: s.data.name ?? s.data.displayName ?? null,
+      grade: s.data.grade ?? null,
+      routeId: routeId ?? null,
+      busId: busId ?? null,
+    });
 
-        // Keep passengers array for parent query
-        batch.update(tripRef, { passengers: arrayUnion(s.id) });
-
-        created++;
-    }
+    created++;
   }
 
   if (created > 0) {
     await batch.commit();
   }
-  
+
   return { created };
 }
-
-    

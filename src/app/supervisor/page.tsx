@@ -1,173 +1,198 @@
-
+// src/app/supervisor/page.tsx
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  collection, query, where, getDocs, getDoc, doc,
-  Timestamp, type DocumentData
+  collection,
+  getDoc,
+  getDocs,
+  orderBy,
+  query,
+  where,
+  type DocumentData,
+  Timestamp,
+  doc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
+import { useToast } from "@/hooks/use-toast";
+import { registerFcmToken } from "@/lib/notifications";
 import { format } from "date-fns";
-import { registerFcmToken } from '@/lib/notifications';
-import { getUsersByIds, getSupervisorTrips } from "@/lib/firestoreQueries";
-import { scol } from "@/lib/schoolPath";
+import { sdoc, scol } from "@/lib/schoolPath";
 
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
+  Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Frown, Eye, UserCheck, AlertTriangle } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { AlertTriangle, Eye, Frown, UserCheck } from "lucide-react";
 
-interface Trip extends DocumentData {
+/* ---------------- utils ---------------- */
+const startOfTodayTs = () => {
+  const d = new Date(); d.setHours(0,0,0,0);
+  return Timestamp.fromDate(d);
+};
+
+type Trip = {
   id: string;
   driverId: string;
   busId: string;
-  routeId: string | null;
+  routeId?: string | null;
   supervisorId?: string | null;
   allowDriverAsSupervisor?: boolean;
   status: "active" | "ended";
   startedAt: Timestamp;
   endedAt?: Timestamp;
+  lastLocation?: { lat: number; lng: number; at: Timestamp };
   schoolId: string;
-  lastLocation?: {
-    lat: number;
-    lng: number;
-    at: Timestamp;
-  };
-}
+};
 
-interface UserInfo {
-  displayName: string;
-  email: string;
-}
+type UserInfo = { displayName?: string; email?: string };
+type BusInfo  = { busCode?: string };
+type RouteInfo = { name?: string };
 
-type UiState = {
-    status: 'loading' | 'ready' | 'error' | 'empty';
-    errorMessage?: string;
-}
+type UiState = { status: "loading" | "ready" | "empty" | "error"; errorMessage?: string };
 
+/* -------------- page -------------- */
 export default function SupervisorPage() {
   const { user, profile, loading: profileLoading, error: profileError } = useProfile();
   const { toast } = useToast();
 
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [referenceData, setReferenceData] = useState<Record<string, any>>({
-    userMap: {},
-    busMap: new Map(),
-    routeMap: new Map(),
-  });
-  const [uiState, setUiState] = useState<UiState>({ status: 'loading' });
+  const [ui, setUi] = useState<UiState>({ status: "loading" });
+
+  const [userMap, setUserMap]   = useState<Record<string, UserInfo>>({});
+  const [busMap, setBusMap]     = useState<Map<string, BusInfo>>(new Map());
+  const [routeMap, setRouteMap] = useState<Map<string, RouteInfo>>(new Map());
 
   useEffect(() => {
-    if (user?.uid) {
-        registerFcmToken(user.uid);
-    }
+    if (user?.uid) registerFcmToken(user.uid).catch(() => {});
   }, [user?.uid]);
 
-  const fetchTripsAndReferences = useCallback(async () => {
+  const fetchTripsAndRefs = useCallback(async () => {
     if (!user || !profile) return;
-    setUiState({ status: 'loading' });
-  
+    setUi({ status: "loading" });
+
     try {
-      // Step 1: Pre-fetch all buses and routes for the school and cache them.
-      const [busesSnap, routesSnap] = await Promise.all([
-        getDocs(scol(profile.schoolId, "buses")),
-        getDocs(scol(profile.schoolId, "routes")),
-      ]);
-      const busMap = new Map(busesSnap.docs.map(d => [d.id, d.data()]));
-      const routeMap = new Map(routesSnap.docs.map(d => [d.id, d.data()]));
+      const schoolId = profile.schoolId;
 
-      // Step 2: Fetch trips assigned to this supervisor
-      const fetchedTrips = await getSupervisorTrips(profile.schoolId, user.uid);
-      setTrips(fetchedTrips);
-  
-      // Step 3: Fetch only the required user data.
-      let userMap = {};
-      if (fetchedTrips.length > 0) {
-        const userIds = Array.from(new Set(fetchedTrips.map(t => t.driverId).filter(Boolean)));
-        if (userIds.length > 0) {
-            userMap = await getUsersByIds(userIds);
-        }
-      }
-      
-      // Step 4: Set all state at once.
-      setReferenceData({ userMap, busMap, routeMap });
+      // trips where I'm the supervisor
+      const qMine = query(
+        scol(schoolId, "trips"),
+        where("supervisorId", "==", user.uid),
+        where("startedAt", ">=", startOfTodayTs()),
+        orderBy("startedAt", "desc"),
+      );
 
-      if (fetchedTrips.length === 0) {
-        setUiState({ status: 'empty' });
-      } else {
-        setUiState({ status: 'ready' });
+      // trips where driver acts as supervisor (visible to all supervisors in school)
+      const qDriverAsSup = query(
+        scol(schoolId, "trips"),
+        where("allowDriverAsSupervisor", "==", true),
+        where("startedAt", ">=", startOfTodayTs()),
+        orderBy("startedAt", "desc"),
+      );
+
+      const [mineSnap, dasSnap] = await Promise.all([getDocs(qMine), getDocs(qDriverAsSup)]);
+
+      const seen = new Set<string>();
+      const all = [...mineSnap.docs, ...dasSnap.docs]
+        .filter(d => !seen.has(d.id) && seen.add(d.id))
+        .map(d => ({ id: d.id, ...(d.data() as any) })) as Trip[];
+
+      setTrips(all);
+
+      if (all.length === 0) {
+        setUi({ status: "empty" });
+        setUserMap({});
+        setBusMap(new Map());
+        setRouteMap(new Map());
+        return;
       }
-  
+
+      // preload reference data (within school)
+      const busIds   = Array.from(new Set(all.map(t => t.busId).filter(Boolean)));
+      const routeIds = Array.from(new Set(all.map(t => t.routeId).filter(Boolean))) as string[];
+      const driverIds= Array.from(new Set(all.map(t => t.driverId).filter(Boolean)));
+
+      // buses
+      const busPairs: [string, BusInfo][] = await Promise.all(
+        busIds.map(async id => {
+          const snap = await getDoc(sdoc(schoolId, "buses", id));
+          return [id, (snap.exists() ? (snap.data() as BusInfo) : {})];
+        })
+      );
+      setBusMap(new Map(busPairs));
+
+      // routes
+      const routePairs: [string, RouteInfo][] = await Promise.all(
+        routeIds.map(async id => {
+          const snap = await getDoc(sdoc(schoolId, "routes", id));
+          return [id, (snap.exists() ? (snap.data() as RouteInfo) : {})];
+        })
+      );
+      setRouteMap(new Map(routePairs));
+
+      // drivers (from top-level users; we only read by id)
+      const userPairs: [string, UserInfo][] = await Promise.all(
+        driverIds.map(async id => {
+          const snap = await getDoc(doc(db, "users", id));
+          return [id, (snap.exists() ? (snap.data() as UserInfo) : {})];
+        })
+      );
+      setUserMap(Object.fromEntries(userPairs));
+
+      setUi({ status: "ready" });
     } catch (err: any) {
-      console.error('[supervisor] trip fetch failed', err);
-      setUiState({ status: 'error', errorMessage: 'Could not load trip data. This may be due to a permissions issue.' });
+      console.error("[supervisor] fetch failed", err);
+      setUi({ status: "error", errorMessage: "Could not load trip data. This may be due to a permissions issue." });
       toast({ variant: "destructive", title: "Data Loading Error", description: "Failed to fetch trip information." });
     }
   }, [user, profile, toast]);
 
   useEffect(() => {
-    if (!profileLoading && user && profile) {
-      fetchTripsAndReferences();
-    }
-  }, [profileLoading, user, profile, fetchTripsAndReferences]);
+    if (!profileLoading && user && profile) fetchTripsAndRefs();
+  }, [profileLoading, user, profile, fetchTripsAndRefs]);
 
-  if (profileLoading || uiState.status === 'loading') {
-    return <Skeleton className="h-96 w-full" />;
-  }
+  /* --------- renders --------- */
+  if (profileLoading || ui.status === "loading") return <Skeleton className="h-96 w-full" />;
 
   if (profileError) {
-    return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{profileError.message}</AlertDescription></Alert>;
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Error</AlertTitle>
+        <AlertDescription>{profileError.message}</AlertDescription>
+      </Alert>
+    );
   }
 
   if (!user || !profile) {
-    return <Alert><AlertTitle>Not Authorized</AlertTitle><AlertDescription>Your profile is not associated with a school or you are not logged in.</AlertDescription></Alert>;
+    return (
+      <Alert>
+        <AlertTitle>Not Authorized</AlertTitle>
+        <AlertDescription>You are not logged in or not associated with a school.</AlertDescription>
+      </Alert>
+    );
   }
-  
-  const getSupervisorContent = (trip: Trip) => {
-    if (trip.allowDriverAsSupervisor) {
-      return (
-        <Badge variant="outline" className="flex items-center gap-2">
-          <UserCheck className="h-3.5 w-3.5 text-blue-600" />
-          Driver as Supervisor
-        </Badge>
-      );
-    }
-    // If the logged-in user is the supervisor but their info isn't in the map (e.g., they are the only user), show their name.
-    if (trip.supervisorId === user.uid) {
-        return profile.displayName || profile.email;
-    }
-    return <span className="text-muted-foreground">No supervisor</span>;
-  };
-  
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Today's Trips</CardTitle>
-        <CardDescription>
-          A real-time log of all bus trips for school {profile.schoolId} that you are supervising.
-        </CardDescription>
+        <CardDescription>Trips you supervise in {profile.schoolId} (including “driver as supervisor”).</CardDescription>
       </CardHeader>
       <CardContent>
-        {uiState.status === 'error' && <Alert variant="destructive" className="mb-4"><AlertTriangle className="h-4 w-4" /><AlertTitle>Error</AlertTitle><AlertDescription>{uiState.errorMessage}</AlertDescription></Alert>}
+        {ui.status === "error" && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{ui.errorMessage}</AlertDescription>
+          </Alert>
+        )}
+
         <div className="rounded-md border">
           <Table>
             <TableHeader>
@@ -184,54 +209,56 @@ export default function SupervisorPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {uiState.status === 'loading' ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={`skel-${i}`}>
-                    <TableCell colSpan={9}>
-                      <Skeleton className="h-6 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))
-              ) : trips.length > 0 ? (
-                trips.map(trip => {
-                  const driver = referenceData.userMap?.[trip.driverId] as UserInfo;
-                  const bus = referenceData.busMap?.get(trip.busId);
-                  const route = trip.routeId ? referenceData.routeMap?.get(trip.routeId) : null;
+              {ui.status === "empty" ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                    <div className="flex flex-col items-center gap-2">
+                      <Frown className="h-8 w-8" />
+                      <span className="font-medium">No trips to supervise</span>
+                      <span>Nothing for today.</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                trips.map((t) => {
+                  const driver = userMap[t.driverId];
+                  const bus = busMap.get(t.busId);
+                  const route = t.routeId ? routeMap.get(t.routeId) : undefined;
+
                   return (
-                    <TableRow key={trip.id}>
-                      <TableCell>{driver?.displayName ?? driver?.email ?? '—'}</TableCell>
-                      <TableCell>{bus?.busCode ?? '—'}</TableCell>
-                      <TableCell>{route?.name ?? '—'}</TableCell>
-                      <TableCell>{getSupervisorContent(trip)}</TableCell>
+                    <TableRow key={t.id}>
+                      <TableCell>{driver?.displayName ?? driver?.email ?? "—"}</TableCell>
+                      <TableCell>{bus?.busCode ?? "—"}</TableCell>
+                      <TableCell>{route?.name ?? "—"}</TableCell>
                       <TableCell>
-                        <Badge variant={trip.status === "active" ? "default" : "secondary"} className={trip.status === "active" ? 'bg-green-100 text-green-800 border-green-200' : ''}>
-                          {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
+                        {t.allowDriverAsSupervisor ? (
+                          <Badge variant="outline" className="flex items-center gap-2">
+                            <UserCheck className="h-3.5 w-3.5 text-blue-600" />
+                            Driver as Supervisor
+                          </Badge>
+                        ) : t.supervisorId === user.uid ? (
+                          profile.displayName || profile.email
+                        ) : (
+                          <span className="text-muted-foreground">No supervisor</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={t.status === "active" ? "default" : "secondary"}
+                               className={t.status === "active" ? "bg-green-100 text-green-800 border-green-200" : ""}>
+                          {t.status[0].toUpperCase() + t.status.slice(1)}
                         </Badge>
                       </TableCell>
-                      <TableCell>{format(trip.startedAt.toDate(), "HH:mm")}</TableCell>
-                      <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "HH:mm") : <span className="text-muted-foreground">In Progress</span>}</TableCell>
-                      <TableCell>{trip.lastLocation?.at ? format(trip.lastLocation.at.toDate(), "HH:mm:ss") : "N/A"}</TableCell>
+                      <TableCell>{format(t.startedAt.toDate(), "HH:mm")}</TableCell>
+                      <TableCell>{t.endedAt ? format(t.endedAt.toDate(), "HH:mm") : <span className="text-muted-foreground">In Progress</span>}</TableCell>
+                      <TableCell>{t.lastLocation?.at ? format(t.lastLocation.at.toDate(), "HH:mm:ss") : "N/A"}</TableCell>
                       <TableCell className="text-right">
-                         <Button asChild variant="outline" size="sm">
-                            <Link href={`/supervisor/trips/${trip.id}`}>
-                                <Eye className="mr-2 h-4 w-4" />
-                                View Roster
-                            </Link>
-                         </Button>
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={`/supervisor/trips/${t.id}`}> <Eye className="mr-2 h-4 w-4" /> View Roster </Link>
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
                 })
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                    <div className="flex flex-col items-center gap-2">
-                       <Frown className="h-8 w-8" />
-                       <span className="font-medium">{uiState.status === 'empty' ? "No trips to supervise" : "No trips found"}</span>
-                       <span>No trips have been assigned to you for today.</span>
-                    </div>
-                  </TableCell>
-                </TableRow>
               )}
             </TableBody>
           </Table>
