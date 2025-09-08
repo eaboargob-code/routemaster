@@ -10,7 +10,6 @@ admin.initializeApp();
 type Passenger = {
   status?: "pending" | "boarded" | "dropped" | "absent";
   studentId?: string;
-  schoolId?: string;
   updatedAt?: admin.firestore.Timestamp;
 };
 
@@ -34,9 +33,9 @@ type UserDoc = {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /** Resolve a human student name with sensible fallbacks. */
-async function getStudentName(db: FirebaseFirestore.Firestore, studentId: string): Promise<string> {
+async function getStudentName(db: FirebaseFirestore.Firestore, schoolId: string, studentId: string): Promise<string> {
   try {
-    const snap = await db.collection("students").doc(studentId).get();
+    const snap = await db.doc(`schools/${schoolId}/students/${studentId}`).get();
     if (!snap.exists) return studentId;
 
     const s = snap.data() as StudentDoc;
@@ -54,8 +53,7 @@ async function getParentUserIds(
   schoolId: string
 ): Promise<string[]> {
   const q = db
-    .collection("parentStudents")
-    .where("schoolId", "==", schoolId)
+    .collection(`schools/${schoolId}/parentStudents`)
     .where("studentIds", "array-contains", studentId);
 
   const snap = await q.get();
@@ -93,6 +91,9 @@ async function pushToTokens(
 
 /* ---------- Triggers ---------- */
 
+// Note: This trigger path must remain at the root level because Cloud Functions
+// cannot use wildcards for parent collection IDs in this way. The logic inside
+// will handle the school-based separation.
 export const onTripCreate = onDocumentCreated(
     {
       region: "us-central1",
@@ -120,7 +121,7 @@ export const onTripCreate = onDocumentCreated(
         const routeName = await (async () => {
             if (!routeId) return "A trip";
             try {
-                const routeSnap = await db.collection('routes').doc(routeId).get();
+                const routeSnap = await db.doc(`schools/${schoolId}/routes/${routeId}`).get();
                 return routeSnap.exists() ? `The trip for ${routeSnap.data()?.name}` : 'A trip';
             } catch {
                 return 'A trip';
@@ -140,7 +141,7 @@ export const onTripCreate = onDocumentCreated(
 
         for (const parentUid of Array.from(allParentUids)) {
              // 1) Create inbox (bell) entry
-            const inboxRef = db.collection("users").doc(parentUid).collection("inbox").doc();
+            const inboxRef = db.doc(`users/${parentUid}/inbox/${tripId}-start`);
             batch.set(inboxRef, {
                 title,
                 body,
@@ -156,7 +157,7 @@ export const onTripCreate = onDocumentCreated(
 
             // 2) Optionally send push (best effort)
             try {
-                const userSnap = await db.collection("users").doc(parentUid).get();
+                const userSnap = await db.doc(`users/${parentUid}`).get();
                 const user = userSnap.exists ? (userSnap.data() as UserDoc) : undefined;
                 await pushToTokens(user?.fcmTokens, title, body, { kind: "tripStatus", tripId });
             } catch (e) {
@@ -169,6 +170,7 @@ export const onTripCreate = onDocumentCreated(
 );
 
 
+// Note: This trigger path must remain at the root level.
 export const onPassengerStatusChange = onDocumentWritten(
   {
     region: "us-central1",
@@ -185,9 +187,17 @@ export const onPassengerStatusChange = onDocumentWritten(
       return;
     }
 
-    const { studentId, schoolId } = after;
+    const { studentId } = after;
     let { status } = after;
     const tripId = event.params.tripId as string;
+    
+    // We need schoolId for almost everything, so let's fetch it from the trip.
+    const tripSnap = await db.doc(`trips/${tripId}`).get();
+    const schoolId = tripSnap.data()?.schoolId;
+    if (!schoolId) {
+        console.warn(`Could not find schoolId for trip ${tripId}. Aborting notification.`);
+        return;
+    }
 
     if (before?.status === 'dropped' && after.status !== 'dropped') {
         // This logic prevents re-notification spam if an admin reverts a dropped-off student.
@@ -198,10 +208,10 @@ export const onPassengerStatusChange = onDocumentWritten(
     // Only notify when status becomes boarded/dropped/absent, and only if it truly changed
     const meaningful = status === "boarded" || status === "dropped" || status === "absent";
     const changed = before?.status !== after.status;
-    if (!meaningful || !changed || !studentId || !schoolId) return;
+    if (!meaningful || !changed || !studentId) return;
 
     // Resolve student name
-    const studentName = await getStudentName(db, studentId);
+    const studentName = await getStudentName(db, schoolId, studentId);
     
     const titleMap: Record<string, string> = {
       boarded: "On Bus 🚌",
@@ -221,7 +231,7 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     for (const parentUid of parentUids) {
       // 1) Create inbox (bell) entry
-      const inboxRef = db.collection("users").doc(parentUid).collection("inbox").doc();
+      const inboxRef = db.doc(`users/${parentUid}/inbox/${tripId}-${studentId}`);
       batch.set(inboxRef, {
         title,
         body,
@@ -235,11 +245,11 @@ export const onPassengerStatusChange = onDocumentWritten(
           tripId,
           schoolId,
         },
-      });
+      }, { merge: true });
 
       // 2) Optionally send push (best effort)
       try {
-        const userSnap = await db.collection("users").doc(parentUid).get();
+        const userSnap = await db.doc(`users/${parentUid}`).get();
         const user = userSnap.exists ? (userSnap.data() as UserDoc) : undefined;
         await pushToTokens(user?.fcmTokens, title, body, { kind: "passengerStatus", studentId, tripId });
       } catch (e) {

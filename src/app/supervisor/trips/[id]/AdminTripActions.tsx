@@ -3,8 +3,9 @@
 
 import { useState, useEffect } from "react";
 import { doc, updateDoc, collection, query, where, getDocs, Timestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
+import { listUsersForSchool } from "@/lib/firestoreQueries";
+
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,15 +52,8 @@ export function AdminTripActions({ trip, onTripUpdate }: AdminTripActionsProps) 
 
     useEffect(() => {
         const fetchSupervisors = async () => {
-            const q = query(
-                collection(db, "users"),
-                where("schoolId", "==", trip.schoolId),
-                where("role", "==", "supervisor"),
-                where("active", "==", true)
-            );
-            const snapshot = await getDocs(q);
-            const supervisorList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Supervisor));
-            setSupervisors(supervisorList);
+            const supervisorList = await listUsersForSchool(trip.schoolId, 'supervisor');
+            setSupervisors(supervisorList as Supervisor[]);
         };
         fetchSupervisors();
     }, [trip.schoolId]);

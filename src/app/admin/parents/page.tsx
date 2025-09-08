@@ -3,7 +3,6 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  collection,
   query,
   where,
   getDocs,
@@ -18,6 +17,7 @@ import {
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
+import { scol, sdoc } from "@/lib/schoolPath";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -102,12 +102,12 @@ function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { p
         setIsSubmitting(true);
         const studentIdsToLink = Array.from(selectedStudentIds);
         try {
-            const parentLinkRef = doc(db, "parentStudents", parent.id);
+            const parentLinkRef = sdoc(parent.schoolId, "parentStudents", parent.id);
 
             // Ensure the document exists before updating with arrayUnion
             const docSnap = await getDoc(parentLinkRef);
             if (!docSnap.exists()) {
-                await setDoc(parentLinkRef, { schoolId: parent.schoolId, studentIds: [] });
+                await setDoc(parentLinkRef, { studentIds: [] });
             }
 
             // Now, safely update the array
@@ -206,8 +206,8 @@ function ParentsList({ schoolId }: { schoolId: string }) {
         setIsLoading(true);
 
         try {
-            const parentsQuery = query(collection(db, "users"), where("schoolId", "==", schoolId), where("role", "==", "parent"));
-            const studentsQuery = query(collection(db, "students"), where("schoolId", "==", schoolId));
+            const parentsQuery = query(db, "users"), where("schoolId", "==", schoolId), where("role", "==", "parent"));
+            const studentsQuery = scol(schoolId, "students");
             
             const [parentsSnapshot, studentsSnapshot] = await Promise.all([
                 getDocs(parentsQuery),
@@ -225,18 +225,11 @@ function ParentsList({ schoolId }: { schoolId: string }) {
                 const parentIds = parentsData.map(p => p.id);
                 const parentLinksMap = new Map<string, ParentStudentLink>();
                 
-                // Firestore `in` query is limited to 30 items, chunking is safer for large schools.
-                const CHUNK_SIZE = 30;
-                for (let i = 0; i < parentIds.length; i += CHUNK_SIZE) {
-                    const chunk = parentIds.slice(i, i + CHUNK_SIZE);
-                    if (chunk.length === 0) continue;
-
-                    const linksQuery = query(collection(db, "parentStudents"), where("__name__", "in", chunk));
-                    const linksSnapshot = await getDocs(linksQuery);
-                    linksSnapshot.forEach(doc => {
-                        parentLinksMap.set(doc.id, doc.data() as ParentStudentLink);
-                    });
-                }
+                const linksQuery = query(scol(schoolId, "parentStudents"), where("__name__", "in", parentIds.slice(0, 30)));
+                const linksSnapshot = await getDocs(linksQuery);
+                linksSnapshot.forEach(doc => {
+                    parentLinksMap.set(doc.id, doc.data() as ParentStudentLink);
+                });
                 setLinks(parentLinksMap);
             } else {
                 setLinks(new Map());
@@ -256,7 +249,7 @@ function ParentsList({ schoolId }: { schoolId: string }) {
 
   const handleUnlink = async (parentId: string, studentId: string) => {
       try {
-          const parentLinkRef = doc(db, "parentStudents", parentId);
+          const parentLinkRef = sdoc(schoolId, "parentStudents", parentId);
           await updateDoc(parentLinkRef, {
               studentIds: arrayRemove(studentId)
           });
@@ -351,6 +344,7 @@ function ParentsList({ schoolId }: { schoolId: string }) {
 
 export default function ParentsPage() {
     const { profile, loading: profileLoading, error: profileError } = useProfile();
+    const schoolId = profile?.schoolId;
 
     if (profileLoading) {
         return (
@@ -370,13 +364,13 @@ export default function ParentsPage() {
         return <div className="text-red-500">Error loading profile: {profileError.message}</div>
     }
 
-    if (!profile) {
+    if (!profile || !schoolId) {
         return <div>No user profile found. Access denied.</div>
     }
 
     return (
         <div className="grid gap-8">
-            <ParentsList schoolId={profile.schoolId} />
+            <ParentsList schoolId={schoolId} />
         </div>
     );
 }

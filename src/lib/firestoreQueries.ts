@@ -14,6 +14,8 @@ import {
   type DocumentData,
   type QueryConstraint,
 } from "firebase/firestore";
+import { scol, sdoc } from "./schoolPath";
+
 
 /* ----------------------------- time helpers ----------------------------- */
 
@@ -31,26 +33,14 @@ export const endOfToday = () => {
 
 /* ------------------------------ users lookup ----------------------------- */
 
-export async function getUsersByIds(
-  uids: string[]
-): Promise<Record<string, DocumentData>> {
-  const byId: Record<string, any> = {};
-  if (!uids || uids.length === 0) return byId;
-
-  // Firestore "in" is limited to 30 ids — chunk it.
-  const CHUNK_SIZE = 30;
-  for (let i = 0; i < uids.length; i += CHUNK_SIZE) {
-    const uniqueIds = Array.from(new Set(uids.slice(i, i + CHUNK_SIZE)));
-    if (uniqueIds.length === 0) continue;
-
-    const qUsers = query(
-      collection(db, "users"),
-      where("__name__", "in", uniqueIds)
-    );
-    const snap = await getDocs(qUsers);
-    snap.forEach((d) => (byId[d.id] = d.data()));
-  }
-  return byId;
+export async function getUsersByIds(uids: string[]): Promise<Record<string, DocumentData>> {
+  const out: Record<string, any> = {};
+  const ids = [...new Set(uids)].filter(Boolean);
+  if (ids.length === 0) return {};
+  
+  const snap = await getDocs(query(collection(db, "users"), where("__name__", "in", ids)));
+  snap.forEach(doc => out[doc.id] = doc.data());
+  return out;
 }
 
 /* --------------------------- simple list helpers ------------------------- */
@@ -67,22 +57,19 @@ export async function listUsersForSchool(
 }
 
 export async function listBusesForSchool(schoolId: string) {
-  const qRef = query(collection(db, "buses"), where("schoolId", "==", schoolId));
+  const qRef = query(scol(schoolId, "buses"));
   const snap = await getDocs(qRef);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 export async function listRoutesForSchool(schoolId: string) {
-  const qRef = query(collection(db, "routes"), where("schoolId", "==", schoolId));
+  const qRef = query(scol(schoolId, "routes"));
   const snap = await getDocs(qRef);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 export async function listStudentsForSchool(schoolId: string) {
-  const qRef = query(
-    collection(db, "students"),
-    where("schoolId", "==", schoolId)
-  );
+  const qRef = query(scol(schoolId, "students"));
   const snap = await getDocs(qRef);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
@@ -116,8 +103,7 @@ export async function getAssignedBusForDriver(
   driverUid: string
 ) {
   const qRef = query(
-    collection(db, "buses"),
-    where("schoolId", "==", schoolId),
+    scol(schoolId, "buses"),
     where("driverId", "==", driverUid),
     limit(1)
   );
@@ -126,9 +112,9 @@ export async function getAssignedBusForDriver(
   return { id: snap.docs[0].id, ...snap.docs[0].data() };
 }
 
-export async function getRouteById(routeId?: string | null) {
+export async function getRouteById(schoolId: string, routeId?: string | null) {
   if (!routeId) return null;
-  const s = await getDoc(doc(db, "routes", routeId));
+  const s = await getDoc(sdoc(schoolId, "routes", routeId));
   return s.exists() ? { id: s.id, ...s.data() } : null;
 }
 
@@ -184,11 +170,11 @@ export async function getTripDetails(tripId: string, schoolId: string) {
 
   const tripData = { id: tripSnap.id, ...tripSnap.data() };
 
-  const busSnap = await getDoc(doc(db, "buses", tripData.busId));
+  const busSnap = await getDoc(sdoc(schoolId, "buses", tripData.busId));
   const bus = busSnap.exists() ? busSnap.data() : null;
 
   const routeSnap = tripData.routeId
-    ? await getDoc(doc(db, "routes", tripData.routeId))
+    ? await getDoc(sdoc(schoolId, "routes", tripData.routeId))
     : null;
   const route = routeSnap && routeSnap.exists() ? routeSnap.data() : null;
 

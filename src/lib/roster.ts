@@ -1,3 +1,4 @@
+
 // src/lib/roster.ts
 import {
   collection,
@@ -14,6 +15,7 @@ import {
   arrayUnion,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { scol } from "./schoolPath";
 
 interface SeedArgs {
   tripId: string;
@@ -34,13 +36,13 @@ export async function seedPassengersForTrip(opts: {
 }): Promise<{ created: number }> {
   const { tripId, schoolId, routeId, busId } = opts;
 
-  const studentsRef = collection(db, 'students');
+  const studentsRef = scol(schoolId, 'students');
   const queries = [];
   if (routeId) {
-    queries.push(query(studentsRef, where('schoolId', '==', schoolId), where('assignedRouteId', '==', routeId)));
+    queries.push(query(studentsRef, where('assignedRouteId', '==', routeId)));
   }
   if (busId) {
-    queries.push(query(studentsRef, where('schoolId', '==', schoolId), where('assignedBusId', '==', busId)));
+    queries.push(query(studentsRef, where('assignedBusId', '==', busId)));
   }
 
   const snaps = await Promise.all(queries.map(q => getDocs(q)));
@@ -64,7 +66,6 @@ export async function seedPassengersForTrip(opts: {
     if (!exists.exists()) {
        // Set with merge so it’s safe to re-run
         batch.set(passengerRef, {
-            schoolId,                 // <-- REQUIRED by rules
             studentId: s.id,
             studentName: data?.name ?? '',
             status: 'pending',

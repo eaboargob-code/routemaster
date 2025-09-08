@@ -6,7 +6,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import {
-  collection,
   addDoc,
   updateDoc,
   deleteDoc,
@@ -14,10 +13,9 @@ import {
   deleteField,
   type DocumentData,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { listBusesForSchool, listRoutesForSchool, listUsersForSchool } from "@/lib/firestoreQueries";
-
+import { scol, sdoc } from "@/lib/schoolPath";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -134,7 +132,6 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
         try {
             const busData: any = {
                 ...data,
-                schoolId,
             };
             
             if (data.assignedRouteId === NONE_SENTINEL || !data.assignedRouteId) {
@@ -144,7 +141,7 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
             }
 
             if (isEditMode) {
-                const busRef = doc(db, "buses", bus.id);
+                const busRef = sdoc(schoolId, "buses", bus.id);
                 await updateDoc(busRef, busData);
                 toast({
                     title: "Success!",
@@ -152,7 +149,7 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
                     className: 'bg-accent text-accent-foreground border-0',
                 });
             } else {
-                await addDoc(collection(db, "buses"), busData);
+                await addDoc(scol(schoolId, "buses"), busData);
                 toast({
                     title: "Success!",
                     description: "New bus has been added.",
@@ -311,7 +308,7 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
 
   const handleDelete = async (busId: string) => {
       try {
-          await deleteDoc(doc(db, "buses", busId));
+          await deleteDoc(sdoc(schoolId, "buses", busId));
           toast({
               title: "Bus Deleted",
               description: `Bus has been removed.`,
@@ -328,7 +325,7 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
   };
   
   const handleAssignUser = async (busId: string, field: 'driverId' | 'supervisorId', newUserId: string | null) => {
-    const busRef = doc(db, "buses", busId);
+    const busRef = sdoc(schoolId, "buses", busId);
     try {
         const payload: { [key: string]: any } = {};
         if (newUserId) {

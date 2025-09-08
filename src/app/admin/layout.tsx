@@ -7,7 +7,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 
-import { AdminHeader } from "./components/header";
+import { AdminHeader } from "./dashboard/header";
 import { DebugBanner } from "./components/DebugBanner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ShieldAlert } from "lucide-react";

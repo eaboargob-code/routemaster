@@ -22,6 +22,8 @@ import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
 import { registerFcmToken } from "@/lib/notifications";
 import { seedPassengersForTrip } from "@/lib/roster";
+import { getAssignedBusForDriver, getRouteById } from "@/lib/firestoreQueries";
+import { sdoc } from "@/lib/schoolPath";
 
 import {
   Card,
@@ -148,19 +150,12 @@ export default function DriverPage() {
 
     try {
       // 1. Find the bus assigned to this driver
-      const busQ = query(
-        collection(db, "buses"),
-        where("schoolId", "==", profile.schoolId),
-        where("driverId", "==", user.uid),
-        limit(1)
-      );
-      const busSnap = await getDocs(busQ);
-      if (busSnap.empty) {
+      const foundBus = await getAssignedBusForDriver(profile.schoolId, user.uid);
+      if (!foundBus) {
         setUiState({ status: "empty" });
         return;
       }
-      const foundBus = { id: busSnap.docs[0].id, ...busSnap.docs[0].data() } as BusDoc;
-      setBus(foundBus);
+      setBus(foundBus as BusDoc);
 
       // 2. Find any active trip for this driver
       const tripQ = query(
@@ -177,12 +172,12 @@ export default function DriverPage() {
 
       // 3. Fetch related route and supervisor info (can be done in parallel)
       const [routeData, supervisorData] = await Promise.all([
-        foundBus.assignedRouteId ? getDoc(doc(db, "routes", foundBus.assignedRouteId)) : Promise.resolve(null),
+        foundBus.assignedRouteId ? getRouteById(profile.schoolId, foundBus.assignedRouteId) : Promise.resolve(null),
         foundBus.supervisorId ? getDoc(doc(db, "users", foundBus.supervisorId)) : Promise.resolve(null),
       ]);
 
-      if (routeData?.exists()) {
-        setRoute({ id: routeData.id, ...routeData.data() } as RouteInfo);
+      if (routeData) {
+        setRoute(routeData as RouteInfo);
       } else {
         setRoute(null);
       }
@@ -240,7 +235,7 @@ export default function DriverPage() {
         driverId: user.uid,
         busId: bus.id,
         routeId: route?.id || "",
-        schoolId: profile.schoolId, // <-- REQUIRED
+        schoolId: profile.schoolId,
         startedAt: Timestamp.now(),
         status: "active",
         supervisorId: bus.supervisorId || null,

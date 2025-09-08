@@ -6,18 +6,15 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import {
-  collection,
   addDoc,
   updateDoc,
   deleteDoc,
   doc,
-  query,
-  where,
-  getDocs,
   deleteField,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
+import { listStudentsForSchool, listRoutesForSchool, listBusesForSchool } from "@/lib/firestoreQueries";
+import { scol, sdoc } from "@/lib/schoolPath";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -123,7 +120,6 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
         try {
             const studentData: any = {
                 name: data.name,
-                schoolId,
             };
 
             const selectedRoute = routes.find(r => r.id === data.assignedRouteId);
@@ -146,7 +142,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
             }
 
             if (isEditMode) {
-                const studentRef = doc(db, "students", student.id);
+                const studentRef = sdoc(schoolId, "students", student.id);
                 await updateDoc(studentRef, studentData);
                 toast({
                     title: "Success!",
@@ -154,7 +150,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                     className: 'bg-accent text-accent-foreground border-0',
                 });
             } else {
-                await addDoc(collection(db, "students"), studentData);
+                await addDoc(scol(schoolId, "students"), studentData);
                 toast({
                     title: "Success!",
                     description: "New student has been added.",
@@ -299,19 +295,8 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
         }
         setIsLoading(true);
         try {
-            const q = query(collection(db, "students"), where("schoolId", "==", schoolId));
-            const querySnapshot = await getDocs(q);
-            const studentsData = querySnapshot.docs.map(doc => {
-                const d = doc.data();
-                return {
-                    id: doc.id,
-                    name: d.name,
-                    assignedRouteId: d.assignedRouteId ?? null,
-                    assignedBusId: d.assignedBusId ?? null,
-                    schoolId: d.schoolId,
-                } as Student;
-            });
-            setStudents(studentsData);
+            const studentsData = await listStudentsForSchool(schoolId);
+            setStudents(studentsData as Student[]);
         } catch (error) {
             console.error("Error fetching students:", error);
             toast({ variant: "destructive", title: "Error fetching students", description: (error as Error).message });
@@ -324,7 +309,7 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
 
   const handleDelete = async (studentId: string, studentName: string) => {
       try {
-          await deleteDoc(doc(db, "students", studentId));
+          await deleteDoc(sdoc(schoolId, "students", studentId));
           toast({
               title: "Student Deleted",
               description: `Student "${studentName}" has been removed.`,
@@ -476,28 +461,22 @@ export default function StudentsPage() {
     useEffect(() => {
         const fetchData = async () => {
             if (!schoolId) return;
-
-            // Fetch routes
             try {
-                const routesQuery = query(collection(db, "routes"), where("schoolId", "==", schoolId));
-                const routesSnapshot = await getDocs(routesQuery);
-                const routesData = routesSnapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name } as RouteInfo));
-                setRoutes(routesData);
+                const routesData = await listRoutesForSchool(schoolId);
+                setRoutes(routesData as RouteInfo[]);
             } catch (error) {
               console.error("Error fetching routes:", error);
             }
-            
-            // Fetch buses
             try {
-                const busesQuery = query(collection(db, "buses"), where("schoolId", "==", schoolId));
-                const busesSnapshot = await getDocs(busesQuery);
-                const busesData = busesSnapshot.docs.map(doc => ({ id: doc.id, busCode: doc.data().busCode } as BusInfo));
-                setBuses(busesData);
+                const busesData = await listBusesForSchool(schoolId);
+                setBuses(busesData as BusInfo[]);
             } catch (error) {
               console.error("Error fetching buses:", error);
             }
         };
-        fetchData();
+        if (schoolId) {
+            fetchData();
+        }
       }, [schoolId, key]);
 
     if (profileLoading) {
@@ -528,5 +507,3 @@ export default function StudentsPage() {
         </div>
     );
 }
-
-    

@@ -5,7 +5,6 @@ import { useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/firebase";
 import type { UserProfile } from "@/lib/useProfile";
 import {
-  collection,
   query,
   where,
   getDocs,
@@ -16,6 +15,7 @@ import {
   DocumentData,
   doc,
 } from "firebase/firestore";
+import { scol } from "@/lib/schoolPath";
 
 import {
   Card,
@@ -56,7 +56,6 @@ type Student = {
 type TripPassenger = {
   status: "boarded" | "absent" | "dropped" | "pending";
   studentId: string;
-  schoolId: string;
   studentName?: string;
   boardedAt?: Timestamp | null;
   droppedAt?: Timestamp | null;
@@ -90,7 +89,7 @@ function StudentCard({ student }: { student: Student }) {
         const tripsQ = query(
           collection(db, 'trips'),
           where('schoolId', '==', student.schoolId),
-          where('status', '==', 'active'), // <-- This is the important change
+          where('status', '==', 'active'), 
           where('passengers', 'array-contains', student.id),
           orderBy('startedAt', 'desc'),
           limit(1)

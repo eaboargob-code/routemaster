@@ -100,7 +100,7 @@ function TripDetailsClientPage({ tripId }: TripDetailsClientPageProps) {
     }
 
     if (!trip) {
-        return <Alert><AlertTitle>Not Found</AlertTitle><AlertDescription>The requested trip could not be found.</AlertDescription></Alert>
+        return <Alert><AlertTitle>Not Found</AlertTitle><AlertDescription>The requested trip could not be found.</AlertDescription></Alert>;
     }
 
     const backUrl = profile?.role === 'admin' ? '/admin/trips' : '/supervisor';
@@ -137,6 +137,7 @@ function TripDetailsClientPage({ tripId }: TripDetailsClientPageProps) {
                 <CardContent>
                     <Roster 
                         tripId={trip.id} 
+                        schoolId={trip.schoolId}
                         canEdit={canEdit && trip.status === 'active'}
                     />
                 </CardContent>

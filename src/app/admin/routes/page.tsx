@@ -7,17 +7,17 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import {
   addDoc,
-  collection,
   updateDoc,
   deleteDoc,
   doc,
   writeBatch,
   type DocumentData,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
 import { listRoutesForSchool } from "@/lib/firestoreQueries";
+import { scol, sdoc } from "@/lib/schoolPath";
+
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -105,7 +105,7 @@ function AddRouteForm({ schoolId, onComplete }: { schoolId: string, onComplete: 
         return;
     }
     try {
-      await addDoc(collection(db, "routes"), { ...values, schoolId });
+      await addDoc(scol(schoolId, "routes"), { ...values });
       toast({
         title: "Route Added",
         description: `Route "${values.name}" has been successfully created.`,
@@ -243,15 +243,15 @@ export default function RoutesPage() {
   };
 
   const handleSaveName = async (id: string) => {
-    if (!editingName.trim()) {
+    if (!schoolId || !editingName.trim()) {
         toast({ variant: "destructive", title: "Route name cannot be empty" });
         return;
     }
     try {
-      const routeRef = doc(db, "routes", id);
+      const routeRef = sdoc(schoolId, "routes", id);
       await updateDoc(routeRef, { name: editingName.trim() });
       toast({ title: "Route updated successfully" });
-      if (schoolId) await loadRoutes(schoolId);
+      await loadRoutes(schoolId);
       handleCancelEdit();
     } catch (e: any) {
       console.error("update name error:", e);
@@ -260,11 +260,12 @@ export default function RoutesPage() {
   };
 
   async function toggleActive(id: string, next: boolean) {
+    if (!schoolId) return;
     try {
-      const routeRef = doc(db, "routes", id);
+      const routeRef = sdoc(schoolId, "routes", id);
       await updateDoc(routeRef, { active: next });
       toast({ title: `Route ${next ? 'activated' : 'deactivated'}` });
-      if (schoolId) await loadRoutes(schoolId);
+      await loadRoutes(schoolId);
     } catch (e: any) {
       console.error("toggleActive error:", e);
       toast({ variant: "destructive", title: "Failed to update status", description: e.message });
@@ -272,10 +273,11 @@ export default function RoutesPage() {
   }
 
   async function removeRoute(id: string) {
+    if (!schoolId) return;
     try {
-      await deleteDoc(doc(db, "routes", id));
+      await deleteDoc(sdoc(schoolId, "routes", id));
       toast({ title: "Route deleted successfully" });
-      if (schoolId) await loadRoutes(schoolId);
+      await loadRoutes(schoolId);
     } catch (e: any) {
       console.error("removeRoute error:", e);
       toast({ variant: "destructive", title: "Failed to delete route", description: e.message });
@@ -305,7 +307,7 @@ export default function RoutesPage() {
       return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{profileError.message}</AlertDescription></Alert>
   }
 
-  if (!profile) {
+  if (!profile || !schoolId) {
       return <Alert><AlertTitle>Access Denied</AlertTitle><AlertDescription>No user profile found.</AlertDescription></Alert>
   }
 

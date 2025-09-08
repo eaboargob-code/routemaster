@@ -21,6 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs, serverTimestamp } from "firebase/firestore";
+import { scol, sdoc } from "@/lib/schoolPath";
 import ParentDashboardPage from "./page";
 import { formatRelative } from "@/lib/utils";
 
@@ -205,12 +206,12 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const fetchChildrenData = async () => {
-      if (!user || !profile) return;
+      if (!user || !profile?.schoolId) return;
       setChildrenLoading(true);
       setChildrenError(null);
 
       try {
-        const parentLinkRef = doc(db, "parentStudents", user.uid);
+        const parentLinkRef = sdoc(profile.schoolId, "parentStudents", user.uid);
         const linkDocSnap = await getDoc(parentLinkRef);
         const studentIds: string[] = (linkDocSnap.exists() && linkDocSnap.data().studentIds) || [];
 
@@ -220,23 +221,15 @@ export function ParentGuard({ children }: { children: ReactNode }) {
           return;
         }
 
-        const CHUNK_SIZE = 30;
-        const studentData: Student[] = [];
-        for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
-            const chunk = studentIds.slice(i, i + CHUNK_SIZE);
-            if (chunk.length === 0) continue;
-            
-            const studentsSnapshot = await getDocs(query(
-                collection(db, "students"), 
-                where("__name__", "in", chunk))
-            );
+        const studentsSnapshot = await getDocs(query(
+            scol(profile.schoolId, "students"), 
+            where("__name__", "in", studentIds.slice(0, 30)))
+        );
 
-            const chunkData = studentsSnapshot.docs
-              .map((d) => ({ id: d.id, ...(d.data() as any) }))
-              .filter((s) => s.schoolId === profile.schoolId) as Student[];
-            studentData.push(...chunkData);
-        }
+        const studentData = studentsSnapshot.docs
+            .map((d) => ({ id: d.id, ...d.data(), schoolId: profile.schoolId } as Student))
         setChildrenList(studentData);
+
       } catch (e: any) {
         console.error("Failed to fetch parent data:", e);
         setChildrenError(e.message || "An unknown error occurred.");
