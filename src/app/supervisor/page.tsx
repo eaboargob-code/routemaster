@@ -1,3 +1,4 @@
+
 // src/app/supervisor/page.tsx
 "use client";
 
@@ -10,7 +11,7 @@ import { useProfile } from "@/lib/useProfile";
 import { registerFcmToken } from "@/lib/notifications";
 import {
   getSupervisorTrips,
-  getUsersByIds,
+  getSchoolUsersByIds,
   startOfToday,
 } from "@/lib/firestoreQueries";
 import { scol } from "@/lib/schoolPath";
@@ -102,7 +103,7 @@ export default function SupervisorPage() {
       if (todaysTrips.length > 0) {
         const driverIds = Array.from(new Set(todaysTrips.map((t: any) => t.driverId).filter(Boolean)));
         if (driverIds.length > 0) {
-          const users = await getUsersByIds(profile.schoolId, driverIds);
+          const users = await getSchoolUsersByIds(profile.schoolId, driverIds);
           setUserMap(users as Record<string, UserDoc>);
         } else {
           setUserMap({});

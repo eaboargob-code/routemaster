@@ -21,7 +21,7 @@ import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
 import { registerFcmToken } from "@/lib/notifications";
 import { seedPassengersForTrip } from "@/lib/roster";
-import { getRouteById, startOfToday } from "@/lib/firestoreQueries";
+import { getRouteById, startOfToday, getSchoolUsersByIds } from "@/lib/firestoreQueries";
 import { sdoc, scol } from "@/lib/schoolPath";
 
 import {
@@ -188,19 +188,20 @@ export default function DriverPage() {
       setActiveTrip(foundTrip);
 
       // 3) Related route + supervisor (parallel). Both must be school-scoped.
-      const [routeData, supSnap] = await Promise.all([
+      const [routeData, usersMap] = await Promise.all([
         foundBus.assignedRouteId
           ? getRouteById(profile.schoolId, foundBus.assignedRouteId)
           : Promise.resolve(null),
         foundBus.supervisorId
-          ? getDoc(sdoc(profile.schoolId, "users", foundBus.supervisorId))
-          : Promise.resolve(null),
+          ? getSchoolUsersByIds(profile.schoolId, [foundBus.supervisorId])
+          : Promise.resolve({}),
       ]);
+      const supData = foundBus.supervisorId ? usersMap[foundBus.supervisorId] : null;
 
       setRoute(routeData ? (routeData as RouteInfo) : null);
       setSupervisor(
-        supSnap && supSnap.exists()
-          ? ({ id: supSnap.id, ...supSnap.data() } as Supervisor)
+        supData
+          ? ({ id: foundBus.supervisorId, ...supData } as Supervisor)
           : null
       );
 
