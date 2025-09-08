@@ -4,8 +4,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { auth } from "@/lib/firebase";
-import { useProfile } from "@/lib/useProfile";
+import { auth, db } from "@/lib/firebase";
+import { useProfile, fetchProfile } from "@/lib/useProfile";
+import { doc, getDoc } from "firebase/firestore";
 
 import { AdminHeader } from "./dashboard/header";
 import { DebugBanner } from "./components/DebugBanner";
@@ -65,13 +66,32 @@ function AccessDenied() {
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, profile, loading } = useProfile();
+  const { user, profile, setProfile, loading, error, setError } = useProfile();
 
   useEffect(() => {
     if (!loading && !user) {
         router.replace("/login");
     }
   }, [user, loading, router]);
+  
+  // New logic to fetch profile after user is confirmed.
+  useEffect(() => {
+    if (user && !profile && !error) {
+        const loadProfile = async () => {
+            try {
+                const fetchedProfile = await fetchProfile(user.uid);
+                if (fetchedProfile) {
+                    setProfile(fetchedProfile);
+                } else {
+                    setError(new Error("Profile not found in database."));
+                }
+            } catch (err: any) {
+                setError(new Error(`Failed to fetch profile: ${err.message}`));
+            }
+        };
+        loadProfile();
+    }
+  }, [user, profile, error, setProfile, setError]);
   
   if (loading) {
     return <LoadingScreen />;
@@ -81,9 +101,18 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     return null; // Redirecting
   }
   
+  if (error) {
+      return (
+        <div className="flex h-screen items-center justify-center">
+            <Alert variant="destructive" className="max-w-md">
+                <AlertTitle>Authentication Error</AlertTitle>
+                <AlertDescription>{error.message}</AlertDescription>
+            </Alert>
+        </div>
+      )
+  }
+
   if (!profile) {
-      // Profile is still loading or doesn't exist.
-      // useProfile handles the error state for this.
       return <LoadingScreen />;
   }
   

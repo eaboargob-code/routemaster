@@ -1,11 +1,12 @@
 
+
 "use client";
 
 import { useEffect, useState, type ReactNode, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
-import { useProfile } from "@/lib/useProfile";
+import { useProfile, fetchProfile } from "@/lib/useProfile";
 import { Button } from "@/components/ui/button";
 import { LogOut, ShieldAlert, HeartHandshake, Bell } from "lucide-react";
 import { DebugBanner } from "@/app/admin/components/DebugBanner";
@@ -188,7 +189,7 @@ function AccessDeniedScreen({ message, details }: { message: string, details?: s
 
 export function ParentGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, profile, loading: profileLoading, error: profileError } = useProfile();
+  const { user, profile, setProfile, loading: profileLoading, error, setError } = useProfile();
   const { toast } = useToast();
   const { items: notifications, unreadCount, handleMarkAsRead } = useInbox();
   
@@ -198,11 +199,28 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   const [childrenError, setChildrenError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user?.uid) return;
-    (async () => {
-      await registerFcmToken(user.uid);
-    })();
+    if (user?.uid) {
+      (async () => {
+        await registerFcmToken(user.uid);
+      })();
+    }
   }, [user?.uid]);
+  
+  useEffect(() => {
+    if (!profileLoading && !user) {
+        router.replace("/parent/login");
+    } else if (user && !profile && !error) {
+        const loadProfile = async () => {
+            const fetchedProfile = await fetchProfile(user.uid);
+            if (fetchedProfile) {
+                setProfile(fetchedProfile);
+            } else {
+                setError(new Error("Profile not found."));
+            }
+        };
+        loadProfile();
+    }
+  }, [user, profile, profileLoading, router, error, setProfile, setError]);
 
   useEffect(() => {
     const fetchChildrenData = async () => {
@@ -248,10 +266,6 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   // --- End data fetching ---
 
   useEffect(() => {
-    if (!profileLoading && !user) {
-        router.replace("/parent/login");
-    }
-    
     if (!user?.uid || !profile?.schoolId) return;
 
     const unsubscribe = onForegroundNotification((notification) => {
@@ -271,7 +285,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         unsubscribe();
       }
     }
-  }, [user, profile, profileLoading, router, toast]);
+  }, [user, profile, toast]);
 
   if (profileLoading || childrenLoading) {
     return <LoadingScreen />;
@@ -281,8 +295,8 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     return null;
   }
   
-  if (profileError) {
-    return <AccessDeniedScreen message="Profile Error" details={profileError.message} />;
+  if (error) {
+    return <AccessDeniedScreen message="Profile Error" details={error.message} />;
   }
   
   if (!profile) {
@@ -320,5 +334,3 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 export default function ProtectedParentLayout({ children }: { children: ReactNode }) {
     return <ParentGuard>{children}</ParentGuard>
 }
-
-    
