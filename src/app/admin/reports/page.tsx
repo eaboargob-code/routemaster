@@ -175,8 +175,8 @@ export default function ReportsPage() {
         const headers = ["TripID", "Driver", "Supervisor", "Bus", "Route", "Status", "Started", "Ended", "Boarded", "Absent", "Dropped Off"];
         const data = filteredTrips.map(trip => [
             trip.id,
-            users[trip.driverId]?.displayName || trip.driverId,
-            trip.supervisorId ? (users[trip.supervisorId]?.displayName || trip.supervisorId) : "N/A",
+            users[trip.driverId]?.displayName || users[trip.driverId]?.email || trip.driverId,
+            trip.supervisorId ? (users[trip.supervisorId]?.displayName || users[trip.supervisorId]?.email || trip.supervisorId) : "N/A",
             buses.find(b => b.id === trip.busId)?.busCode || "N/A",
             routes.find(r => r.id === trip.routeId)?.name || "N/A",
             trip.status,
@@ -303,15 +303,15 @@ export default function ReportsPage() {
                 ))
               ) : filteredTrips.length > 0 ? (
                 filteredTrips.map(trip => {
-                  const driver = users[trip.driverId];
-                  const supervisor = trip.supervisorId ? users[trip.supervisorId] : null;
+                  const driverLabel = users[trip.driverId]?.displayName || users[trip.driverId]?.email || trip.driverId;
+                  const supervisorLabel = trip.supervisorId ? (users[trip.supervisorId]?.displayName || users[trip.supervisorId]?.email || trip.supervisorId) : "—";
                   const bus = buses.find(b => b.id === trip.busId);
                   const route = routes.find(r => r.id === trip.routeId);
                   return (
                     <TableRow key={trip.id}>
                         <TableCell>
-                            <div className="font-medium">{driver?.displayName || driver?.email || "Unknown"}</div>
-                            <div className="text-sm text-muted-foreground">{supervisor?.displayName || supervisor?.email || "No supervisor"}</div>
+                            <div className="font-medium">{driverLabel}</div>
+                            <div className="text-sm text-muted-foreground">{supervisorLabel}</div>
                         </TableCell>
                         <TableCell>
                             <div className="font-medium">{route?.name || <span className="text-muted-foreground">N/A</span>}</div>
@@ -355,5 +355,6 @@ export default function ReportsPage() {
     </Card>
   );
 }
+
 
 
