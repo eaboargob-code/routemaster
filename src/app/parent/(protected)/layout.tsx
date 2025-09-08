@@ -320,3 +320,5 @@ export function ParentGuard({ children }: { children: ReactNode }) {
 export default function ProtectedParentLayout({ children }: { children: ReactNode }) {
     return <ParentGuard>{children}</ParentGuard>
 }
+
+    
