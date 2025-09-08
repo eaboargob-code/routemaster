@@ -13,9 +13,9 @@ import { db } from "@/lib/firebase";
 import { scol } from "@/lib/schoolPath";
 import type { DocumentData } from "firebase/firestore";
 import { Bus, Route, Users, GraduationCap, Activity } from "lucide-react";
-import { MetricCard, MetricCardLoading } from "./MetricCard";
-import { TripsByRouteChart, TripsByRouteChartLoading } from "./TripsByRouteChart";
-import { DailyTripsChart, DailyTripsChartLoading } from "./DailyTripsChart";
+import { MetricCard, MetricCardLoading } from "../../components/MetricCard";
+import { TripsByRouteChart, TripsByRouteChartLoading } from "../../components/TripsByRouteChart";
+import { DailyTripsChart, DailyTripsChartLoading } from "../../components/DailyTripsChart";
 
 interface DashboardProps {
   schoolId: string;
@@ -97,5 +97,3 @@ export function Dashboard({ schoolId }: DashboardProps) {
     </div>
   );
 }
-
-    
