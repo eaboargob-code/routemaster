@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -180,7 +181,10 @@ export default function DriverPage() {
       const todaysTrips = tripsSnap.docs.map(
         (d) => ({ id: d.id, ...d.data() } as Trip)
       );
-      const foundTrip = todaysTrips.find((t) => t.status === "active") || null;
+      const foundTrip =
+        todaysTrips.find(t => String(t.status || "").toLowerCase() === "active")
+        ?? todaysTrips.find(t => !t.endedAt)
+        ?? null;
       setActiveTrip(foundTrip);
 
       // 3) Related route + supervisor (parallel). Both must be school-scoped.
