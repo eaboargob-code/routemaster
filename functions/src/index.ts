@@ -90,6 +90,47 @@ async function pushToTokens(
 
 /* ---------- Triggers ---------- */
 
+export const updateTripCounts = onDocumentWritten(
+    {
+        region: "us-central1",
+        document: "schools/{schoolId}/trips/{tripId}/passengers/{studentId}",
+    },
+    async (event) => {
+        const { schoolId, tripId } = event.params;
+        const db = admin.firestore();
+
+        try {
+            // Get all passengers for the trip
+            const passengersSnap = await db.collection(`schools/${schoolId}/trips/${tripId}/passengers`).get();
+            
+            // Calculate counts
+            const counts = {
+                pending: 0,
+                boarded: 0,
+                dropped: 0,
+                absent: 0,
+            };
+
+            passengersSnap.forEach(doc => {
+                const passenger = doc.data() as Passenger;
+                if (passenger.status) {
+                    counts[passenger.status]++;
+                } else {
+                    counts.pending++;
+                }
+            });
+
+            // Update the parent trip document
+            const tripRef = db.doc(`schools/${schoolId}/trips/${tripId}`);
+            await tripRef.update({ counts });
+
+        } catch (error) {
+            console.error(`[COUNT_UPDATE_FAILED] Trip: ${tripId}`, error);
+        }
+    }
+);
+
+
 export const onTripCreate = onDocumentCreated(
     {
       region: "us-central1",
@@ -249,5 +290,3 @@ export const onPassengerStatusChange = onDocumentWritten(
     await batch.commit();
   }
 );
-
-    
