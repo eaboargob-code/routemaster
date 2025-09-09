@@ -103,7 +103,6 @@ export const updateTripCounts = onDocumentWritten(
             // Get all passengers for the trip
             const passengersSnap = await db.collection(`schools/${schoolId}/trips/${tripId}/passengers`).get();
             
-            // Explicitly initialize all possible statuses to 0
             const counts: Record<"pending" | "boarded" | "dropped" | "absent", number> = {
                 pending: 0,
                 boarded: 0,
@@ -122,7 +121,7 @@ export const updateTripCounts = onDocumentWritten(
 
             // Update the parent trip document
             const tripRef = db.doc(`schools/${schoolId}/trips/${tripId}`);
-            await tripRef.update({ counts });
+            await tripRef.update({ counts, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
 
         } catch (error) {
             console.error(`[COUNT_UPDATE_FAILED] Trip: ${tripId}`, error);

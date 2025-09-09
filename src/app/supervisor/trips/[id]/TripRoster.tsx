@@ -8,45 +8,14 @@ import {
   orderBy,
   onSnapshot,
   type DocumentData,
-  getDocs,
-  updateDoc,
-  serverTimestamp,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { scol, sdoc } from "@/lib/schoolPath";
+import { scol } from "@/lib/schoolPath";
 import { boardStudent, dropStudent, markAbsent } from "@/lib/roster";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Bus, UserX, ArrowDownCircle, Clock } from "lucide-react";
-
-
-async function recalcTripCounts(schoolId: string, tripId: string) {
-    const passengersCol = scol(schoolId, `trips/${tripId}/passengers`);
-    const snapshot = await getDocs(passengersCol);
-    
-    const counts: Record<"pending" | "boarded" | "dropped" | "absent", number> = {
-        pending: 0,
-        boarded: 0,
-        dropped: 0,
-        absent: 0,
-    };
-
-    snapshot.forEach(doc => {
-        const passenger = doc.data();
-        const status = passenger.status && ['pending', 'boarded', 'dropped', 'absent'].includes(passenger.status)
-            ? passenger.status
-            : 'pending';
-        counts[status]++;
-    });
-
-    const tripRef = sdoc(schoolId, "trips", tripId);
-    await updateDoc(tripRef, { 
-        counts,
-        updatedAt: serverTimestamp() 
-    });
-}
-
 
 type PassengerRow = {
   id: string;
@@ -117,7 +86,6 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await boardStudent(schoolId, tripId, studentId);
-        await recalcTripCounts(schoolId, tripId);
         toast({
           title: "Boarded",
           description: "Student marked as boarded.",
@@ -142,7 +110,6 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await dropStudent(schoolId, tripId, studentId);
-        await recalcTripCounts(schoolId, tripId);
         toast({
           title: "Dropped",
           description: "Student marked as dropped.",
@@ -167,7 +134,6 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await markAbsent(schoolId, tripId, studentId);
-        await recalcTripCounts(schoolId, tripId);
         toast({ title: "Absent", description: "Student marked as absent." });
       } catch (e: any) {
         console.error(e);
