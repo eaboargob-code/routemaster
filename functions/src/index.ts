@@ -1,6 +1,7 @@
+
 // functions/src/index.ts
-import { onDocumentWritten } from 'firebase-functions/v2/firestore';
-import type { FirestoreEvent, QueryDocumentSnapshot } from 'firebase-functions/v2/firestore';
+import { onDocumentWritten, Change } from 'firebase-functions/v2/firestore';
+import type { QueryDocumentSnapshot } from 'firebase-functions/v2/firestore';
 
 import * as admin from 'firebase-admin';
 import * as logger from 'firebase-functions/logger';
@@ -106,8 +107,8 @@ export const onPassengerWrite = onDocumentWritten(
     region: 'us-central1',
     document: 'schools/{schoolId}/trips/{tripId}/passengers/{passengerId}',
   },
-  async (event: FirestoreEvent<QueryDocumentSnapshot>) => {
-    const { schoolId, tripId } = event.params as { schoolId?: string; tripId?: string };
+  async (event) => {
+    const { schoolId, tripId } = event.params;
     if (!schoolId || !tripId) {
       logger.warn('Missing path params', { params: event.params });
       return;
