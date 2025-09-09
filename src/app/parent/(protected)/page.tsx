@@ -1,4 +1,12 @@
-
+/**
+ * One-time Firestore index recommendation for the query in this file.
+ *
+ * Collection: schools/{schoolId}/trips (or collection group: trips)
+ * Fields (in order):
+ *   status (==)
+ *   passengers (array-contains)
+ *   startedAt (desc)
+ */
 
 "use client";
 
@@ -62,11 +70,11 @@ type TripPassenger = {
   updatedAt?: Timestamp | null;
 };
 
-type ChildStatus = {
-  tripId?: string | null;
-  tripStatus?: TripPassenger | null;
-  lastLocationUpdate?: Timestamp | null;
-  tripEnded?: boolean;
+type ChildState = {
+  tripId: string | null;
+  passenger: TripPassenger | null;
+  lastLocationAt: Timestamp | null;
+  loading: boolean;
 };
 
 /* --------------- helpers --------------- */
@@ -77,158 +85,102 @@ const startOfToday = () => {
   return Timestamp.fromDate(d);
 };
 
-/**
- * Find the most relevant trip for a student:
- * 1) Prefer an ACTIVE trip that lists the student in `passengers` (array-contains).
- * 2) Otherwise pick TODAY's latest trip where /passengers/{studentId} exists.
- */
-async function findRelevantTripIdForStudent(schoolId: string, studentId: string): Promise<string | null> {
-  // 1) Try active trip first (fast path)
-  try {
-    const activeQ = query(
-      scol(schoolId, "trips"),
-      where("status", "==", "active"),
-      where("passengers", "array-contains", studentId),
-      orderBy("startedAt", "desc"),
-      limit(1)
-    );
-    const activeSnap = await getDocs(activeQ);
-    if (!activeSnap.empty) {
-      return activeSnap.docs[0].id;
-    }
-  } catch (err) {
-    // This will fail if the composite index is missing. That's okay, we'll fall back.
-    // console.warn("[Parent] Active trip query fallback:", err);
-  }
-
-  // 2) Fallback: today’s trips (newest first) — pick the first that actually has a passenger doc
-  try {
-    const todayQ = query(
-      scol(schoolId, "trips"),
-      where("startedAt", ">=", startOfToday()),
-      orderBy("startedAt", "desc"),
-      limit(10) // Check the 10 most recent trips today
-    );
-    const todaySnap = await getDocs(todayQ);
-    if (todaySnap.empty) return null;
-
-    // Check passenger doc existence on the client (no extra index required)
-    for (const tripDoc of todaySnap.docs) {
-      try {
-        const passengerDocRef = sdoc(schoolId, "trips", tripDoc.id, "passengers", studentId);
-        const passengerSnap = await getDoc(passengerDocRef);
-        if (passengerSnap.exists()) {
-            return tripDoc.id; // Found a trip with this student on the roster
-        }
-      } catch {
-        // Ignore and continue (e.g., permissions error on a specific subcollection)
-      }
-    }
-  } catch (err) {
-    // This query might fail if the simple startedAt index is missing.
-    // console.warn("[Parent] Fallback query for today's trips failed:", err);
-  }
-
-  return null;
-}
-
 /* --------------- child card --------------- */
 
 function StudentCard({ student }: { student: Student }) {
-  const [state, setState] = useState<ChildStatus>({
+  const [state, setState] = useState<ChildState>({
     tripId: null,
-    tripStatus: null,
-    lastLocationUpdate: null,
-    tripEnded: false,
+    passenger: null,
+    lastLocationAt: null,
+    loading: true,
   });
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let unsubPassenger: (() => void) | null = null;
     let unsubTrip: (() => void) | null = null;
-    let cancelled = false;
+    let isCancelled = false;
 
-    async function wireUp() {
-      setLoading(true);
+    async function findTripAndSubscribe() {
+      if (!student.schoolId || !student.id) {
+        setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
+        return;
+      }
+      setState(prevState => ({ ...prevState, loading: true }));
 
-      const tripId = await findRelevantTripIdForStudent(student.schoolId, student.id);
+      // 1. Query for an active trip containing this student today
+      const activeTripQuery = query(
+        scol(student.schoolId, 'trips'),
+        where('status', '==', 'active'),
+        where('passengers', 'array-contains', student.id),
+        where('startedAt', '>=', startOfToday()),
+        orderBy('startedAt', 'desc'),
+        limit(1)
+      );
+      
+      const tripSnap = await getDocs(activeTripQuery);
+      if (isCancelled) return;
 
-      if (cancelled) return;
-
-      if (!tripId) {
-        // No trip today with this student
-        setState({ tripId: null, tripStatus: null, lastLocationUpdate: null, tripEnded: false });
-        setLoading(false);
+      if (tripSnap.empty) {
+        setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
         return;
       }
 
-      setState((prev) => ({ ...prev, tripId }));
+      const tripId = tripSnap.docs[0].id;
+      setState(prevState => ({ ...prevState, tripId }));
 
-      // Listen to passenger row
-      const passengerRef = sdoc(student.schoolId, "trips", tripId, "passengers", student.id);
-      unsubPassenger = onSnapshot(
-        passengerRef,
-        (snap) => {
-          if (cancelled) return;
-          setState((prev) => ({
-            ...prev,
-            tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null,
-          }));
-        },
-        (err) => console.error(`[Parent] Passenger listener for ${student.id} failed:`, err)
-      );
+      // 2. Subscribe to the passenger document for status updates
+      const passengerRef = sdoc(student.schoolId, 'trips', tripId, 'passengers', student.id);
+      unsubPassenger = onSnapshot(passengerRef, (docSnap) => {
+        if (isCancelled) return;
+        setState(prevState => ({ ...prevState, passenger: docSnap.exists() ? (docSnap.data() as TripPassenger) : null }));
+      }, (err) => {
+        console.error(`[Parent] Passenger listener for ${student.id} failed:`, err);
+      });
 
-      // Listen to trip for lastLocation and whether trip ended
-      const tripRef = sdoc(student.schoolId, "trips", tripId);
-      unsubTrip = onSnapshot(
-        tripRef,
-        (snap) => {
-          if (cancelled) return;
-          const t = snap.data() as (DocumentData & { lastLocation?: { at?: Timestamp }; status?: string }) | undefined;
-          setState((prev) => ({
-            ...prev,
-            lastLocationUpdate: t?.lastLocation?.at ?? null,
-            tripEnded: t?.status === "ended",
-          }));
-        },
-        (err) => console.error(`[Parent] Trip listener for ${tripId} failed:`, err)
-      );
+      // 3. Subscribe to the trip document for location updates
+      const tripRef = sdoc(student.schoolId, 'trips', tripId);
+      unsubTrip = onSnapshot(tripRef, (docSnap) => {
+        if (isCancelled) return;
+        const tripData = docSnap.data();
+        setState(prevState => ({ ...prevState, lastLocationAt: tripData?.lastLocation?.at ?? null }));
+      }, (err) => {
+        console.error(`[Parent] Trip listener for ${tripId} failed:`, err);
+      });
 
-      setLoading(false);
+      setState(prevState => ({ ...prevState, loading: false }));
     }
 
-    wireUp();
+    findTripAndSubscribe();
 
     return () => {
-      cancelled = true;
+      isCancelled = true;
       unsubPassenger?.();
       unsubTrip?.();
     };
-  }, [student]);
+  }, [student.id, student.schoolId]);
 
   const statusBadge = useMemo(() => {
-    if (loading) return <Skeleton className="h-6 w-24" />;
+    if (state.loading) return <Skeleton className="h-6 w-24" />;
 
-    // No relevant trip today
     if (!state.tripId) {
       return (
-        <Badge variant="outline">
+        <Badge variant="outline" className="flex items-center">
           <Hourglass className="mr-1 h-3 w-3" />
-          No trip today
+          No active trip
         </Badge>
       );
     }
-
-    const s = state.tripStatus?.status;
-    if (!s) {
-      return (
-        <Badge variant="outline">
-          <HelpCircle className="mr-1 h-3 w-3" />
-          No trip data
-        </Badge>
-      );
+    
+    if (!state.passenger) {
+        return (
+            <Badge variant="outline" className="flex items-center">
+                <HelpCircle className="mr-1 h-3 w-3" />
+                No trip data
+            </Badge>
+        );
     }
 
+    const s = state.passenger.status;
     if (s === "boarded")
       return (
         <Badge className="bg-blue-100 text-blue-800 border-blue-200">
@@ -257,15 +209,21 @@ function StudentCard({ student }: { student: Student }) {
         Awaiting Check-in
       </Badge>
     );
-  }, [loading, state.tripStatus, state.tripId]);
+  }, [state.loading, state.tripId, state.passenger]);
+  
+  const primaryTime = useMemo(() => {
+      if (!state.passenger) return state.lastLocationAt;
+      return state.passenger.droppedAt ?? state.passenger.boardedAt ?? state.passenger.updatedAt ?? state.lastLocationAt;
+  }, [state.passenger, state.lastLocationAt]);
 
-  // Show the most meaningful time: droppedAt > boardedAt > last bus ping
-  const primaryTime: Timestamp | null =
-    state.tripStatus?.status === "dropped"
-      ? state.tripStatus?.droppedAt ?? null
-      : state.tripStatus?.status === "boarded"
-      ? state.tripStatus?.boardedAt ?? null
-      : state.lastLocationUpdate ?? null;
+  const timeLabel = useMemo(() => {
+      if (!state.passenger) return "Updated ";
+      const s = state.passenger.status;
+      if (s === 'dropped') return "Dropped ";
+      if (s === 'boarded') return "Boarded ";
+      if (s === 'absent') return "Marked ";
+      return "Updated ";
+  }, [state.passenger]);
 
   return (
     <Card>
@@ -293,11 +251,7 @@ function StudentCard({ student }: { student: Student }) {
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Clock className="h-4 w-4" />
             <span>
-              {state.tripEnded && state.tripStatus?.status === "dropped"
-                ? "Dropped "
-                : state.tripStatus?.status === "boarded"
-                ? "Boarded "
-                : "Updated "}
+              {timeLabel}
               {formatRelative(primaryTime)}
             </span>
           </div>
@@ -421,17 +375,3 @@ export default function ParentDashboardPage() {
     </div>
   );
 }
-
-/**
- * If you want to also allow the "active" + "array-contains" + "orderBy startedAt" query
- * (first fast path) without falling back, create this composite index:
- * 
- * Collection group: trips
- * Query scope: COLLECTION_GROUP
- * Fields (in order):
- *   status == ASC
- *   passengers array-contains
- *   startedAt DESC
- * 
- * Otherwise the fallback path (today’s trips + passenger doc existence) will still work.
- */
