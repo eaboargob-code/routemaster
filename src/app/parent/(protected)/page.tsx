@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useProfile, type UserProfile } from "@/lib/useProfile";
+import { useProfile } from "@/lib/useProfile";
 import {
   query,
   where,
@@ -334,12 +334,8 @@ function LoadingState() {
 
 /* --------------- page --------------- */
 
-interface ParentDashboardPageProps {
-  // This page no longer receives props, it fetches its own data.
-}
-
-export default function ParentDashboardPage({}: ParentDashboardPageProps) {
-  const { user, profile } = useProfile();
+export default function ParentDashboardPage() {
+  const { user, profile, loading: profileLoading } = useProfile();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -378,12 +374,12 @@ export default function ParentDashboardPage({}: ParentDashboardPageProps) {
       }
     };
 
-    if (profile) {
+    if (!profileLoading && profile) {
         fetchChildrenData();
     }
-  }, [user, profile]);
+  }, [user, profile, profileLoading]);
 
-  if (loading) return <LoadingState />;
+  if (loading || profileLoading) return <LoadingState />;
 
   return (
     <div className="grid gap-6">

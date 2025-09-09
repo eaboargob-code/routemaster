@@ -31,54 +31,84 @@ type UseProfileState = {
   error: Error | null;
 };
 
-export async function fetchProfile(u: FirebaseUser): Promise<UserProfile | null> {
-    // 1) try custom claims first
-    try {
-        const token = await getIdTokenResult(u, true);
-        const schoolId = (token.claims as any)?.schoolId as string | undefined;
-        if (schoolId) {
-            const userRef = doc(db, "schools", schoolId, "users", u.uid);
-            const snap = await getDoc(userRef);
-            if (snap.exists()) {
-                const data = snap.data() as DocumentData;
-                 return {
-                    uid: u.uid,
-                    email: u.email,
-                    displayName: data.displayName ?? u.displayName ?? undefined,
-                    role: data.role as UserRole,
-                    schoolId: schoolId,
-                    active: data.active,
-                    pending: data.pending,
-                };
-            }
-        }
-    } catch { /* continue */ }
-    
-    // 2) fallback to usersIndex
-    try {
-        const idxSnap = await getDoc(doc(db, "usersIndex", u.uid));
-        if (idxSnap.exists()) {
-            const schoolId = (idxSnap.data() as any)?.schoolId as string | undefined;
-            if (schoolId) {
-                 const userRef = doc(db, "schools", schoolId, "users", u.uid);
-                 const snap = await getDoc(userRef);
-                 if (snap.exists()) {
-                     const data = snap.data() as DocumentData;
-                     return {
-                        uid: u.uid,
-                        email: u.email,
-                        displayName: data.displayName ?? u.displayName ?? undefined,
-                        role: data.role as UserRole,
-                        schoolId: schoolId,
-                        active: data.active,
-                        pending: data.pending,
-                    };
-                 }
-            }
-        }
-    } catch { /* continue */ }
+async function resolveSchoolId(u: FirebaseUser): Promise<string | null> {
+  // 1) try custom claims
+  try {
+    const token = await getIdTokenResult(u, true); // Force refresh
+    const schoolIdFromClaims = (token.claims as any)?.schoolId as string | undefined;
+    if (schoolIdFromClaims) return schoolIdFromClaims;
+  } catch {
+    /* keep going */
+  }
 
-    throw new Error("Could not resolve user profile or schoolId.");
+  // 2) fallback to usersIndex/{uid}
+  try {
+    const idxSnap = await getDoc(doc(db, "usersIndex", u.uid));
+    if (idxSnap.exists()) {
+      const si = (idxSnap.data() as any)?.schoolId as string | undefined;
+      if (si) return si;
+    }
+  } catch {
+    /* keep going */
+  }
+  
+  // 3) Fallback: read from /users/{uid} (for older data structures)
+  try {
+    const userSnap = await getDoc(doc(db, "users", u.uid));
+    if (userSnap.exists()) {
+        const schoolIdFromUserDoc = (userSnap.data() as any)?.schoolId as string | undefined;
+        if(schoolIdFromUserDoc) return schoolIdFromUserDoc;
+    }
+  } catch {
+      /* nothing to do */
+  }
+
+  return null;
+}
+
+
+export async function fetchProfile(u: FirebaseUser): Promise<UserProfile | null> {
+  const schoolId = await resolveSchoolId(u);
+  if (!schoolId) {
+    // This is not an error, but it means we can't find a profile in a school context.
+    // For a multi-school setup, this is expected if the user isn't linked yet.
+    // However, for this app, we assume one school, so this implies a problem.
+    throw new Error(`Could not resolve a schoolId for user ${u.uid}.`);
+  }
+
+  // Look for the user's profile within the school's subcollection first.
+  const schoolUserRef = doc(db, "schools", schoolId, "users", u.uid);
+  const schoolUserSnap = await getDoc(schoolUserRef);
+  if (schoolUserSnap.exists()) {
+      const data = schoolUserSnap.data() as DocumentData;
+      return {
+        uid: u.uid,
+        email: u.email,
+        displayName: data.displayName ?? u.displayName ?? undefined,
+        role: data.role as UserRole,
+        schoolId: schoolId,
+        active: data.active,
+        pending: data.pending,
+      };
+  }
+  
+  // Fallback to the root users collection
+  const rootUserRef = doc(db, "users", u.uid);
+  const rootUserSnap = await getDoc(rootUserRef);
+  if (rootUserSnap.exists()) {
+      const data = rootUserSnap.data() as DocumentData;
+       return {
+        uid: u.uid,
+        email: u.email,
+        displayName: data.displayName ?? u.displayName ?? undefined,
+        role: data.role as UserRole,
+        schoolId: schoolId,
+        active: data.active,
+        pending: data.pending,
+      };
+  }
+
+  throw new Error(`User document not found for uid ${u.uid} in school ${schoolId} or at the root.`);
 }
 
 const profileCache = new Map<string, UserProfile>();
@@ -121,7 +151,7 @@ export function useProfile() {
 
   const refresh = useCallback(async () => {
     profileCache.delete(auth.currentUser?.uid || '');
-    await auth.currentUser?.getIdToken(true);
+    await auth.currentUser?.getIdToken(true); // Force refresh token to get new claims
     await load(auth.currentUser);
   }, [load]);
   
