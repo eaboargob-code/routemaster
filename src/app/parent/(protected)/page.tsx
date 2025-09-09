@@ -120,6 +120,7 @@ function StudentCard({ student }: { student: Student }) {
     // LIVE listener for today's active trip that contains this student
     const qActive = query(
       scol(student.schoolId, "trips"),
+      where("status", "==", "active"),
       where("passengers", "array-contains", student.id),
       where("startedAt", ">=", startOfToday()),
       orderBy("startedAt", "desc"),
@@ -156,7 +157,14 @@ function StudentCard({ student }: { student: Student }) {
               if (cancelled) return;
               const td = t.data() as DocumentData | undefined;
               const lastAt = td?.lastLocation?.at ?? null;
+              const status = td?.status ?? "active";
+
               setState(prev => ({ ...prev, lastLocationAt: lastAt }));
+              if (status !== "active") {
+                // Trip ended -> clear and wait for a new active trip
+                cleanupTripSubs();
+                setState(prev => ({ ...prev, tripId: null, passenger: null, loading: false }));
+              }
             },
             (err) => {
               console.error(`[Parent] Trip listener ${tripId} error:`, err);
