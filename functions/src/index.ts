@@ -113,10 +113,11 @@ export const updateTripCounts = onDocumentWritten(
 
             passengersSnap.forEach(doc => {
                 const passenger = doc.data() as Passenger;
-                const status = passenger.status || "pending";
-                if (counts.hasOwnProperty(status)) {
-                    counts[status]++;
-                }
+                // Default to 'pending' if status is missing or invalid.
+                const status = passenger.status && ['pending', 'boarded', 'dropped', 'absent'].includes(passenger.status)
+                    ? passenger.status
+                    : 'pending';
+                counts[status]++;
             });
 
             // Update the parent trip document
