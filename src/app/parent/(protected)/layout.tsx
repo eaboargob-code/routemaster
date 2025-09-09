@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import * as React from "react";
@@ -36,16 +37,6 @@ interface Notification {
       studentId?: string;
       status?: string;
     }
-}
-
-interface Student {
-  id: string;
-  name: string;
-  assignedRouteId?: string;
-  assignedBusId?: string;
-  routeName?: string;
-  busCode?: string;
-  schoolId: string;
 }
 
 // --- useInbox Hook ---
@@ -92,7 +83,7 @@ function useInbox() {
   return { items, unreadCount, handleMarkAsRead };
 }
 
-function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void, childNameMap: Map<string, string> }) {
+function Header({ notifications, unreadCount, onMarkAsRead }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void }) {
     const router = useRouter();
     const handleLogout = async () => {
         await signOut(auth);
@@ -126,13 +117,11 @@ function Header({ notifications, unreadCount, onMarkAsRead, childNameMap }: { no
                         {notifications.length > 0 ? (
                             <>
                                 {notifications.map(n => {
-                                     const name = n.data?.studentName || childNameMap.get(n.data?.studentId || '') || 'Student';
-                                     const statusText = n.data?.status === 'boarded' ? 'is boarded' : n.data?.status === 'dropped' ? 'is dropped' : n.body ?? '';
                                      return (
                                      <DropdownMenuItem key={n.id} className="flex-col items-start gap-1 whitespace-normal">
                                         <div className={`font-semibold ${!n.read ? '' : 'text-muted-foreground'}`}>{n.title}</div>
                                         <div className={`text-sm ${!n.read ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
-                                            {n.body || `${name} ${statusText}`}
+                                            {n.body}
                                         </div>
                                         <div className="text-xs text-muted-foreground/80 mt-1">{formatRelative(n.createdAt)}</div>
                                     </DropdownMenuItem>
@@ -192,8 +181,6 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   const { toast } = useToast();
   const { items: notifications, unreadCount, handleMarkAsRead } = useInbox();
   
-  const [childrenList, setChildrenList] = useState<Student[]>([]);
-
   useEffect(() => {
     if (user?.uid) {
       (async () => {
@@ -250,15 +237,12 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     return <AccessDeniedScreen message="Access Denied" details={`Your role is '${profile.role}'. You must have the 'parent' role to access this page.`} />;
   }
   
-  const childNameMap = new Map<string, string>();
-
   return (
     <div className="flex min-h-screen w-full flex-col">
       <Header 
         notifications={notifications} 
         unreadCount={unreadCount} 
         onMarkAsRead={handleMarkAsRead}
-        childNameMap={childNameMap}
       />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
         {children}
