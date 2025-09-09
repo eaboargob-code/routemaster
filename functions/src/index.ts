@@ -58,6 +58,7 @@ export const onPassengerWrite = onDocumentWritten(
     timeoutSeconds: 60,
     memory: "128MiB",
   },
+  
   async (event: FirestoreEvent<Change<QueryDocumentSnapshot> | undefined>) => {
     const { schoolId, tripId } = event.params;
 
