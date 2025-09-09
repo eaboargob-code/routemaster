@@ -32,8 +32,7 @@ export async function registerFcmToken(uid: string) {
   } catch (e: any) {
     if (e.code === 'messaging/permission-blocked') {
         // This is a common case when the user denies notification permission.
-        // We can log it as a warning instead of a full-blown error.
-        console.warn("[FCM] Notification permission was blocked.");
+        // It's not a developer error, so we can fail silently.
     } else {
         console.error("[FCM] registerFcmToken failed:", e);
     }
