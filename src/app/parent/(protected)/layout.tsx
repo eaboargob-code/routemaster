@@ -2,6 +2,7 @@
 
 "use client";
 
+import * as React from "react";
 import { useEffect, useState, type ReactNode, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
