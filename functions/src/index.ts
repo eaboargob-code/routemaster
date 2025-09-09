@@ -1,6 +1,6 @@
 
 import * as admin from "firebase-admin";
-import { onDocumentWritten, onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 
 admin.initializeApp();
 
@@ -27,9 +27,6 @@ type UserDoc = {
 };
 
 /* ---------- Helpers ---------- */
-
-/** A small sleep helper. */
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /** Resolve a human student name with sensible fallbacks. */
 async function getStudentName(db: FirebaseFirestore.Firestore, schoolId: string, studentId: string): Promise<string> {
@@ -88,84 +85,7 @@ async function pushToTokens(
   }
 }
 
-/* ---------- Triggers ---------- */
-
-
-export const onTripCreate = onDocumentCreated(
-    {
-      region: "us-central1",
-      document: "schools/{schoolId}/trips/{tripId}",
-    },
-    async (event) => {
-        const db = admin.firestore();
-        const tripData = event.data?.data();
-        if (!tripData) return;
-
-        const { schoolId, tripId } = event.params;
-        const { routeId } = tripData;
-        
-        // The passenger list is populated just after trip creation.
-        // A small delay ensures the data is available.
-        await sleep(1500);
-        const tripDoc = await db.doc(`schools/${schoolId}/trips/${tripId}`).get();
-        const passengers: string[] = tripDoc.data()?.passengers || [];
-
-        if (passengers.length === 0) {
-            console.log(`Trip ${tripId} created with no passengers, no notifications sent.`);
-            return;
-        }
-
-        const routeName = await (async () => {
-            if (!routeId) return "A trip";
-            try {
-                const routeSnap = await db.doc(`schools/${schoolId}/routes/${routeId}`).get();
-                return routeSnap.exists() ? `The trip for ${routeSnap.data()?.name}` : 'A trip';
-            } catch {
-                return 'A trip';
-            }
-        })();
-
-        const title = "Trip Started 🚌";
-        const body = `${routeName} has begun.`;
-        
-        const allParentUids = new Set<string>();
-        for (const studentId of passengers) {
-            const parentUids = await getParentUserIds(db, studentId, schoolId);
-            parentUids.forEach(uid => allParentUids.add(uid));
-        }
-
-        const batch = db.batch();
-
-        for (const parentUid of Array.from(allParentUids)) {
-             // 1) Create inbox (bell) entry
-            const inboxRef = db.doc(`users/${parentUid}/inbox/${tripId}-start`);
-            batch.set(inboxRef, {
-                title,
-                body,
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                read: false,
-                data: {
-                    kind: "tripStatus",
-                    status: "started",
-                    tripId,
-                    schoolId,
-                },
-            });
-
-            // 2) Optionally send push (best effort)
-            try {
-                const userSnap = await db.doc(`users/${parentUid}`).get();
-                const user = userSnap.exists ? (userSnap.data() as UserDoc) : undefined;
-                await pushToTokens(user?.fcmTokens, title, body, { kind: "tripStatus", tripId });
-            } catch (e) {
-                console.warn(`[FCM] skipping parent ${parentUid}:`, (e as Error).message);
-            }
-        }
-        
-        await batch.commit();
-    }
-);
-
+/* ---------- Trigger ---------- */
 
 export const onPassengerStatusChange = onDocumentWritten(
   {
@@ -185,7 +105,7 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     const { schoolId, tripId, studentId: eventStudentId } = event.params;
     let { status, studentId } = after;
-    
+
     // Ensure studentId from event params is used if not present in data
     studentId = studentId || eventStudentId;
 
@@ -195,13 +115,13 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     // Resolve student name
     const studentName = await getStudentName(db, schoolId, studentId);
-    
+
     const titleMap: Record<string, string> = {
       boarded: "On Bus 🚌",
       dropped: "Dropped Off ✅",
       absent: "Marked Absent 🚫",
     };
-    const title = titleMap[status] || "Update";
+    const title = titleMap[status as string] || "Update";
     const body = `${studentName} is ${status}.`;
 
 
@@ -242,36 +162,4 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     await batch.commit();
   }
-);
-
-
-export const updateTripCounts = onDocumentWritten(
-    {
-      region: "us-central1",
-      document: "schools/{schoolId}/trips/{tripId}/passengers/{studentId}",
-    },
-    async (event) => {
-        const db = admin.firestore();
-        const { schoolId, tripId } = event.params;
-
-        const passengersRef = db.collection(`schools/${schoolId}/trips/${tripId}/passengers`);
-        const passengersSnap = await passengersRef.get();
-
-        const counts: Record<string, number> = {
-            pending: 0,
-            boarded: 0,
-            dropped: 0,
-            absent: 0,
-        };
-
-        passengersSnap.forEach(doc => {
-            const status = (doc.data()?.status || 'pending');
-            if (counts.hasOwnProperty(status)) {
-                counts[status]++;
-            }
-        });
-
-        const tripRef = db.doc(`schools/${schoolId}/trips/${tripId}`);
-        await tripRef.update({ counts: counts, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-    }
 );

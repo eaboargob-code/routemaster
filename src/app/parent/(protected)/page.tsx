@@ -1,21 +1,16 @@
 
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useProfile } from "@/lib/useProfile";
 import {
   query,
   where,
   getDocs,
   getDoc,
-  onSnapshot,
-  limit,
-  orderBy,
   type DocumentData,
-  Timestamp,
 } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
-import { startOfToday } from "@/lib/firestoreQueries";
 
 import {
   Card,
@@ -31,12 +26,7 @@ import {
   Frown,
   Bus,
   Route as RouteIcon,
-  Clock,
-  UserX,
-  ArrowDownCircle,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { relativeFrom } from "@/lib/datetime";
 
 /* ---------------- types ---------------- */
 
@@ -48,175 +38,11 @@ type Student = {
   routeName?: string;
 };
 
-type TripPassenger = {
-  status: "pending" | "boarded" | "dropped" | "absent";
-  boardedAt?: Timestamp | null;
-  droppedAt?: Timestamp | null;
-};
-
-type CardState = {
-  tripId: string | null;
-  passenger: TripPassenger | null;
-  lastLocationAt: Timestamp | null;
-  loading: boolean;
-};
-
-
 /* --------------- child card --------------- */
 
 function StudentCard({ student }: { student: Student }) {
-  const [state, setState] = useState<CardState>({
-    tripId: null,
-    passenger: null,
-    lastLocationAt: null,
-    loading: true,
-  });
-
-  useEffect(() => {
-    let unsubActiveTrip: (() => void) | null = null;
-    let unsubTripDoc: (() => void) | null = null;
-    let unsubPassengerDoc: (() => void) | null = null;
-    let cancelled = false;
-    let currentTripId: string | null = null;
-
-    function cleanupTripSubs() {
-      unsubTripDoc?.();
-      unsubTripDoc = null;
-      unsubPassengerDoc?.();
-      unsubPassengerDoc = null;
-    }
-
-    setState({ tripId: null, passenger: null, lastLocationAt: null, loading: true });
-
-    if (!student.schoolId || !student.id) {
-      setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
-      return;
-    }
-
-    // LIVE listener for today's active trip that contains this student
-    const qActive = query(
-      scol(student.schoolId, "trips"),
-      where("status", "==", "active"),
-      where("passengers", "array-contains", student.id),
-      where("startedAt", ">=", startOfToday()),
-      orderBy("startedAt", "desc"),
-      limit(1)
-    );
-
-    unsubActiveTrip = onSnapshot(
-      qActive,
-      async (qsnap) => {
-        if (cancelled) return;
-
-        if (qsnap.empty) {
-          currentTripId = null;
-          cleanupTripSubs();
-          setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
-          return;
-        }
-
-        const doc0 = qsnap.docs[0];
-        const tripId = doc0.id;
-
-        if (tripId !== currentTripId) {
-          currentTripId = tripId;
-          cleanupTripSubs();
-          setState(prev => ({ ...prev, tripId, loading: true }));
-
-          const tripRef = sdoc(student.schoolId, "trips", tripId);
-          unsubTripDoc = onSnapshot(
-            tripRef,
-            (t) => {
-              if (cancelled) return;
-              const td = t.data() as DocumentData | undefined;
-              const lastAt = td?.lastLocation?.at ?? null;
-              const status = td?.status ?? "active";
-
-              setState(prev => ({ ...prev, lastLocationAt: lastAt }));
-              if (status !== "active") {
-                cleanupTripSubs();
-                setState(prev => ({ ...prev, tripId: null, passenger: null, loading: false }));
-              }
-            },
-            (err) => console.error(`[Parent] Trip listener ${tripId} error:`, err)
-          );
-
-          const primaryPassRef = sdoc(student.schoolId, "trips", tripId, "passengers", student.id);
-          unsubPassengerDoc = onSnapshot(
-            primaryPassRef,
-            async (p) => {
-              if (cancelled) return;
-              if (p.exists()) {
-                setState(prev => ({ ...prev, passenger: p.data() as TripPassenger, loading: false }));
-                return;
-              }
-
-              try {
-                const alt = await getDocs(
-                  query(
-                    scol(student.schoolId, "trips", tripId, "passengers"),
-                    where("studentId", "==", student.id),
-                    limit(1)
-                  )
-                );
-                const found = alt.docs[0];
-                setState(prev => ({
-                  ...prev,
-                  passenger: found ? (found.data() as TripPassenger) : null,
-                  loading: false,
-                }));
-              } catch (e) {
-                console.error("[Parent] Passenger fallback query failed:", e);
-                setState(prev => ({ ...prev, passenger: null, loading: false }));
-              }
-            },
-            (err) => {
-              console.error(`[Parent] Passenger listener (${student.id}) error:`, err);
-              setState(prev => ({ ...prev, passenger: null, loading: false }));
-            }
-          );
-        } else {
-          setState(prev => ({ ...prev, loading: false }));
-        }
-      },
-      (err) => {
-        console.error("[Parent] Active trip query listener error:", err);
-        setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
-      }
-    );
-
-    return () => {
-      cancelled = true;
-      unsubActiveTrip?.();
-      cleanupTripSubs();
-    };
-  }, [student.id, student.schoolId]);
-
-  const { passenger, loading, tripId, lastLocationAt } = state;
-  const status = passenger?.status;
-  const timeLabel = status === 'boarded' ? 'Boarded' : (status === 'dropped' ? 'Dropped' : 'Last update');
-  const primaryTime = status === 'boarded' ? passenger?.boardedAt : (status === 'dropped' ? passenger?.droppedAt : lastLocationAt);
-
-  const statusBadge = useMemo(() => {
-    if (loading) {
-      return <Badge variant="outline">Loading Status...</Badge>;
-    }
-    if (!tripId || !passenger) {
-      return <Badge variant="secondary">No active trip</Badge>;
-    }
-    switch (passenger.status) {
-      case 'boarded':
-        return <Badge className="bg-green-100 text-green-800 border-green-200">On Bus</Badge>;
-      case 'dropped':
-        return <Badge className="bg-blue-100 text-blue-800 border-blue-200">Dropped Off</Badge>;
-      case 'absent':
-        return <Badge variant="destructive">Marked Absent</Badge>;
-      case 'pending':
-      default:
-        return <Badge variant="outline">Awaiting Check-in</Badge>;
-    }
-  }, [loading, tripId, passenger]);
-
+  // The live status updates are now handled by the notification bell in the layout.
+  // This card can now be a simple, static display of the student's assignment.
   return (
     <Card>
       <CardHeader>
@@ -224,28 +50,28 @@ function StudentCard({ student }: { student: Student }) {
           <div>
             <CardTitle>{student.name}</CardTitle>
             <CardDescription className="flex flex-col gap-1 mt-2">
-              {!!student.busCode && (
+              {student.busCode ? (
                 <span className="flex items-center gap-2">
                   <Bus className="h-4 w-4" /> {student.busCode}
                 </span>
+              ) : (
+                <span className="flex items-center gap-2 text-muted-foreground">
+                  <Bus className="h-4 w-4" /> No bus assigned
+                </span>
               )}
-              {!!student.routeName && (
+              {student.routeName ? (
                 <span className="flex items-center gap-2">
                   <RouteIcon className="h-4 w-4" /> {student.routeName}
+                </span>
+              ) : (
+                 <span className="flex items-center gap-2 text-muted-foreground">
+                  <RouteIcon className="h-4 w-4" /> No route assigned
                 </span>
               )}
             </CardDescription>
           </div>
-          {statusBadge}
         </div>
       </CardHeader>
-      {tripId && (
-         <CardContent>
-           <div className="text-sm text-muted-foreground flex items-center">
-             <Clock className="h-4 w-4 mr-2"/> {timeLabel}: {relativeFrom(primaryTime)}
-           </div>
-         </CardContent>
-      )}
     </Card>
   );
 }

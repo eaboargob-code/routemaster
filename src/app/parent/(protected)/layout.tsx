@@ -92,20 +92,21 @@ function useInbox() {
     const schoolFirst = !!profile?.schoolId;
 
     const bases = [
-      schoolFirst
-        ? sdoc(profile!.schoolId, `users/${user.uid}/inbox`, "_dummy").parent!
+      schoolFirst && profile?.schoolId
+        ? sdoc(profile.schoolId, `users/${user.uid}/inbox`, "_dummy").parent
         : collection(db, "users", user.uid, "inbox"),
       // fallback other branch
       schoolFirst
         ? collection(db, "users", user.uid, "inbox")
-        : sdoc(profile!.schoolId, `users/${user.uid}/inbox`, "_dummy").parent!,
-    ];
+        : (profile?.schoolId ? sdoc(profile.schoolId, `users/${user.uid}/inbox`, "_dummy").parent : null),
+    ].filter(Boolean);
 
     const toMark = items.filter((i) => !i.read).slice(0, 25);
     if (toMark.length === 0) return;
 
     // try both branches; whichever exists will succeed
     for (const base of bases) {
+      if (!base) continue;
       try {
         const batch = writeBatch(db);
         toMark.forEach((n) => batch.update(doc(base, n.id), { read: true, readAt: serverTimestamp() }));
