@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import * as React from "react";
@@ -193,10 +192,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   const { toast } = useToast();
   const { items: notifications, unreadCount, handleMarkAsRead } = useInbox();
   
-  // --- Data fetching for children, now in the layout ---
   const [childrenList, setChildrenList] = useState<Student[]>([]);
-  const [childrenLoading, setChildrenLoading] = useState(true);
-  const [childrenError, setChildrenError] = useState<string | null>(null);
 
   useEffect(() => {
     if (user?.uid) {
@@ -211,49 +207,6 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         router.replace("/parent/login");
     }
   }, [user, profileLoading, router]);
-
-  useEffect(() => {
-    const fetchChildrenData = async () => {
-      if (!user || !profile?.schoolId) return;
-      setChildrenLoading(true);
-      setChildrenError(null);
-
-      try {
-        const parentLinkRef = sdoc(profile.schoolId, "parentStudents", user.uid);
-        const linkDocSnap = await getDoc(parentLinkRef);
-        const studentIds: string[] = (linkDocSnap.exists() && linkDocSnap.data().studentIds) || [];
-
-        if (studentIds.length === 0) {
-          setChildrenList([]);
-          setChildrenLoading(false);
-          return;
-        }
-
-        const studentsQuery = query(
-            scol(profile.schoolId, "students"), 
-            where("__name__", "in", studentIds.slice(0, 30))
-        );
-        
-        const studentsSnapshot = await getDocs(studentsQuery);
-        const studentData = studentsSnapshot.docs.map((d) => ({ id: d.id, ...d.data(), schoolId: profile.schoolId } as Student));
-        setChildrenList(studentData);
-
-      } catch (e: any) {
-        console.error("Failed to fetch parent data:", e);
-        setChildrenError(e.message || "An unknown error occurred.");
-      } finally {
-        setChildrenLoading(false);
-      }
-    };
-
-    if (!profileLoading && profile) {
-        fetchChildrenData();
-    }
-  }, [user, profile, profileLoading]);
-  
-  const childNameMap = useMemo(() => new Map(childrenList.map(s => [s.id, s.name])), [childrenList]);
-  
-  // --- End data fetching ---
 
   useEffect(() => {
     if (!user?.uid || !profile?.schoolId) return;
@@ -277,7 +230,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     }
   }, [user, profile, toast]);
 
-  if (profileLoading || childrenLoading) {
+  if (profileLoading) {
     return <LoadingScreen />;
   }
 
@@ -296,22 +249,8 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   if (profile.role !== 'parent') {
     return <AccessDeniedScreen message="Access Denied" details={`Your role is '${profile.role}'. You must have the 'parent' role to access this page.`} />;
   }
-
-  // Clone the children and pass them down
-  const childrenWithProps = React.Children.map(children, child => {
-    if (React.isValidElement(child)) {
-      // @ts-ignore
-      return React.cloneElement(child, { 
-         profile: profile,
-         childrenData: {
-            students: childrenList,
-            loading: childrenLoading,
-            error: childrenError,
-         }
-      });
-    }
-    return child;
-  });
+  
+  const childNameMap = new Map<string, string>();
 
   return (
     <div className="flex min-h-screen w-full flex-col">
@@ -322,7 +261,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         childNameMap={childNameMap}
       />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
-        {childrenWithProps}
+        {children}
       </main>
       {user && <DebugBanner user={user} profile={profile} loading={profileLoading} />}
     </div>

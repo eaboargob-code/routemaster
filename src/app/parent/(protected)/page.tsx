@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { UserProfile } from "@/lib/useProfile";
+import { useProfile, type UserProfile } from "@/lib/useProfile";
 import {
   query,
   where,
@@ -335,16 +335,53 @@ function LoadingState() {
 /* --------------- page --------------- */
 
 interface ParentDashboardPageProps {
-  profile: UserProfile;
-  childrenData: {
-    students: Student[];
-    loading: boolean;
-    error: string | null;
-  };
+  // This page no longer receives props, it fetches its own data.
 }
 
-export default function ParentDashboardPage({ profile, childrenData }: ParentDashboardPageProps) {
-  const { students, loading, error } = childrenData;
+export default function ParentDashboardPage({}: ParentDashboardPageProps) {
+  const { user, profile } = useProfile();
+  const [students, setStudents] = useState<Student[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchChildrenData = async () => {
+      if (!user || !profile?.schoolId) return;
+      setLoading(true);
+      setError(null);
+
+      try {
+        const parentLinkRef = sdoc(profile.schoolId, "parentStudents", user.uid);
+        const linkDocSnap = await getDoc(parentLinkRef);
+        const studentIds: string[] = (linkDocSnap.exists() && linkDocSnap.data().studentIds) || [];
+
+        if (studentIds.length === 0) {
+          setStudents([]);
+          setLoading(false);
+          return;
+        }
+
+        const studentsQuery = query(
+            scol(profile.schoolId, "students"), 
+            where("__name__", "in", studentIds.slice(0, 30))
+        );
+        
+        const studentsSnapshot = await getDocs(studentsQuery);
+        const studentData = studentsSnapshot.docs.map((d) => ({ id: d.id, ...d.data(), schoolId: profile.schoolId } as Student));
+        setStudents(studentData);
+
+      } catch (e: any) {
+        console.error("Failed to fetch parent data:", e);
+        setError(e.message || "An unknown error occurred.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (profile) {
+        fetchChildrenData();
+    }
+  }, [user, profile]);
 
   if (loading) return <LoadingState />;
 
