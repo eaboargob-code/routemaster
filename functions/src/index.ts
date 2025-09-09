@@ -59,10 +59,7 @@ export const onPassengerWrite = onDocumentWritten(
     memory: "128MiB",
   },
   async (event: FirestoreEvent<Change<QueryDocumentSnapshot>>) => {
-    const { schoolId, tripId } = event.params as {
-      schoolId?: string;
-      tripId?: string;
-    };
+    const { schoolId, tripId } = event.params;
 
     if (!schoolId || !tripId) {
       logger.warn("Missing path params", { params: event.params });
