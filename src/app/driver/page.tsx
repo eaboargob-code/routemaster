@@ -249,60 +249,75 @@ export default function DriverPage() {
     setIsSubmitting(true);
 
     try {
-      const newTripData: Omit<Trip, "id"> = {
-        driverId: user.uid,
-        busId: bus.id,
-        routeId: route?.id || "",
-        schoolId: profile.schoolId,
-        startedAt: Timestamp.now(),
-        status: "active",
-        supervisorId: bus.supervisorId || null,
-        allowDriverAsSupervisor: false,
-        driverSupervisionLocked: false,
-        passengers: [],
-        counts: { pending: 0, boarded: 0, absent: 0, dropped: 0 },
-      };
+        const seedOptions = {
+            schoolId: profile.schoolId,
+            routeId: route?.id || null,
+            busId: bus.id,
+        };
 
-      const docRef = await addDoc(scol(profile.schoolId, "trips"), newTripData);
-      const finalTrip = { id: docRef.id, ...newTripData } as Trip;
-      setActiveTrip(finalTrip);
+        // First, get the count of passengers to be seeded.
+        const { passengerData } = await seedPassengersForTrip({ ...seedOptions, mode: 'count' });
+        const initialPendingCount = passengerData.length;
+        const passengerIds = passengerData.map(p => p.id);
 
-      toast({
-        title: "Trip Started!",
-        description: "Your trip is now active.",
-        className: "bg-accent text-accent-foreground border-0",
-      });
+        const newTripData: Omit<Trip, "id"> = {
+            driverId: user.uid,
+            busId: bus.id,
+            routeId: route?.id || "",
+            schoolId: profile.schoolId,
+            startedAt: Timestamp.now(),
+            status: "active",
+            supervisorId: bus.supervisorId || null,
+            allowDriverAsSupervisor: false,
+            driverSupervisionLocked: false,
+            passengers: passengerIds,
+            counts: { 
+                pending: initialPendingCount, 
+                boarded: 0, 
+                absent: 0, 
+                dropped: 0 
+            },
+        };
 
-      // Seed roster (idempotent)
-      const { created } = await seedPassengersForTrip({
-        tripId: finalTrip.id,
-        schoolId: finalTrip.schoolId,
-        routeId: finalTrip.routeId,
-        busId: finalTrip.busId,
-      });
+        const docRef = await addDoc(scol(profile.schoolId, "trips"), newTripData);
+        const finalTrip = { id: docRef.id, ...newTripData } as Trip;
+        setActiveTrip(finalTrip);
 
-      if (created > 0) {
         toast({
-          title: "Roster Ready!",
-          description: `${created} passengers have been added to your roster.`,
-          className: "bg-accent text-accent-foreground border-0",
+            title: "Trip Started!",
+            description: "Your trip is now active.",
+            className: "bg-accent text-accent-foreground border-0",
         });
-      } else {
-        toast({
-          title: "Empty Roster",
-          description:
-            "No students are assigned to this route or bus for your school.",
-        });
-      }
+
+        // Now, seed the roster for real.
+        if (initialPendingCount > 0) {
+            await seedPassengersForTrip({ 
+                ...seedOptions, 
+                tripId: finalTrip.id,
+                mode: 'write', 
+                passengerData 
+            });
+             toast({
+                title: "Roster Ready!",
+                description: `${initialPendingCount} passengers have been added to your roster.`,
+                className: "bg-accent text-accent-foreground border-0",
+            });
+        } else {
+             toast({
+                title: "Empty Roster",
+                description: "No students are assigned to this route or bus.",
+            });
+        }
+      
     } catch (error) {
-      console.error("[start trip]", error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Could not start a new trip.",
-      });
+        console.error("[start trip]", error);
+        toast({
+            variant: "destructive",
+            title: "Error",
+            description: "Could not start a new trip.",
+        });
     } finally {
-      setIsSubmitting(false);
+        setIsSubmitting(false);
     }
   };
 
