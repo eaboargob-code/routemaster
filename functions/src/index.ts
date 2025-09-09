@@ -138,7 +138,7 @@ export const onTripCreate = onDocumentCreated(
 
         for (const parentUid of Array.from(allParentUids)) {
              // 1) Create inbox (bell) entry
-            const inboxRef = db.doc(`schools/${schoolId}/users/${parentUid}/inbox/${tripId}-start`);
+            const inboxRef = db.doc(`users/${parentUid}/inbox/${tripId}-start`);
             batch.set(inboxRef, {
                 title,
                 body,
@@ -189,13 +189,6 @@ export const onPassengerStatusChange = onDocumentWritten(
     // Ensure studentId from event params is used if not present in data
     studentId = studentId || eventStudentId;
 
-    if (before?.status === 'dropped' && after.status !== 'dropped') {
-        // This logic prevents re-notification spam if an admin reverts a dropped-off student.
-        // Once a student is marked as "dropped", we consider their journey over for the day.
-        status = 'dropped';
-    }
-    
-    // Only notify when status becomes boarded/dropped/absent, and only if it truly changed
     const meaningful = status === "boarded" || status === "dropped" || status === "absent";
     const changed = before?.status !== after.status;
     if (!meaningful || !changed || !studentId) return;
@@ -221,7 +214,7 @@ export const onPassengerStatusChange = onDocumentWritten(
 
     for (const parentUid of parentUids) {
       // 1) Create inbox (bell) entry
-      const inboxRef = db.doc(`schools/${schoolId}/users/${parentUid}/inbox/${tripId}-${studentId}`);
+      const inboxRef = db.doc(`users/${parentUid}/inbox/${tripId}-${studentId}`);
       batch.set(inboxRef, {
         title,
         body,

@@ -3,7 +3,7 @@
 "use client";
 
 import * as React from "react";
-import { useEffect, useState, type ReactNode, useCallback, useMemo } from "react";
+import { useEffect, useState, type ReactNode, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
@@ -22,8 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs, serverTimestamp } from "firebase/firestore";
-import { scol, sdoc } from "@/lib/schoolPath";
+import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, serverTimestamp } from "firebase/firestore";
 import { formatRelative } from "@/lib/utils";
 
 interface Notification {
@@ -41,15 +40,15 @@ interface Notification {
 
 // --- useInbox Hook ---
 function useInbox() {
-  const { user, profile } = useProfile();
+  const { user } = useProfile();
   const [items, setItems] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    if (!user?.uid || !profile?.schoolId) return;
+    if (!user?.uid) return;
 
     const q = query(
-      scol(profile.schoolId, `users/${user.uid}/inbox`),
+      collection(db, `users/${user.uid}/inbox`),
       orderBy("createdAt", "desc"),
       limit(25)
     );
@@ -64,21 +63,21 @@ function useInbox() {
     });
 
     return () => unsub();
-  }, [user?.uid, profile?.schoolId]);
+  }, [user?.uid]);
   
   const handleMarkAsRead = useCallback(async () => {
-    if (!user?.uid || !profile?.schoolId) return;
+    if (!user?.uid) return;
     const toMark = items.filter(i => !i.read).slice(0, 25);
     if (toMark.length === 0) return;
 
     const batch = writeBatch(db);
     toMark.forEach(n => {
-        const notifRef = sdoc(profile!.schoolId, `users/${user.uid}/inbox`, n.id);
+        const notifRef = doc(db, `users/${user.uid}/inbox`, n.id);
         batch.update(notifRef, { read: true, readAt: serverTimestamp() });
     });
     
     await batch.commit().catch(err => console.error("Failed to mark notifications as read", err));
-  }, [user?.uid, profile?.schoolId, items]);
+  }, [user?.uid, items]);
 
   return { items, unreadCount, handleMarkAsRead };
 }
@@ -196,14 +195,14 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   }, [user, profileLoading, router]);
 
   useEffect(() => {
-    if (!user?.uid || !profile?.schoolId) return;
+    if (!user?.uid) return;
 
     const unsubscribe = onForegroundNotification((notification) => {
         toast({
             title: notification.title,
             description: notification.body,
         });
-        logBell(user.uid, profile!.schoolId, {
+        logBell(user.uid, {
             title: notification.title || "New Notification",
             body: notification.body || "",
             data: notification.data,
@@ -215,7 +214,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         unsubscribe();
       }
     }
-  }, [user, profile, toast]);
+  }, [user, toast]);
 
   if (profileLoading) {
     return <LoadingScreen />;
