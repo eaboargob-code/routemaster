@@ -8,7 +8,7 @@
   "scripts": {
     "build": "rimraf lib && tsc",
     "serve": "npm run build && firebase emulators:start --only functions",
-    "deploy": "npm run build && firebase deploy --only functions:onPassengerStatusChange,functions:onTripCreate"
+    "deploy": "npm run build && firebase deploy --only functions:onPassengerStatusChange,functions:onTripCreate,functions:updateTripCounts"
   },
   "dependencies": {
     "firebase-admin": "^11.11.1",

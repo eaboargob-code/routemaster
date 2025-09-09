@@ -243,3 +243,35 @@ export const onPassengerStatusChange = onDocumentWritten(
     await batch.commit();
   }
 );
+
+
+export const updateTripCounts = onDocumentWritten(
+    {
+      region: "us-central1",
+      document: "schools/{schoolId}/trips/{tripId}/passengers/{studentId}",
+    },
+    async (event) => {
+        const db = admin.firestore();
+        const { schoolId, tripId } = event.params;
+
+        const passengersRef = db.collection(`schools/${schoolId}/trips/${tripId}/passengers`);
+        const passengersSnap = await passengersRef.get();
+
+        const counts: Record<string, number> = {
+            pending: 0,
+            boarded: 0,
+            dropped: 0,
+            absent: 0,
+        };
+
+        passengersSnap.forEach(doc => {
+            const status = (doc.data()?.status || 'pending');
+            if (counts.hasOwnProperty(status)) {
+                counts[status]++;
+            }
+        });
+
+        const tripRef = db.doc(`schools/${schoolId}/trips/${tripId}`);
+        await tripRef.update({ counts: counts, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
+);

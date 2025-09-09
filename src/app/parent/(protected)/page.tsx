@@ -12,6 +12,7 @@ import {
   limit,
   Timestamp,
   type DocumentData,
+  onSnapshot,
 } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
 
@@ -29,7 +30,14 @@ import {
   Frown,
   Bus,
   Route as RouteIcon,
+  HelpCircle,
+  Hourglass,
+  Footprints,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { formatRelative } from "@/lib/utils";
 
 /* ---------------- types ---------------- */
 
@@ -40,6 +48,7 @@ type Student = {
     busCode?: string;
     routeName?: string;
 };
+
 
 /* --------------- child card --------------- */
 
