@@ -1,14 +1,12 @@
 /**
- * One-time Firestore index recommendation for the queries in this file.
+ * Parent dashboard — robust child status.
  *
- * Collection: schools/{schoolId}/trips (or collection group: trips)
- * Index A (active search):
- *   status (ASC, ==)
+ * One-time index for this query:
+ * Collection: schools/{schoolId}/trips
+ * Fields:
+ *   status (==)
  *   passengers (array-contains)
- *   startedAt (DESC)
- * Index B (fallback search):
- *   passengers (array-contains)
- *   startedAt (DESC)
+ *   startedAt (desc)
  */
 
 "use client";
@@ -19,12 +17,12 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
   onSnapshot,
   orderBy,
   limit,
   Timestamp,
   type DocumentData,
-  getDoc,
 } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
 import { formatRelative } from "@/lib/utils";
@@ -101,91 +99,112 @@ function StudentCard({ student }: { student: Student }) {
   useEffect(() => {
     let unsubPassenger: (() => void) | null = null;
     let unsubTrip: (() => void) | null = null;
-    let isCancelled = false;
+    let cancelled = false;
 
-    async function findTripAndSubscribe() {
+    async function run() {
       if (!student.schoolId || !student.id) {
         setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
         return;
       }
       setState(prev => ({ ...prev, loading: true }));
 
-      const tripsCol = scol(student.schoolId, "trips");
-
-      // 1) Try ACTIVE trip containing this student today
-      const qActive = query(
-        tripsCol,
-        where("status", "==", "active"),
-        where("passengers", "array-contains", student.id),
-        where("startedAt", ">=", startOfToday()),
-        orderBy("startedAt", "desc"),
-        limit(1)
-      );
-
-      let snap = await getDocs(qActive);
-      if (isCancelled) return;
-
-      // 2) If none, fallback to latest ANY trip that contains the student
-      if (snap.empty) {
-        const qFallback = query(
-          tripsCol,
+      try {
+        // 1) Find today's active trip that includes this student
+        const qTrips = query(
+          scol(student.schoolId, "trips"),
+          where("status", "==", "active"),
           where("passengers", "array-contains", student.id),
+          where("startedAt", ">=", startOfToday()),
           orderBy("startedAt", "desc"),
           limit(1)
         );
-        snap = await getDocs(qFallback);
-        if (isCancelled) return;
-      }
 
-      if (snap.empty) {
+        const snap = await getDocs(qTrips);
+        if (cancelled) return;
+
+        if (snap.empty) {
+          setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
+          return;
+        }
+
+        const tripId = snap.docs[0].id;
+        setState(prev => ({ ...prev, tripId }));
+
+        // 2) Subscribe to trip: if it stops being active, clear the view
+        const tripRef = sdoc(student.schoolId, "trips", tripId);
+        unsubTrip = onSnapshot(
+          tripRef,
+          (t) => {
+            if (cancelled) return;
+            const td = t.data() as DocumentData | undefined;
+            const lastAt = td?.lastLocation?.at ?? null;
+            const status = td?.status ?? "active";
+            setState(prev => ({ ...prev, lastLocationAt: lastAt }));
+            if (status !== "active") {
+              // Trip ended -> stop showing passenger data for this card
+              unsubPassenger?.();
+              setState({ tripId: null, passenger: null, lastLocationAt: lastAt, loading: false });
+            }
+          },
+          (err) => {
+            console.error(`[Parent] Trip listener ${tripId} error:`, err);
+          }
+        );
+
+        // 3) Subscribe to passenger status
+        // Primary path: doc id == studentId
+        const passengerRef = sdoc(student.schoolId, "trips", tripId, "passengers", student.id);
+        unsubPassenger = onSnapshot(
+          passengerRef,
+          (p) => {
+            if (cancelled) return;
+            if (p.exists()) {
+              setState(prev => ({ ...prev, passenger: p.data() as TripPassenger, loading: false }));
+            } else {
+              // Fallback: some seeds use random doc ids; look up by field
+              (async () => {
+                try {
+                  const alt = await getDocs(
+                    query(
+                      scol(student.schoolId, "trips", tripId, "passengers"),
+                      where("studentId", "==", student.id),
+                      limit(1)
+                    )
+                  );
+                  const found = alt.docs[0];
+                  setState(prev => ({
+                    ...prev,
+                    passenger: found ? (found.data() as TripPassenger) : null,
+                    loading: false,
+                  }));
+                } catch (e) {
+                  console.error("[Parent] Passenger fallback query failed:", e);
+                  setState(prev => ({ ...prev, passenger: null, loading: false }));
+                }
+              })();
+            }
+          },
+          (err) => {
+            // If you see "Missing or insufficient permissions" here,
+            // create schools/{sid}/users/{PARENT_UID} with role:"parent"
+            console.error(`[Parent] Passenger listener ${student.id} error:`, err);
+            if (!cancelled) setState(prev => ({ ...prev, passenger: null, loading: false }));
+          }
+        );
+      } catch (e) {
+        console.error("[Parent] run() failed:", e);
         setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
-        return;
       }
-
-      const tripId = snap.docs[0].id;
-      setState(prev => ({ ...prev, tripId }));
-
-      // Listen to passenger row
-      const passengerRef = sdoc(student.schoolId, "trips", tripId, "passengers", student.id);
-      unsubPassenger = onSnapshot(
-        passengerRef,
-        (docSnap) => {
-          if (isCancelled) return;
-          const passengerData = docSnap.exists() ? (docSnap.data() as TripPassenger) : null;
-          console.log(`[Passenger Sub] Student ${student.id}:`, passengerData);
-          setState(prev => ({
-            ...prev,
-            passenger: passengerData
-          }));
-        },
-        (err) => console.error(`[Parent] Passenger listener for ${student.id} failed:`, err)
-      );
-
-      // Listen to trip (for lastLocation.at)
-      const tripRef = sdoc(student.schoolId, "trips", tripId);
-      unsubTrip = onSnapshot(
-        tripRef,
-        (docSnap) => {
-          if (isCancelled) return;
-          const tripData = docSnap.data() as DocumentData | undefined;
-          const lastLocation = tripData?.lastLocation?.at ?? null;
-          console.log(`[Trip Sub] Trip ${tripId} lastLocation.at:`, lastLocation);
-          setState(prev => ({ ...prev, lastLocationAt: lastLocation }));
-        },
-        (err) => console.error(`[Parent] Trip listener for ${tripId} failed:`, err)
-      );
-
-      setState(prev => ({ ...prev, loading: false }));
     }
 
-    findTripAndSubscribe();
-
+    run();
     return () => {
-      isCancelled = true;
+      cancelled = true;
       unsubPassenger?.();
       unsubTrip?.();
     };
   }, [student.id, student.schoolId]);
+
 
   const statusBadge = useMemo(() => {
     if (state.loading) return <Skeleton className="h-6 w-24" />;
@@ -209,28 +228,31 @@ function StudentCard({ student }: { student: Student }) {
     }
 
     const s = state.passenger.status;
-    if (s === "boarded")
+    if (s === "boarded") {
       return (
         <Badge className="bg-blue-100 text-blue-800 border-blue-200">
           <Bus className="mr-1 h-3 w-3" />
           On Bus
         </Badge>
       );
-    if (s === "dropped")
+    }
+    if (s === "dropped") {
       return (
         <Badge className="bg-green-100 text-green-800 border-green-200">
           <CheckCircle className="mr-1 h-3 w-3" />
           Dropped Off
         </Badge>
       );
-    if (s === "absent")
+    }
+    if (s === "absent") {
       return (
         <Badge variant="destructive">
           <XCircle className="mr-1 h-3 w-3" />
           Marked Absent
         </Badge>
       );
-
+    }
+    // pending
     return (
       <Badge variant="secondary">
         <Footprints className="mr-1 h-3 w-3" />
@@ -250,13 +272,12 @@ function StudentCard({ student }: { student: Student }) {
   }, [state.passenger, state.lastLocationAt]);
 
   const timeLabel = useMemo(() => {
-    if (!state.passenger) return "Updated ";
-    const s = state.passenger.status;
+    const s = state.passenger?.status;
     if (s === "dropped") return "Dropped ";
     if (s === "boarded") return "Boarded ";
     if (s === "absent") return "Marked ";
     return "Updated ";
-  }, [state.passenger]);
+  }, [state.passenger?.status]);
 
   return (
     <Card>
@@ -335,30 +356,26 @@ export default function ParentDashboardPage() {
       setError(null);
 
       try {
-        // 1) get linked student IDs
-        const parentLinkRef = sdoc(profile.schoolId, "parentStudents", user.uid);
-        const linkDocSnap = await getDoc(parentLinkRef);
-        const idsAll: string[] = (linkDocSnap.exists() && linkDocSnap.data().studentIds) || [];
+        // parentStudents/{parentUid}.studentIds = [studentId,...]
+        const linkRef = sdoc(profile.schoolId, "parentStudents", user.uid);
+        const linkSnap = await getDoc(linkRef);
+        const studentIds: string[] = (linkSnap.exists() && linkSnap.data().studentIds) || [];
 
-        if (idsAll.length === 0) {
+        if (studentIds.length === 0) {
           setStudents([]);
           setLoading(false);
           return;
         }
 
-        // 2) Firestore "in" is limited to 10 IDs → chunk queries
-        const CHUNK = 10;
-        const out: Student[] = [];
-        for (let i = 0; i < idsAll.length; i += CHUNK) {
-          const ids = idsAll.slice(i, i + CHUNK);
-          const qStudents = query(scol(profile.schoolId, "students"), where("__name__", "in", ids));
-          const snap = await getDocs(qStudents);
-          snap.docs.forEach(d =>
-            out.push({ id: d.id, ...(d.data() as any), schoolId: profile.schoolId })
-          );
-        }
-
-        setStudents(out);
+        const studentsQ = query(
+          scol(profile.schoolId, "students"),
+          where("__name__", "in", studentIds.slice(0, 30))
+        );
+        const studentsSnap = await getDocs(studentsQ);
+        const rows = studentsSnap.docs.map(
+          (d) => ({ id: d.id, ...d.data(), schoolId: profile.schoolId } as Student)
+        );
+        setStudents(rows);
       } catch (e: any) {
         console.error("Failed to fetch parent data:", e);
         setError(e.message || "An unknown error occurred.");
@@ -367,9 +384,7 @@ export default function ParentDashboardPage() {
       }
     };
 
-    if (!profileLoading && profile) {
-      fetchChildrenData();
-    }
+    if (!profileLoading && profile) fetchChildrenData();
   }, [user, profile, profileLoading]);
 
   if (loading || profileLoading) return <LoadingState />;
@@ -405,8 +420,8 @@ export default function ParentDashboardPage() {
             </div>
           )}
 
-          {students.map((c) => (
-            <StudentCard key={c.id} student={c} />
+          {students.map((s) => (
+            <StudentCard key={s.id} student={s} />
           ))}
         </CardContent>
       </Card>
