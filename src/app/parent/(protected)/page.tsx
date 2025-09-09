@@ -1,8 +1,6 @@
-
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { db } from "@/lib/firebase";
 import type { UserProfile } from "@/lib/useProfile";
 import {
   query,
@@ -12,11 +10,11 @@ import {
   orderBy,
   limit,
   Timestamp,
-  DocumentData,
-  doc,
-  collection,
+  type DocumentData,
+  getDoc,
 } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
+import { formatRelative } from "@/lib/utils";
 
 import {
   Card,
@@ -40,7 +38,6 @@ import {
   HelpCircle,
   Hourglass,
 } from "lucide-react";
-import { formatRelative } from "@/lib/utils";
 
 /* ---------------- types ---------------- */
 
@@ -67,7 +64,69 @@ type ChildStatus = {
   tripId?: string | null;
   tripStatus?: TripPassenger | null;
   lastLocationUpdate?: Timestamp | null;
+  tripEnded?: boolean;
 };
+
+/* --------------- helpers --------------- */
+
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return Timestamp.fromDate(d);
+};
+
+/**
+ * Find the most relevant trip for a student:
+ * 1) Prefer an ACTIVE trip that lists the student in `passengers` (array-contains).
+ * 2) Otherwise pick TODAY's latest trip where /passengers/{studentId} exists.
+ */
+async function findRelevantTripIdForStudent(schoolId: string, studentId: string): Promise<string | null> {
+  // 1) Try active trip first (fast path)
+  try {
+    const activeQ = query(
+      scol(schoolId, "trips"),
+      where("status", "==", "active"),
+      where("passengers", "array-contains", studentId),
+      orderBy("startedAt", "desc"),
+      limit(1)
+    );
+    const activeSnap = await getDocs(activeQ);
+    if (!activeSnap.empty) {
+      return activeSnap.docs[0].id;
+    }
+  } catch (err) {
+    // If there’s no composite index yet, or rules reject, we fall back to path #2.
+    // console.warn("[Parent] Active trip query fallback:", err);
+  }
+
+  // 2) Fallback: today’s trips (newest first) — pick the first that actually has a passenger doc
+  try {
+    const todayQ = query(
+      scol(schoolId, "trips"),
+      where("startedAt", ">=", startOfToday()),
+      orderBy("startedAt", "desc"),
+      limit(10)
+    );
+    const todaySnap = await getDocs(todayQ);
+    if (todaySnap.empty) return null;
+
+    // Check passenger doc existence on the client (no extra index required)
+    for (const d of todaySnap.docs) {
+      try {
+        const pSnap = await getDoc(
+          sdoc(schoolId, "trips", d.id, "passengers", studentId)
+        );
+        if (pSnap.exists()) return d.id;
+      } catch {
+        // ignore and continue
+      }
+    }
+  } catch (err) {
+    // console.warn("[Parent] Fallback query failed:", err);
+  }
+
+  return null;
+}
 
 /* --------------- child card --------------- */
 
@@ -76,6 +135,7 @@ function StudentCard({ student }: { student: Student }) {
     tripId: null,
     tripStatus: null,
     lastLocationUpdate: null,
+    tripEnded: false,
   });
   const [loading, setLoading] = useState(true);
 
@@ -84,58 +144,56 @@ function StudentCard({ student }: { student: Student }) {
     let unsubTrip: (() => void) | null = null;
     let cancelled = false;
 
-    const fetchTripAndListen = async () => {
-        setLoading(true);
+    async function wireUp() {
+      setLoading(true);
 
-        const tripsQ = query(
-          scol(student.schoolId, 'trips'),
-          where('status', '==', 'active'), 
-          where('passengers', 'array-contains', student.id),
-          orderBy('startedAt', 'desc'),
-          limit(1)
-        );
+      const tripId = await findRelevantTripIdForStudent(student.schoolId, student.id);
 
-        try {
-            const tripsSnap = await getDocs(tripsQ);
-            if (cancelled) return;
+      if (cancelled) return;
 
-            const t = tripsSnap.docs[0];
-            if (!t) {
-                setState({ tripId: null, tripStatus: null, lastLocationUpdate: null });
-                setLoading(false);
-                return;
-            }
+      if (!tripId) {
+        // No trip today with this student
+        setState({ tripId: null, tripStatus: null, lastLocationUpdate: null, tripEnded: false });
+        setLoading(false);
+        return;
+      }
 
-            const tripId = t.id;
-            setState(prev => ({ ...prev, tripId }));
+      setState((prev) => ({ ...prev, tripId }));
 
-            // Listener for passenger status
-            const passengerRef = sdoc(student.schoolId, 'trips', tripId, 'passengers', student.id);
-            unsubPassenger = onSnapshot(passengerRef, (snap) => {
-                if (!cancelled) {
-                    setState(prev => ({ ...prev, tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null }));
-                }
-            }, (err) => console.error(`[Parent] Passenger listener for ${student.id} failed:`, err));
+      // Listen to passenger row
+      const passengerRef = sdoc(student.schoolId, "trips", tripId, "passengers", student.id);
+      unsubPassenger = onSnapshot(
+        passengerRef,
+        (snap) => {
+          if (cancelled) return;
+          setState((prev) => ({
+            ...prev,
+            tripStatus: snap.exists() ? (snap.data() as TripPassenger) : null,
+          }));
+        },
+        (err) => console.error(`[Parent] Passenger listener for ${student.id} failed:`, err)
+      );
 
-            // Listener for trip's last location update
-            const tripRef = sdoc(student.schoolId, 'trips', tripId);
-            unsubTrip = onSnapshot(tripRef, (snap) => {
-                 if (!cancelled) {
-                    const tripData = snap.data() as DocumentData | undefined;
-                    setState(prev => ({ ...prev, lastLocationUpdate: tripData?.lastLocation?.at ?? null }));
-                 }
-            }, (err) => console.error(`[Parent] Trip listener for ${tripId} failed:`, err));
+      // Listen to trip for lastLocation and whether trip ended
+      const tripRef = sdoc(student.schoolId, "trips", tripId);
+      unsubTrip = onSnapshot(
+        tripRef,
+        (snap) => {
+          if (cancelled) return;
+          const t = snap.data() as (DocumentData & { lastLocation?: { at?: Timestamp }; status?: string }) | undefined;
+          setState((prev) => ({
+            ...prev,
+            lastLocationUpdate: t?.lastLocation?.at ?? null,
+            tripEnded: t?.status === "ended",
+          }));
+        },
+        (err) => console.error(`[Parent] Trip listener for ${tripId} failed:`, err)
+      );
 
-        } catch (err) {
-            console.error(`[Parent] Error fetching trip for student ${student.id}:`, err);
-        } finally {
-            if (!cancelled) {
-                setLoading(false);
-            }
-        }
-    };
-    
-    fetchTripAndListen();
+      setLoading(false);
+    }
+
+    wireUp();
 
     return () => {
       cancelled = true;
@@ -146,25 +204,27 @@ function StudentCard({ student }: { student: Student }) {
 
   const statusBadge = useMemo(() => {
     if (loading) return <Skeleton className="h-6 w-24" />;
-    
+
+    // No relevant trip today
     if (!state.tripId) {
       return (
         <Badge variant="outline">
           <Hourglass className="mr-1 h-3 w-3" />
-          No active trip
+          No trip today
         </Badge>
       );
     }
-    
+
     const s = state.tripStatus?.status;
     if (!s) {
-       return (
+      return (
         <Badge variant="outline">
           <HelpCircle className="mr-1 h-3 w-3" />
           No trip data
         </Badge>
       );
     }
+
     if (s === "boarded")
       return (
         <Badge className="bg-blue-100 text-blue-800 border-blue-200">
@@ -186,6 +246,7 @@ function StudentCard({ student }: { student: Student }) {
           Marked Absent
         </Badge>
       );
+
     return (
       <Badge variant="secondary">
         <Footprints className="mr-1 h-3 w-3" />
@@ -194,12 +255,13 @@ function StudentCard({ student }: { student: Student }) {
     );
   }, [loading, state.tripStatus, state.tripId]);
 
-  const primaryTime =
+  // Show the most meaningful time: droppedAt > boardedAt > last bus ping
+  const primaryTime: Timestamp | null =
     state.tripStatus?.status === "dropped"
-      ? state.tripStatus?.droppedAt
+      ? state.tripStatus?.droppedAt ?? null
       : state.tripStatus?.status === "boarded"
-      ? state.tripStatus?.boardedAt
-      : state.lastLocationUpdate;
+      ? state.tripStatus?.boardedAt ?? null
+      : state.lastLocationUpdate ?? null;
 
   return (
     <Card>
@@ -226,7 +288,14 @@ function StudentCard({ student }: { student: Student }) {
         {!!primaryTime && (
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Clock className="h-4 w-4" />
-            <span>Updated {formatRelative(primaryTime)}</span>
+            <span>
+              {state.tripEnded && state.tripStatus?.status === "dropped"
+                ? "Dropped "
+                : state.tripStatus?.status === "boarded"
+                ? "Boarded "
+                : "Updated "}
+              {formatRelative(primaryTime)}
+            </span>
           </div>
         )}
       </CardContent>
@@ -317,11 +386,14 @@ export default function ParentDashboardPage({ profile, childrenData }: ParentDas
 }
 
 /**
- * 🔧 Composite index needed for the query on this page (create once via console link if prompted):
- * Collection: trips
- * Fields:
- * 1. schoolId (==)
- * 2. status (==)
- * 3. passengers (array-contains)
- * 4. startedAt (desc)
+ * If you want to also allow the "active" + "array-contains" + "orderBy startedAt" query
+ * (first fast path) without falling back, create this composite index:
+ * 
+ * Collection group: schools/{schoolId}/trips
+ * Fields (in order):
+ *   status == 
+ *   passengers array-contains
+ *   startedAt desc
+ * 
+ * Otherwise the fallback path (today’s trips + passenger doc existence) will still work.
  */
