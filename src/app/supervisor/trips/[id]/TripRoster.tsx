@@ -59,7 +59,7 @@ async function recalcTripCounts(schoolId: string, tripId: string) {
     });
 
     const tripRef = sdoc(schoolId, "trips", tripId);
-    await updateDoc(tripRef, { counts, updatedAt: serverTimestamp() });
+    await updateDoc(tripRef, { counts: counts, updatedAt: serverTimestamp() });
 }
 
 
