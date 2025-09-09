@@ -26,13 +26,14 @@ import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, d
 import { formatRelative } from "@/lib/utils";
 import { scol, sdoc } from "@/lib/schoolPath";
 
-interface Notification {
+export interface Notification {
     id: string;
     title: string;
     body: string;
     createdAt: Timestamp;
     read: boolean;
     data?: {
+      kind?: "passengerStatus",
       studentName?: string;
       studentId?: string;
       status?: string;
@@ -89,17 +90,12 @@ function useInbox() {
 
   const handleMarkAsRead = useCallback(async () => {
     if (!user?.uid) return;
-    const schoolFirst = !!profile?.schoolId;
+    
+    // This can fail if profile.schoolId is not available, so we check.
+    const schoolPath = profile?.schoolId ? sdoc(profile.schoolId, `users/${user.uid}/inbox`, "_dummy").parent : null;
+    const rootPath = collection(db, "users", user.uid, "inbox");
 
-    const bases = [
-      schoolFirst && profile?.schoolId
-        ? sdoc(profile.schoolId, `users/${user.uid}/inbox`, "_dummy").parent
-        : collection(db, "users", user.uid, "inbox"),
-      // fallback other branch
-      schoolFirst
-        ? collection(db, "users", user.uid, "inbox")
-        : (profile?.schoolId ? sdoc(profile.schoolId, `users/${user.uid}/inbox`, "_dummy").parent : null),
-    ].filter(Boolean);
+    const bases = [schoolPath, rootPath].filter(Boolean);
 
     const toMark = items.filter((i) => !i.read).slice(0, 25);
     if (toMark.length === 0) return;
@@ -111,9 +107,10 @@ function useInbox() {
         const batch = writeBatch(db);
         toMark.forEach((n) => batch.update(doc(base, n.id), { read: true, readAt: serverTimestamp() }));
         await batch.commit();
-        break;
+        break; // Success, no need to try the other path
       } catch (_) {
-        // try next branch
+        // This might fail if the collection path is wrong (e.g., trying school path when user doc is at root).
+        // The loop will then try the next path.
       }
     }
   }, [items, user?.uid, profile?.schoolId]);
@@ -275,6 +272,14 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   if (profile.role !== 'parent') {
     return <AccessDeniedScreen message="Access Denied" details={`Your role is '${profile.role}'. You must have the 'parent' role to access this page.`} />;
   }
+
+  // Clone the child and pass notifications down as a prop
+  const childrenWithProps = React.Children.map(children, child => {
+    if (React.isValidElement(child)) {
+      return React.cloneElement(child, { notifications } as any);
+    }
+    return child;
+  });
   
   return (
     <div className="flex min-h-screen w-full flex-col">
@@ -284,7 +289,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         onMarkAsRead={handleMarkAsRead}
       />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
-        {children}
+        {childrenWithProps}
       </main>
       {user && <DebugBanner user={user} profile={profile} loading={profileLoading} />}
     </div>

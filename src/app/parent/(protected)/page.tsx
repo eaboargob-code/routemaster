@@ -1,7 +1,8 @@
 
+
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useProfile } from "@/lib/useProfile";
 import {
   query,
@@ -26,7 +27,12 @@ import {
   Frown,
   Bus,
   Route as RouteIcon,
+  UserX,
+  ArrowDownCircle,
+  Clock,
 } from "lucide-react";
+import type { Notification } from "./layout";
+import { Badge } from "@/components/ui/badge";
 
 /* ---------------- types ---------------- */
 
@@ -40,46 +46,84 @@ type Student = {
 
 /* --------------- child card --------------- */
 
-function StudentCard({ student }: { student: Student }) {
-  // The live status updates are now handled by the notification bell in the layout.
-  // This card can now be a simple, static display of the student's assignment.
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-row items-start justify-between">
-          <div>
-            <CardTitle>{student.name}</CardTitle>
-            <CardDescription className="flex flex-col gap-1 mt-2">
-              {student.busCode ? (
-                <span className="flex items-center gap-2">
-                  <Bus className="h-4 w-4" /> {student.busCode}
-                </span>
-              ) : (
-                <span className="flex items-center gap-2 text-muted-foreground">
-                  <Bus className="h-4 w-4" /> No bus assigned
-                </span>
-              )}
-              {student.routeName ? (
-                <span className="flex items-center gap-2">
-                  <RouteIcon className="h-4 w-4" /> {student.routeName}
-                </span>
-              ) : (
-                 <span className="flex items-center gap-2 text-muted-foreground">
-                  <RouteIcon className="h-4 w-4" /> No route assigned
-                </span>
-              )}
-            </CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-    </Card>
-  );
+function StudentCard({ student, notifications }: { student: Student, notifications: Notification[] }) {
+    const latestStatusNotification = useMemo(() => {
+        return notifications
+            .filter(n => n.data?.kind === 'passengerStatus' && n.data?.studentId === student.id)
+            .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis())
+            [0];
+    }, [notifications, student.id]);
+
+    const status = latestStatusNotification?.data?.status || 'pending';
+    const statusText = latestStatusNotification?.body || `Awaiting check-in for ${student.name}.`;
+
+    const getStatusBadge = () => {
+        const badgeContent: Record<string, React.ReactNode> = {
+            pending: <><Clock className="h-3 w-3 mr-1.5" />Awaiting Check-in</>,
+            boarded: <><Bus className="h-3 w-3 mr-1.5" />On Bus</>,
+            dropped: <><ArrowDownCircle className="h-3 w-3 mr-1.5" />Dropped Off</>,
+            absent: <><UserX className="h-3 w-3 mr-1.5" />Marked Absent</>,
+        };
+
+        return (
+            <Badge
+                variant={
+                    status === 'boarded'
+                    ? 'default'
+                    : status === 'dropped'
+                    ? 'secondary'
+                    : status === 'absent'
+                    ? 'destructive'
+                    : 'outline'
+                }
+                className="capitalize"
+            >
+                {badgeContent[status] || status}
+            </Badge>
+        );
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <div className="flex flex-row items-start justify-between">
+                <div>
+                    <CardTitle>{student.name}</CardTitle>
+                    <CardDescription className="flex flex-col gap-1 mt-2">
+                    {student.busCode ? (
+                        <span className="flex items-center gap-2">
+                        <Bus className="h-4 w-4" /> {student.busCode}
+                        </span>
+                    ) : (
+                        <span className="flex items-center gap-2 text-muted-foreground">
+                        <Bus className="h-4 w-4" /> No bus assigned
+                        </span>
+                    )}
+                    {student.routeName ? (
+                        <span className="flex items-center gap-2">
+                        <RouteIcon className="h-4 w-4" /> {student.routeName}
+                        </span>
+                    ) : (
+                        <span className="flex items-center gap-2 text-muted-foreground">
+                        <RouteIcon className="h-4 w-4" /> No route assigned
+                        </span>
+                    )}
+                    </CardDescription>
+                </div>
+                {getStatusBadge()}
+                </div>
+            </CardHeader>
+             <CardContent>
+                <p className="text-sm text-muted-foreground">{statusText}</p>
+            </CardContent>
+        </Card>
+    );
 }
 
 
 /* --------------- page --------------- */
 
-export default function ParentDashboardPage() {
+export default function ParentDashboardPage({ notifications = [] }: { notifications?: Notification[] }) {
   const { user, profile, loading: profileLoading } = useProfile();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
@@ -188,7 +232,7 @@ export default function ParentDashboardPage() {
           )}
 
           {students.map((s) => (
-            <StudentCard key={s.id} student={s} />
+            <StudentCard key={s.id} student={s} notifications={notifications} />
           ))}
         </CardContent>
       </Card>
