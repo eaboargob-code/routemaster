@@ -52,16 +52,6 @@ import {
 
 /* ---------------- types ---------------- */
 
-type Student = {
-  id: string;
-  name: string;
-  schoolId: string;
-  assignedRouteId?: string;
-  assignedBusId?: string;
-  routeName?: string;
-  busCode?: string;
-};
-
 type TripPassenger = {
   status: "boarded" | "absent" | "dropped" | "pending";
   studentId: string;
@@ -97,138 +87,78 @@ function StudentCard({ student }: { student: Student }) {
   });
 
   useEffect(() => {
-    let unsubActiveTrip: (() => void) | null = null;
-    let unsubTripDoc: (() => void) | null = null;
-    let unsubPassengerDoc: (() => void) | null = null;
+    let unsubTrip: (() => void) | null = null;
+    let unsubPassenger: (() => void) | null = null;
     let cancelled = false;
-    let currentTripId: string | null = null;
-
-    function cleanupTripSubs() {
-        unsubTripDoc?.();
-        unsubTripDoc = null;
-        unsubPassengerDoc?.();
-        unsubPassengerDoc = null;
-    }
-
-    setState({ tripId: null, passenger: null, lastLocationAt: null, loading: true });
-
-    if (!student.schoolId || !student.id) {
+  
+    async function findAndSubscribeToTrip() {
+      if (!student.schoolId || !student.id || cancelled) {
         setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
         return;
-    }
-
-    // LIVE listener for today's active trip that contains this student
-    const qActive = query(
+      }
+      setState({ tripId: null, passenger: null, lastLocationAt: null, loading: true });
+  
+      // Query for the most recent trip containing the student today (active or ended)
+      const tripsQuery = query(
         scol(student.schoolId, "trips"),
-        where("status", "==", "active"),
         where("passengers", "array-contains", student.id),
         where("startedAt", ">=", startOfToday()),
         orderBy("startedAt", "desc"),
         limit(1)
-    );
-
-    unsubActiveTrip = onSnapshot(
-        qActive,
-        async (qsnap) => {
-            if (cancelled) return;
-
-            // If there is no active trip, clear UI and stop trip/passenger listeners
-            if (qsnap.empty) {
-                currentTripId = null;
-                cleanupTripSubs();
-                setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
-                return;
-            }
-
-            const doc0 = qsnap.docs[0];
-            const tripId = doc0.id;
-
-            // If active trip switched, resubscribe
-            if (tripId !== currentTripId) {
-                currentTripId = tripId;
-                cleanupTripSubs();
-                setState(prev => ({ ...prev, tripId, loading: true }));
-
-                // Trip document listener (status + lastLocation.at)
-                const tripRef = sdoc(student.schoolId, "trips", tripId);
-                unsubTripDoc = onSnapshot(
-                    tripRef,
-                    (t) => {
-                        if (cancelled) return;
-                        const td = t.data() as DocumentData | undefined;
-                        const lastAt = td?.lastLocation?.at ?? null;
-                        const status = td?.status ?? "active";
-
-                        // This is the fix: only update the location and loading state,
-                        // preserving the passenger data from the other listener.
-                        setState(prev => ({ ...prev, lastLocationAt: lastAt, loading: false }));
-
-                        if (status !== "active") {
-                            // Trip ended -> clear and wait for a new active trip
-                            cleanupTripSubs();
-                            setState(prev => ({ ...prev, tripId: null, passenger: null, loading: false }));
-                        }
-                    },
-                    (err) => {
-                        console.error(`[Parent] Trip listener ${tripId} error:`, err);
-                    }
-                );
-
-                // Passenger doc listener (status/boarded/dropped)
-                const primaryPassRef = sdoc(student.schoolId, "trips", tripId, "passengers", student.id);
-                unsubPassengerDoc = onSnapshot(
-                    primaryPassRef,
-                    async (p) => {
-                        if (cancelled) return;
-
-                        if (p.exists()) {
-                            setState(prev => ({ ...prev, passenger: p.data() as TripPassenger, loading: false }));
-                            return;
-                        }
-
-                        // Fallback: passenger doc id might be random; look by studentId
-                        try {
-                            const alt = await getDocs(
-                                query(
-                                    scol(student.schoolId, "trips", tripId, "passengers"),
-                                    where("studentId", "==", student.id),
-                                    limit(1)
-                                )
-                            );
-                            const found = alt.docs[0];
-                            setState(prev => ({
-                                ...prev,
-                                passenger: found ? (found.data() as TripPassenger) : null,
-                                loading: false,
-                            }));
-                        } catch (e) {
-                            console.error("[Parent] Passenger fallback query failed:", e);
-                            setState(prev => ({ ...prev, passenger: null, loading: false }));
-                        }
-                    },
-                    (err) => {
-                        // If you get permission errors here, ensure the parent has schools/{sid}/users/{uid} with role: "parent"
-                        console.error(`[Parent] Passenger listener (${student.id}) error:`, err);
-                        setState(prev => ({ ...prev, passenger: null, loading: false }));
-                    }
-                );
-            } else {
-                // Same active trip; ensure not stuck in loading
-                setState(prev => ({ ...prev, loading: false }));
-            }
-        },
-        (err) => {
-            console.error("[Parent] Active trip query listener error:", err);
-            setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
+      );
+  
+      try {
+        const tripSnap = await getDocs(tripsQuery);
+        if (cancelled || tripSnap.empty) {
+          setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
+          return;
         }
-    );
-
+  
+        const tripDoc = tripSnap.docs[0];
+        const tripId = tripDoc.id;
+        const tripData = tripDoc.data();
+  
+        setState(prev => ({ ...prev, tripId, lastLocationAt: tripData.lastLocation?.at ?? null }));
+  
+        // Subscribe to Trip document for location updates and status changes
+        const tripRef = sdoc(student.schoolId, "trips", tripId);
+        unsubTrip = onSnapshot(tripRef, (t) => {
+          if (cancelled) return;
+          const data = t.data();
+          console.log(`[Parent] Trip listener for ${tripId}:`, data);
+          const lastAt = data?.lastLocation?.at ?? null;
+          // Only update location, don't overwrite passenger state
+          setState(prev => ({ ...prev, lastLocationAt: lastAt }));
+        });
+  
+        // Subscribe to Passenger document for status changes
+        const passengerRef = sdoc(student.schoolId, "trips", tripId, "passengers", student.id);
+        unsubPassenger = onSnapshot(passengerRef, (p) => {
+          if (cancelled) return;
+          const passengerData = p.data() as TripPassenger | undefined;
+          console.log(`[Parent] Passenger listener for ${student.id} in trip ${tripId}:`, passengerData);
+          setState(prev => ({ ...prev, passenger: passengerData || null, loading: false }));
+        }, (err) => {
+          console.error(`[Parent] Passenger listener error for ${student.id}:`, err);
+          if (!cancelled) setState(prev => ({ ...prev, loading: false }));
+        });
+  
+      } catch (err) {
+        console.error(`[Parent] Error finding trip for student ${student.id}:`, err);
+        if (!cancelled) {
+          setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
+        }
+      }
+    }
+  
+    findAndSubscribeToTrip();
+  
     return () => {
-        cancelled = true;
-        unsubActiveTrip?.();
-        cleanupTripSubs();
+      cancelled = true;
+      unsubTrip?.();
+      unsubPassenger?.();
     };
-}, [student.id, student.schoolId]);
+  }, [student.id, student.schoolId]);
 
 
   const statusBadge = useMemo(() => {
