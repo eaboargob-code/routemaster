@@ -103,8 +103,8 @@ export const updateTripCounts = onDocumentWritten(
             // Get all passengers for the trip
             const passengersSnap = await db.collection(`schools/${schoolId}/trips/${tripId}/passengers`).get();
             
-            // Calculate counts
-            const counts = {
+            // Explicitly initialize all possible statuses to 0
+            const counts: Record<"pending" | "boarded" | "dropped" | "absent", number> = {
                 pending: 0,
                 boarded: 0,
                 dropped: 0,
@@ -113,10 +113,9 @@ export const updateTripCounts = onDocumentWritten(
 
             passengersSnap.forEach(doc => {
                 const passenger = doc.data() as Passenger;
-                if (passenger.status) {
-                    counts[passenger.status]++;
-                } else {
-                    counts.pending++;
+                const status = passenger.status || "pending";
+                if (counts.hasOwnProperty(status)) {
+                    counts[status]++;
                 }
             });
 
