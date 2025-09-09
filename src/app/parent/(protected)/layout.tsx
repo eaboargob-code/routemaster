@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, serverTimestamp } from "firebase/firestore";
 import { formatRelative } from "@/lib/utils";
+import { scol, sdoc } from "@/lib/schoolPath";
 
 interface Notification {
     id: string;
@@ -40,47 +41,85 @@ interface Notification {
 
 // --- useInbox Hook ---
 function useInbox() {
-  const { user } = useProfile();
+  const { user, profile } = useProfile();
   const [items, setItems] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     if (!user?.uid) return;
 
-    const q = query(
-      collection(db, `users/${user.uid}/inbox`),
-      orderBy("createdAt", "desc"),
-      limit(25)
-    );
+    let unsub: (() => void) | null = null;
+    let cancelled = false;
 
-    const unsub = onSnapshot(q, (snap) => {
-      const rows: Notification[] = [];
-      snap.forEach(d => rows.push({ id: d.id, ...(d.data() as any) }));
-      setItems(rows);
-      setUnreadCount(rows.filter(r => !r.read).length);
-    }, (err) => {
-      console.error("[Inbox] listener error:", err);
-    });
+    const attach = (pathKind: "school" | "top") => {
+      const base =
+        pathKind === "school" && profile?.schoolId
+          ? scol(profile.schoolId, `users/${user.uid}/inbox`)
+          : collection(db, "users", user.uid, "inbox");
 
-    return () => unsub();
-  }, [user?.uid]);
-  
+      const qy = query(base, orderBy("createdAt", "desc"), limit(25));
+      return onSnapshot(
+        qy,
+        (snap) => {
+          if (cancelled) return;
+          const rows: Notification[] = [];
+          snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+          setItems(rows);
+          setUnreadCount(rows.filter((r) => !r.read).length);
+        },
+        (err) => {
+          console.error("[Inbox] listener error:", err);
+          // Only fallback once: if school path failed, try top-level
+          if (pathKind === "school") {
+            unsub?.();
+            unsub = attach("top");
+          }
+        }
+      );
+    };
+
+    // prefer school path, then fallback
+    unsub = attach("school");
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [user?.uid, profile?.schoolId]);
+
   const handleMarkAsRead = useCallback(async () => {
     if (!user?.uid) return;
-    const toMark = items.filter(i => !i.read).slice(0, 25);
+    const schoolFirst = !!profile?.schoolId;
+
+    const bases = [
+      schoolFirst
+        ? sdoc(profile!.schoolId, `users/${user.uid}/inbox`, "_dummy").parent!
+        : collection(db, "users", user.uid, "inbox"),
+      // fallback other branch
+      schoolFirst
+        ? collection(db, "users", user.uid, "inbox")
+        : sdoc(profile!.schoolId, `users/${user.uid}/inbox`, "_dummy").parent!,
+    ];
+
+    const toMark = items.filter((i) => !i.read).slice(0, 25);
     if (toMark.length === 0) return;
 
-    const batch = writeBatch(db);
-    toMark.forEach(n => {
-        const notifRef = doc(db, `users/${user.uid}/inbox`, n.id);
-        batch.update(notifRef, { read: true, readAt: serverTimestamp() });
-    });
-    
-    await batch.commit().catch(err => console.error("Failed to mark notifications as read", err));
-  }, [user?.uid, items]);
+    // try both branches; whichever exists will succeed
+    for (const base of bases) {
+      try {
+        const batch = writeBatch(db);
+        toMark.forEach((n) => batch.update(doc(base, n.id), { read: true, readAt: serverTimestamp() }));
+        await batch.commit();
+        break;
+      } catch (_) {
+        // try next branch
+      }
+    }
+  }, [items, user?.uid, profile?.schoolId]);
 
   return { items, unreadCount, handleMarkAsRead };
 }
+
 
 function Header({ notifications, unreadCount, onMarkAsRead }: { notifications: Notification[], unreadCount: number, onMarkAsRead: () => void }) {
     const router = useRouter();
