@@ -23,7 +23,6 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { collection, onSnapshot, query, orderBy, limit, Timestamp, writeBatch, doc, getDoc, where, getDocs, serverTimestamp } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
-import ParentDashboardPage from "./page";
 import { formatRelative } from "@/lib/utils";
 
 interface Notification {
@@ -229,13 +228,13 @@ export function ParentGuard({ children }: { children: ReactNode }) {
           return;
         }
 
-        const studentsSnapshot = await getDocs(query(
+        const studentsQuery = query(
             scol(profile.schoolId, "students"), 
-            where("__name__", "in", studentIds.slice(0, 30)))
+            where("__name__", "in", studentIds.slice(0, 30))
         );
-
-        const studentData = studentsSnapshot.docs
-            .map((d) => ({ id: d.id, ...d.data(), schoolId: profile.schoolId } as Student))
+        
+        const studentsSnapshot = await getDocs(studentsQuery);
+        const studentData = studentsSnapshot.docs.map((d) => ({ id: d.id, ...d.data(), schoolId: profile.schoolId } as Student));
         setChildrenList(studentData);
 
       } catch (e: any) {
@@ -297,6 +296,22 @@ export function ParentGuard({ children }: { children: ReactNode }) {
     return <AccessDeniedScreen message="Access Denied" details={`Your role is '${profile.role}'. You must have the 'parent' role to access this page.`} />;
   }
 
+  // Clone the children and pass them down
+  const childrenWithProps = React.Children.map(children, child => {
+    if (React.isValidElement(child)) {
+      // @ts-ignore
+      return React.cloneElement(child, { 
+         profile: profile,
+         childrenData: {
+            students: childrenList,
+            loading: childrenLoading,
+            error: childrenError,
+         }
+      });
+    }
+    return child;
+  });
+
   return (
     <div className="flex min-h-screen w-full flex-col">
       <Header 
@@ -306,15 +321,7 @@ export function ParentGuard({ children }: { children: ReactNode }) {
         childNameMap={childNameMap}
       />
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8 mb-16">
-         {/* Pass fetched data down to the actual page component */}
-        <ParentDashboardPage 
-            profile={profile}
-            childrenData={{
-                students: childrenList,
-                loading: childrenLoading,
-                error: childrenError,
-            }}
-        />
+        {childrenWithProps}
       </main>
       {user && <DebugBanner user={user} profile={profile} loading={profileLoading} />}
     </div>

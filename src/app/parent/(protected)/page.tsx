@@ -96,7 +96,7 @@ async function findRelevantTripIdForStudent(schoolId: string, studentId: string)
       return activeSnap.docs[0].id;
     }
   } catch (err) {
-    // If there’s no composite index yet, or rules reject, we fall back to path #2.
+    // This will fail if the composite index is missing. That's okay, we'll fall back.
     // console.warn("[Parent] Active trip query fallback:", err);
   }
 
@@ -106,24 +106,26 @@ async function findRelevantTripIdForStudent(schoolId: string, studentId: string)
       scol(schoolId, "trips"),
       where("startedAt", ">=", startOfToday()),
       orderBy("startedAt", "desc"),
-      limit(10)
+      limit(10) // Check the 10 most recent trips today
     );
     const todaySnap = await getDocs(todayQ);
     if (todaySnap.empty) return null;
 
     // Check passenger doc existence on the client (no extra index required)
-    for (const d of todaySnap.docs) {
+    for (const tripDoc of todaySnap.docs) {
       try {
-        const pSnap = await getDoc(
-          sdoc(schoolId, "trips", d.id, "passengers", studentId)
-        );
-        if (pSnap.exists()) return d.id;
+        const passengerDocRef = sdoc(schoolId, "trips", tripDoc.id, "passengers", studentId);
+        const passengerSnap = await getDoc(passengerDocRef);
+        if (passengerSnap.exists()) {
+            return tripDoc.id; // Found a trip with this student on the roster
+        }
       } catch {
-        // ignore and continue
+        // Ignore and continue (e.g., permissions error on a specific subcollection)
       }
     }
   } catch (err) {
-    // console.warn("[Parent] Fallback query failed:", err);
+    // This query might fail if the simple startedAt index is missing.
+    // console.warn("[Parent] Fallback query for today's trips failed:", err);
   }
 
   return null;
@@ -390,11 +392,12 @@ export default function ParentDashboardPage({ profile, childrenData }: ParentDas
  * If you want to also allow the "active" + "array-contains" + "orderBy startedAt" query
  * (first fast path) without falling back, create this composite index:
  * 
- * Collection group: schools/{schoolId}/trips
+ * Collection group: trips
+ * Query scope: COLLECTION_GROUP
  * Fields (in order):
- *   status == 
+ *   status == ASC
  *   passengers array-contains
- *   startedAt desc
+ *   startedAt DESC
  * 
  * Otherwise the fallback path (today’s trips + passenger doc existence) will still work.
  */
