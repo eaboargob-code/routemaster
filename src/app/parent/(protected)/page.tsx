@@ -1,9 +1,9 @@
 /**
- * Parent dashboard — per-child live status + trip totals.
+ * Parent dashboard — robust child status.
  *
- * Required composite index for the active trip query:
+ * One-time index for this query:
  * Collection: schools/{schoolId}/trips
- * Fields (in order):
+ * Fields:
  *   status (==)
  *   passengers (array-contains)
  *   startedAt (desc)
@@ -11,7 +11,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useProfile } from "@/lib/useProfile";
 import {
   query,
@@ -23,6 +23,7 @@ import {
   limit,
   Timestamp,
   type DocumentData,
+  collection,
 } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
 import { formatRelative } from "@/lib/utils";
@@ -49,8 +50,7 @@ import {
   HelpCircle,
   Hourglass,
 } from "lucide-react";
-import type { Notification } from "./layout";
-
+import { Notification } from "./layout";
 
 /* ---------------- types ---------------- */
 
@@ -65,7 +65,7 @@ type Student = {
 };
 
 type TripPassenger = {
-  status: "boarded" | "absent" | "dropped" | "pending";
+  status: "boarded" | "absent" | "dropped" | "pending" | string;
   studentId: string;
   studentName?: string;
   boardedAt?: Timestamp | null;
@@ -73,20 +73,11 @@ type TripPassenger = {
   updatedAt?: Timestamp | null;
 };
 
-type TripCounts = {
-  boarded: number;
-  dropped: number;
-  absent: number;
-  pending: number;
-};
-
 type ChildState = {
   tripId: string | null;
   passenger: TripPassenger | null;
   lastLocationAt: Timestamp | null;
-  counts: TripCounts | null;
   loading: boolean;
-  error?: string | null;
 };
 
 /* --------------- helpers --------------- */
@@ -104,40 +95,39 @@ function StudentCard({ student, notifications }: { student: Student, notificatio
     tripId: null,
     passenger: null,
     lastLocationAt: null,
-    counts: null,
     loading: true,
-    error: null,
   });
 
+  const activePassengerSource = useRef<"docId" | "query" | null>(null);
+
   useEffect(() => {
-    let unsubActiveTrip: (() => void) | null = null;
-    let unsubTripDoc: (() => void) | null = null;
-    let unsubPassengerDoc: (() => void) | null = null;
-    let cancelled = false;
-    let currentTripId: string | null = null;
-
-    function cleanupTripSubs() {
-      unsubTripDoc?.();
-      unsubTripDoc = null;
-      unsubPassengerDoc?.();
-      unsubPassengerDoc = null;
-    }
-
-    setState({
-      tripId: null,
-      passenger: null,
-      lastLocationAt: null,
-      counts: null,
-      loading: true,
-      error: null,
-    });
-
     if (!student.schoolId || !student.id) {
-      setState((s) => ({ ...s, loading: false }));
+      setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
       return;
     }
 
-    // LIVE listener for today's active trip that contains this student
+    let unsubActiveTrip: (() => void) | null = null;
+    let unsubTripDoc: (() => void) | null = null;
+    let unsubPassenger: (() => void) | null = null;
+    let cancelled = false;
+    let currentTripId: string | null = null;
+
+    const cleanupPassengerSubs = () => {
+        unsubPassenger?.();
+        unsubPassenger = null;
+    };
+
+    const cleanupAll = () => {
+      unsubActiveTrip?.();
+      unsubActiveTrip = null;
+      unsubTripDoc?.();
+      unsubTripDoc = null;
+      cleanupPassengerSubs();
+    };
+
+    setState({ tripId: null, passenger: null, lastLocationAt: null, loading: true });
+
+    // LIVE: today's active trip that contains this student
     const qActive = query(
       scol(student.schoolId, "trips"),
       where("status", "==", "active"),
@@ -149,34 +139,25 @@ function StudentCard({ student, notifications }: { student: Student, notificatio
 
     unsubActiveTrip = onSnapshot(
       qActive,
-      async (qsnap) => {
+      (qsnap) => {
         if (cancelled) return;
 
-        // No active trip — clear UI and stop listeners
         if (qsnap.empty) {
           currentTripId = null;
-          cleanupTripSubs();
-          setState({
-            tripId: null,
-            passenger: null,
-            lastLocationAt: null,
-            counts: null,
-            loading: false,
-            error: null,
-          });
+          cleanupPassengerSubs();
+          setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
           return;
         }
 
         const doc0 = qsnap.docs[0];
         const tripId = doc0.id;
 
-        // If active trip changed, resubscribe to trip + passenger docs
         if (tripId !== currentTripId) {
           currentTripId = tripId;
-          cleanupTripSubs();
-          setState((prev) => ({ ...prev, tripId, loading: true, error: null }));
+          cleanupPassengerSubs();
+          setState((prev) => ({ ...prev, tripId, passenger: null, loading: true }));
 
-          // Trip document listener (status, lastLocation.at, counts)
+          // Trip document listener (for lastLocation + end)
           const tripRef = sdoc(student.schoolId, "trips", tripId);
           unsubTripDoc = onSnapshot(
             tripRef,
@@ -184,190 +165,120 @@ function StudentCard({ student, notifications }: { student: Student, notificatio
               if (cancelled) return;
               const td = t.data() as DocumentData | undefined;
               const lastAt = td?.lastLocation?.at ?? null;
-              const status = td?.status ?? "active";
-              const counts: TripCounts | null = td?.counts ?? null;
-
-              // If the trip ended, clear but leave counts from final state
+              const status = (td?.status as string) || "active";
+              setState((prev) => ({ ...prev, lastLocationAt: lastAt }));
               if (status !== "active") {
-                cleanupTripSubs();
-                setState((prev) => ({
-                  ...prev,
-                  tripId: null,
-                  lastLocationAt: lastAt,
-                  counts: counts,
-                  passenger: null,
-                  loading: false,
-                }));
-                return;
+                // trip ended: clear until a new active one appears
+                cleanupPassengerSubs();
+                setState((prev) => ({ ...prev, tripId: null, passenger: null, loading: false }));
               }
-
-              setState((prev) => ({
-                ...prev,
-                lastLocationAt: lastAt,
-                counts: counts,
-              }));
             },
             (err) => {
               console.error(`[Parent] Trip listener ${tripId} error:`, err);
-              setState((prev) => ({ ...prev, error: "Trip read error", loading: false }));
             }
           );
+          
+          // Backup became the primary: listen by field (works for any doc id)
+          const passColl = collection(sdoc(student.schoolId, "trips", tripId), "passengers");
+          const qOne = query(passColl, where("studentId", "==", student.id), limit(1));
+          unsubPassenger = onSnapshot(qOne, (qs) => {
+            const d = qs.docs[0];
+            setState(prev => ({ ...prev, passenger: d?.data() as TripPassenger ?? null, loading: false }));
+          }, (err) => console.error("[Parent] passenger query error:", err));
 
-          // Passenger doc listener (status/boarded/dropped) for THIS student
-          const primaryPassRef = sdoc(
-            student.schoolId,
-            "trips",
-            tripId,
-            "passengers",
-            student.id
-          );
-          unsubPassengerDoc = onSnapshot(
-            primaryPassRef,
-            async (p) => {
-              if (cancelled) return;
 
-              if (p.exists()) {
-                setState((prev) => ({
-                  ...prev,
-                  passenger: p.data() as TripPassenger,
-                  loading: false,
-                }));
-                return;
-              }
-
-              // Fallback: if doc ID isn't studentId, look it up by studentId field
-              try {
-                const alt = await getDocs(
-                  query(
-                    scol(student.schoolId, "trips", tripId, "passengers"),
-                    where("studentId", "==", student.id),
-                    limit(1)
-                  )
-                );
-                const found = alt.docs[0];
-                setState((prev) => ({
-                  ...prev,
-                  passenger: found ? (found.data() as TripPassenger) : null,
-                  loading: false,
-                }));
-              } catch (e) {
-                console.error("[Parent] Passenger fallback query failed:", e);
-                setState((prev) => ({ ...prev, passenger: null, loading: false }));
-              }
-            },
-            (err) => {
-              console.error(`[Parent] Passenger listener (${student.id}) error:`, err);
-              setState((prev) => ({ ...prev, passenger: null, loading: false, error: "Passenger read error" }));
-            }
-          );
         } else {
-          // Same active trip; ensure not stuck in loading
+          // same trip; make sure we’re not stuck loading
           setState((prev) => ({ ...prev, loading: false }));
         }
       },
       (err) => {
         console.error("[Parent] Active trip query listener error:", err);
-        setState((prev) => ({ ...prev, loading: false, error: "Active trip query error" }));
+        setState({ tripId: null, passenger: null, lastLocationAt: null, loading: false });
       }
     );
 
     return () => {
       cancelled = true;
-      unsubActiveTrip?.();
-      cleanupTripSubs();
+      cleanupAll();
     };
   }, [student.id, student.schoolId]);
 
-  const { statusBadge, primaryTime, timeLabel } = useMemo(() => {
-    if (state.loading) {
-      return { 
-        statusBadge: <Skeleton className="h-6 w-24" />, 
-        primaryTime: null, 
-        timeLabel: "" 
-      };
-    }
+  // ---- UI derivations ----
 
-    if (!state.tripId && !state.passenger) {
-      return {
-        statusBadge: (
-          <Badge variant="outline" className="flex items-center">
-            <Hourglass className="mr-1 h-3 w-3" />
-            No active trip
-          </Badge>
-        ),
-        primaryTime: null,
-        timeLabel: "",
-      };
-    }
+  const derived = useMemo(() => {
+    // Find the most recent, relevant notification from the inbox
+    const notification = notifications
+        .filter(n => n.data?.studentId === student.id && n.data?.status)
+        .sort((a,b) => b.createdAt.toMillis() - a.createdAt.toMillis())[0];
     
-    if (!state.passenger) {
-        return {
-            statusBadge: (
-                 <Badge variant="outline" className="flex items-center">
-                    <HelpCircle className="mr-1 h-3 w-3" />
-                    No trip data
-                </Badge>
-            ),
-            primaryTime: state.lastLocationAt,
-            timeLabel: 'Updated ',
-        }
-    }
-
+    // Combine live passenger data with notification data
     const p = state.passenger;
-    const normalizedStatus = (p.status || "").trim().toLowerCase();
-
-    if (p.droppedAt) {
-      return {
-        statusBadge: (
-          <Badge className="bg-green-100 text-green-800 border-green-200">
-            <CheckCircle className="mr-1 h-3 w-3" />
-            Dropped Off
-          </Badge>
-        ),
-        primaryTime: p.droppedAt,
-        timeLabel: "Dropped ",
-      };
-    }
+    const normStatus = (notification?.data?.status || p?.status || "").toLowerCase().trim();
     
-    if (p.boardedAt) {
-      return {
-        statusBadge: (
-          <Badge className="bg-blue-100 text-blue-800 border-blue-200">
-            <Bus className="mr-1 h-3 w-3" />
-            On Bus
-          </Badge>
-        ),
-        primaryTime: p.boardedAt,
-        timeLabel: "Boarded ",
-      };
-    }
+    const isDropped = normStatus === 'dropped' || !!p?.droppedAt;
+    const isBoarded = normStatus === 'boarded' || !!p?.boardedAt;
+    const isAbsent = normStatus === 'absent';
     
-    if (normalizedStatus === "absent") {
-      return {
-        statusBadge: (
-          <Badge variant="destructive">
-            <XCircle className="mr-1 h-3 w-3" />
-            Marked Absent
-          </Badge>
-        ),
-        primaryTime: p.updatedAt,
-        timeLabel: "Marked ",
-      };
-    }
+    let badge: JSX.Element;
+    let time: Timestamp | null = null;
+    let label = "Updated ";
 
-    // Default case: Awaiting check-in
-    return {
-      statusBadge: (
+    if (state.loading) {
+      badge = <Skeleton className="h-6 w-24" />;
+    } else if (!state.tripId) {
+      badge = (
+        <Badge variant="outline" className="flex items-center">
+          <Hourglass className="mr-1 h-3 w-3" />
+          No active trip
+        </Badge>
+      );
+    } else if (isDropped) {
+      badge = (
+        <Badge className="bg-green-100 text-green-800 border-green-200">
+          <CheckCircle className="mr-1 h-3 w-3" />
+          Dropped Off
+        </Badge>
+      );
+      time = p?.droppedAt || notification?.createdAt || p?.updatedAt || state.lastLocationAt;
+      label = "Dropped ";
+    } else if (isBoarded) {
+      badge = (
+        <Badge className="bg-blue-100 text-blue-800 border-blue-200">
+          <Bus className="mr-1 h-3 w-3" />
+          On Bus
+        </Badge>
+      );
+      time = p?.boardedAt || notification?.createdAt || p?.updatedAt || state.lastLocationAt;
+      label = "Boarded ";
+    } else if (isAbsent) {
+      badge = (
+        <Badge variant="destructive">
+          <XCircle className="mr-1 h-3 w-3" />
+          Marked Absent
+        </Badge>
+      );
+      time = notification?.createdAt || p?.updatedAt || state.lastLocationAt;
+      label = "Marked ";
+    } else if (!p) {
+        badge = (
+          <Badge variant="outline" className="flex items-center">
+            <HelpCircle className="mr-1 h-3 w-3" />
+            No trip data
+          </Badge>
+        );
+    } else {
+      badge = (
         <Badge variant="secondary">
           <Footprints className="mr-1 h-3 w-3" />
           Awaiting Check-in
         </Badge>
-      ),
-      primaryTime: p.updatedAt || state.lastLocationAt,
-      timeLabel: "Updated ",
-    };
-  }, [state.loading, state.tripId, state.passenger, state.lastLocationAt]);
+      );
+      time = notification?.createdAt || p?.updatedAt || state.lastLocationAt;
+    }
 
+    return { badge, time, label };
+  }, [state.loading, state.tripId, state.passenger, state.lastLocationAt, notifications, student.id]);
 
   return (
     <Card>
@@ -387,38 +298,16 @@ function StudentCard({ student, notifications }: { student: Student, notificatio
             )}
           </CardDescription>
         </div>
-        {statusBadge}
+        {derived.badge}
       </CardHeader>
 
-      <CardContent className="space-y-2">
-        {!!primaryTime && (
+      <CardContent className="space-y-1">
+        {!!derived.time && (
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Clock className="h-4 w-4" />
             <span>
-              {timeLabel}
-              {formatRelative(primaryTime)}
-            </span>
-          </div>
-        )}
-
-        {/* Trip totals row (comes from trip doc counts, maintained by Cloud Function) */}
-        {state.counts && (
-          <div className="text-xs text-muted-foreground">
-            Trip totals:{" "}
-            <span className="font-medium">
-              {state.counts.boarded} on bus
-            </span>
-            {" · "}
-            <span className="font-medium">
-              {state.counts.dropped} dropped
-            </span>
-            {" · "}
-            <span className="font-medium">
-              {state.counts.absent} absent
-            </span>
-            {" · "}
-            <span className="font-medium">
-              {state.counts.pending} pending
+              {derived.label}
+              {formatRelative(derived.time)}
             </span>
           </div>
         )}
@@ -455,7 +344,7 @@ function LoadingState() {
 
 /* --------------- page --------------- */
 
-export default function ParentDashboardPage({ notifications }: { notifications: Notification[] }) {
+export default function ParentDashboardPage({ notifications = [] }: { notifications?: Notification[] }) {
   const { user, profile, loading: profileLoading } = useProfile();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
@@ -533,7 +422,7 @@ export default function ParentDashboardPage({ notifications }: { notifications: 
           )}
 
           {students.map((s) => (
-            <StudentCard key={s.id} student={s} notifications={notifications || []} />
+            <StudentCard key={s.id} student={s} notifications={notifications} />
           ))}
         </CardContent>
       </Card>
