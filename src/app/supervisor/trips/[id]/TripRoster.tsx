@@ -8,9 +8,12 @@ import {
   orderBy,
   onSnapshot,
   type DocumentData,
+  getDocs,
+  updateDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { scol } from "@/lib/schoolPath";
+import { scol, sdoc } from "@/lib/schoolPath";
 import { boardStudent, dropStudent, markAbsent } from "@/lib/roster";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +33,35 @@ type Props = {
   schoolId: string;
   canEdit?: boolean; // for driver: true only when allowDriverAsSupervisor === true
 };
+
+/**
+ * Helper to recalculate trip counts and update the parent document.
+ * This should be called after any passenger status change.
+ */
+async function recalcTripCounts(schoolId: string, tripId: string) {
+    const passengersRef = collection(db, `schools/${schoolId}/trips/${tripId}/passengers`);
+    const passengersSnap = await getDocs(passengersRef);
+
+    const counts: Record<PassengerRow["status"], number> = {
+        pending: 0,
+        boarded: 0,
+        dropped: 0,
+        absent: 0,
+    };
+
+    passengersSnap.forEach(doc => {
+        const status = (doc.data()?.status || 'pending') as PassengerRow["status"];
+        if (counts.hasOwnProperty(status)) {
+            counts[status]++;
+        } else {
+            counts.pending++; // Fallback for any invalid status
+        }
+    });
+
+    const tripRef = sdoc(schoolId, "trips", tripId);
+    await updateDoc(tripRef, { counts, updatedAt: serverTimestamp() });
+}
+
 
 export function Roster({ tripId, schoolId, canEdit = false }: Props) {
   const { toast } = useToast();
@@ -86,6 +118,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await boardStudent(schoolId, tripId, studentId);
+        await recalcTripCounts(schoolId, tripId);
         toast({
           title: "Boarded",
           description: "Student marked as boarded.",
@@ -110,6 +143,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await dropStudent(schoolId, tripId, studentId);
+        await recalcTripCounts(schoolId, tripId);
         toast({
           title: "Dropped",
           description: "Student marked as dropped.",
@@ -134,6 +168,7 @@ export function Roster({ tripId, schoolId, canEdit = false }: Props) {
       try {
         setBusy(studentId);
         await markAbsent(schoolId, tripId, studentId);
+        await recalcTripCounts(schoolId, tripId);
         toast({ title: "Absent", description: "Student marked as absent." });
       } catch (e: any) {
         console.error(e);

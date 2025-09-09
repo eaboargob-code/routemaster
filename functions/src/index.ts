@@ -90,45 +90,6 @@ async function pushToTokens(
 
 /* ---------- Triggers ---------- */
 
-export const updateTripCounts = onDocumentWritten(
-    {
-        region: "us-central1",
-        document: "schools/{schoolId}/trips/{tripId}/passengers/{studentId}",
-    },
-    async (event) => {
-        const { schoolId, tripId } = event.params;
-        const db = admin.firestore();
-
-        try {
-            // Get all passengers for the trip
-            const passengersSnap = await db.collection(`schools/${schoolId}/trips/${tripId}/passengers`).get();
-            
-            const counts: Record<"pending" | "boarded" | "dropped" | "absent", number> = {
-                pending: 0,
-                boarded: 0,
-                dropped: 0,
-                absent: 0,
-            };
-
-            passengersSnap.forEach(doc => {
-                const passenger = doc.data() as Passenger;
-                // Default to 'pending' if status is missing or invalid.
-                const status = passenger.status && ['pending', 'boarded', 'dropped', 'absent'].includes(passenger.status)
-                    ? passenger.status
-                    : 'pending';
-                counts[status]++;
-            });
-
-            // Update the parent trip document
-            const tripRef = db.doc(`schools/${schoolId}/trips/${tripId}`);
-            await tripRef.update({ counts, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-
-        } catch (error) {
-            console.error(`[COUNT_UPDATE_FAILED] Trip: ${tripId}`, error);
-        }
-    }
-);
-
 
 export const onTripCreate = onDocumentCreated(
     {
@@ -289,5 +250,3 @@ export const onPassengerStatusChange = onDocumentWritten(
     await batch.commit();
   }
 );
-
-    
