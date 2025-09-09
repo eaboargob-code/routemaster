@@ -1,5 +1,5 @@
 // functions/src/index.ts
-import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { onDocumentWritten, Change } from "firebase-functions/v2/firestore";
 import type { FirestoreEvent } from "firebase-functions/v2/firestore";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 
@@ -58,7 +58,7 @@ export const onPassengerWrite = onDocumentWritten(
     timeoutSeconds: 60,
     memory: "128MiB",
   },
-  async (event: FirestoreEvent<QueryDocumentSnapshot>) => {
+  async (event: FirestoreEvent<Change<QueryDocumentSnapshot>>) => {
     const { schoolId, tripId } = event.params as {
       schoolId?: string;
       tripId?: string;
