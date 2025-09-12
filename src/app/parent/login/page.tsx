@@ -8,7 +8,7 @@ import * as z from "zod";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { useProfile } from "@/lib/useProfile";
+import { useProfile, fetchProfile } from "@/lib/useProfile";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -65,11 +65,10 @@ export default function ParentLoginPage() {
       const userCredential = await signInWithEmailAndPassword(auth, data.email, data.password);
       const user = userCredential.user;
 
-      // After sign-in, verify the user's role from Firestore
-      const userDocRef = doc(db, "users", user.uid);
-      const userDoc = await getDoc(userDocRef);
+      // After sign-in, verify the user's role from Firestore using the centralized fetchProfile function
+      const userProfile = await fetchProfile(user);
 
-      if (userDoc.exists() && userDoc.data().role === 'parent' && userDoc.data().schoolId) {
+      if (userProfile && userProfile.role === 'parent') {
         // Role is correct, proceed to dashboard
         router.replace("/parent");
       } else {
@@ -83,10 +82,15 @@ export default function ParentLoginPage() {
       }
     } catch (error) {
       console.error("Parent login failed:", error);
+      // Check for specific error message from fetchProfile
+      const errorMessage = (error as Error).message.includes("Could not resolve a schoolId")
+        ? "This account is not associated with a school."
+        : "Invalid email or password. Please try again.";
+
       toast({
         variant: "destructive",
         title: "Login Failed",
-        description: "Invalid email or password. Please try again.",
+        description: errorMessage,
       });
     } finally {
       setIsLoading(false);
