@@ -11,10 +11,13 @@ import {
   deleteDoc,
   doc,
   deleteField,
+  writeBatch,
+  getDoc,
   type DocumentData,
 } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
-import { listBusesForSchool, listRoutesForSchool, listUsersForSchool } from "@/lib/firestoreQueries";
+import { listBusesForSchool, listRoutesForSchool, listUsersForSchool, getRouteById } from "@/lib/firestoreQueries";
 import { scol, sdoc } from "@/lib/schoolPath";
 
 import { Button } from "@/components/ui/button";
@@ -326,16 +329,64 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
   
   const handleAssignUser = async (busId: string, field: 'driverId' | 'supervisorId', newUserId: string | null) => {
     const busRef = sdoc(schoolId, "buses", busId);
+
     try {
-        const payload: { [key: string]: any } = {};
-        if (newUserId) {
-            payload[field] = newUserId;
-        } else {
-            payload[field] = deleteField();
+        const batch = writeBatch(db);
+
+        // --- Handle Supervisor Assignment (simple case) ---
+        if (field === 'supervisorId') {
+            const updateData = newUserId ? { supervisorId: newUserId } : { supervisorId: deleteField() };
+            batch.update(busRef, updateData);
+            await batch.commit();
+            onDataNeedsRefresh();
+            toast({ title: 'Supervisor updated successfully' });
+            return;
         }
-        await updateDoc(busRef, payload);
-        onDataNeedsRefresh(); // This will trigger a re-fetch of all buses
-        toast({ title: `${field === 'driverId' ? 'Driver' : 'Supervisor'} updated successfully` });
+
+        // --- Handle Driver Assignment (complex case with denormalization) ---
+        
+        // 1. Get current bus state to find old driver and route info
+        const busSnap = await getDoc(busRef);
+        if (!busSnap.exists()) throw new Error("Bus not found!");
+        const busData = busSnap.data() as Bus;
+        const oldDriverId = busData.driverId;
+        
+        // 2. Clear assignment from the old driver's user doc
+        if (oldDriverId && oldDriverId !== newUserId) {
+            const oldDriverRef = sdoc(schoolId, "users", oldDriverId);
+            batch.update(oldDriverRef, {
+                assignedBusId: deleteField(),
+                assignedBusCode: deleteField(),
+                assignedRouteId: deleteField(),
+            });
+        }
+        
+        // 3. Update the bus document itself
+        const busUpdate = newUserId ? { driverId: newUserId } : { driverId: deleteField() };
+        batch.update(busRef, busUpdate);
+
+        // 4. Set assignment on the new driver's user doc
+        if (newUserId) {
+            const newDriverRef = sdoc(schoolId, "users", newUserId);
+            const route = busData.assignedRouteId ? await getRouteById(schoolId, busData.assignedRouteId) : null;
+            
+            const userUpdate: DocumentData = {
+                assignedBusId: busId,
+                assignedBusCode: busData.busCode,
+            };
+            if (route) {
+                userUpdate.assignedRouteId = route.id;
+            } else {
+                userUpdate.assignedRouteId = deleteField();
+            }
+            batch.update(newDriverRef, userUpdate);
+        }
+
+        await batch.commit();
+
+        onDataNeedsRefresh();
+        toast({ title: 'Driver updated successfully' });
+
     } catch(err) {
         console.error(`[bus ${field} update]`, err);
         toast({ variant: "destructive", title: "Error", description: `Failed to update ${field === 'driverId' ? 'driver' : 'supervisor'}` });
@@ -558,5 +609,3 @@ export default function BusesPage() {
         </div>
     );
 }
-
-    
