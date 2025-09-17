@@ -333,9 +333,17 @@ function BusesList({ routes, drivers, supervisors, schoolId, onDataNeedsRefresh 
     try {
         const batch = writeBatch(db);
 
-        // --- Handle Supervisor Assignment (simple case) ---
+        // --- Handle Supervisor Assignment ---
         if (field === 'supervisorId') {
-            const updateData = newUserId ? { supervisorId: newUserId } : { supervisorId: deleteField() };
+            const updateData: DocumentData = {};
+            if (newUserId) {
+                const supervisor = supervisors.find(s => s.id === newUserId);
+                updateData.supervisorId = newUserId;
+                updateData.supervisorName = supervisor?.displayName || supervisor?.email || null;
+            } else {
+                updateData.supervisorId = deleteField();
+                updateData.supervisorName = deleteField();
+            }
             batch.update(busRef, updateData);
             await batch.commit();
             onDataNeedsRefresh();
@@ -609,3 +617,5 @@ export default function BusesPage() {
         </div>
     );
 }
+
+    
