@@ -134,13 +134,20 @@ function BusForm({ bus, onComplete, routes, schoolId }: { bus?: Bus, onComplete:
         setIsSubmitting(true);
         try {
             const busData: any = {
-                ...data,
+                busCode: data.busCode,
+                plate: data.plate,
+                capacity: data.capacity,
+                active: data.active,
             };
             
-            if (data.assignedRouteId === NONE_SENTINEL || !data.assignedRouteId) {
-                busData.assignedRouteId = deleteField();
+            const selectedRoute = routes.find(r => r.id === data.assignedRouteId);
+
+            if (selectedRoute) {
+                busData.assignedRouteId = selectedRoute.id;
+                busData.routeName = selectedRoute.name;
             } else {
-                busData.assignedRouteId = data.assignedRouteId;
+                busData.assignedRouteId = deleteField();
+                busData.routeName = deleteField();
             }
 
             if (isEditMode) {
