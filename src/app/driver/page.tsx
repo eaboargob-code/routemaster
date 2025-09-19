@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   collection,
   query,
@@ -134,7 +134,8 @@ export default function DriverPage() {
   const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
   const [uiState, setUiState] = useState<UiState>({ status: "loading" });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSendingLocation, setIsSendingLocation] = useState(false);
+  
+  const locationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Register FCM token
   useEffect(() => {
@@ -219,6 +220,77 @@ export default function DriverPage() {
       fetchData();
     }
   }, [profileLoading, user, profile, fetchData]);
+  
+  const handleSendLocation = useCallback((isAuto: boolean = false) => {
+    if (!activeTrip || !profile) {
+      if (!isAuto) {
+         toast({
+            variant: "destructive",
+            title: "No Active Trip",
+            description: "You must start a trip to send your location.",
+         });
+      }
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        try {
+          await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
+            lastLocation: {
+              lat: latitude,
+              lng: longitude,
+              at: serverTimestamp(),
+            },
+          });
+          if (!isAuto) {
+              toast({
+                title: "Location Sent!",
+                description: `Coordinates: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+                className: "bg-accent text-accent-foreground border-0",
+              });
+          }
+        } catch (error) {
+           toast({
+            variant: "destructive",
+            title: "Failed to Send Location",
+            description: (error as Error).message,
+          });
+        }
+      },
+      (error) => {
+        if (!isAuto) {
+            toast({
+              variant: "destructive",
+              title: "Geolocation Error",
+              description: error.message,
+            });
+        }
+      },
+      { enableHighAccuracy: true }
+    );
+  }, [activeTrip, profile, toast]);
+
+  // Effect to manage automatic location sending
+  useEffect(() => {
+    if (activeTrip?.status === 'active') {
+      // Start the interval
+      locationIntervalRef.current = setInterval(() => {
+        handleSendLocation(true); // `true` for automatic, silent update
+      }, 60000); // 60 seconds
+
+      // Send one immediate location update on trip start
+      handleSendLocation(true);
+    }
+
+    // Cleanup function: this runs when the trip ends or component unmounts
+    return () => {
+      if (locationIntervalRef.current) {
+        clearInterval(locationIntervalRef.current);
+        locationIntervalRef.current = null;
+      }
+    };
+  }, [activeTrip, handleSendLocation]);
 
   /* -------------------- Actions -------------------- */
 
@@ -342,55 +414,6 @@ export default function DriverPage() {
     }
   };
 
-  const handleSendLocation = () => {
-    if (!activeTrip || !profile) {
-      toast({
-        variant: "destructive",
-        title: "No Active Trip",
-        description: "You must start a trip to send your location.",
-      });
-      return;
-    }
-    setIsSendingLocation(true);
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const { latitude, longitude } = position.coords;
-        try {
-          await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
-            lastLocation: {
-              lat: latitude,
-              lng: longitude,
-              at: serverTimestamp(),
-            },
-          });
-          toast({
-            title: "Location Sent!",
-            description: `Coordinates: ${latitude.toFixed(
-              4
-            )}, ${longitude.toFixed(4)}`,
-            className: "bg-accent text-accent-foreground border-0",
-          });
-        } catch (error) {
-          toast({
-            variant: "destructive",
-            title: "Failed to Send Location",
-            description: (error as Error).message,
-          });
-        } finally {
-          setIsSendingLocation(false);
-        }
-      },
-      (error) => {
-        toast({
-          variant: "destructive",
-          title: "Geolocation Error",
-          description: error.message,
-        });
-        setIsSendingLocation(false);
-      },
-      { enableHighAccuracy: true }
-    );
-  };
 
   /* -------------------- UI helpers -------------------- */
 
@@ -523,13 +546,12 @@ export default function DriverPage() {
                   {isSubmitting ? "Ending Trip..." : "End Trip"}
                 </Button>
                 <Button
-                  onClick={handleSendLocation}
-                  disabled={isSendingLocation}
+                  onClick={() => handleSendLocation(false)}
                   className="w-full"
                   variant="outline"
                 >
                   <Send className="mr-2" />
-                  {isSendingLocation ? "Sending..." : "Send Location"}
+                  Send Location Now
                 </Button>
               </>
             ) : (
@@ -580,3 +602,5 @@ export default function DriverPage() {
     </div>
   );
 }
+
+    
