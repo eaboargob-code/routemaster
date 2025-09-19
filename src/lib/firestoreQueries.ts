@@ -1,4 +1,5 @@
 
+
 // src/lib/firestoreQueries.ts
 import { db } from "@/lib/firebase";
 import {
@@ -224,4 +225,10 @@ export async function getSchoolUsersByIds(
   );
 
   return byId;
+}
+
+export async function listAllTripsForSchool(schoolId: string) {
+    const q = query(scol(schoolId, "trips"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs;
 }
