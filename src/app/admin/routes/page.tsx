@@ -17,6 +17,7 @@ import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
 import { listRoutesForSchool } from "@/lib/firestoreQueries";
 import { scol, sdoc } from "@/lib/schoolPath";
+import Link from 'next/link';
 
 
 import { Button } from "@/components/ui/button";
@@ -68,7 +69,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { PlusCircle, Trash2, Edit, X, Check, ArrowUpDown, Search, Wrench } from "lucide-react";
+import { PlusCircle, Trash2, Edit, X, Check, ArrowUpDown, Search, Wrench, Pin } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface RouteDoc extends DocumentData {
@@ -403,27 +404,35 @@ export default function RoutesPage() {
                     />
                   </TableCell>
                   <TableCell className="text-right">
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button variant="ghost" size="icon" className="text-red-600 hover:text-red-700">
-                            <Trash2 className="h-4 w-4" />
+                    <div className="flex items-center justify-end gap-1">
+                        <Button asChild variant="outline" size="sm">
+                            <Link href={`/admin/routes/${route.id}/stops`}>
+                                <Pin className="h-4 w-4 mr-2" />
+                                Manage Stops
+                            </Link>
                         </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                          <AlertDialogHeader>
-                              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                  This will permanently delete the route "{route.name}". This action cannot be undone.
-                              </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => removeRoute(route.id)} className="bg-destructive hover:bg-destructive/90">
-                                  Delete
-                              </AlertDialogAction>
-                          </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="ghost" size="icon" className="text-red-600 hover:text-red-700">
+                                <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                              <AlertDialogHeader>
+                                  <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                      This will permanently delete the route "{route.name}". This action cannot be undone.
+                                  </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => removeRoute(route.id)} className="bg-destructive hover:bg-destructive/90">
+                                      Delete
+                                  </AlertDialogAction>
+                              </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))

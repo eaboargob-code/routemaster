@@ -42,7 +42,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Search, Frown, Eye, UserCheck, User, Route, Bus } from "lucide-react";
+import { Search, Frown, Eye, UserCheck, User, Route, Bus, Map } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 
@@ -287,12 +287,20 @@ export default function TripsPage() {
                       <TableCell>{trip.endedAt ? format(trip.endedAt.toDate(), "HH:mm") : <span className="text-muted-foreground">In Progress</span>}</TableCell>
                       <TableCell>{trip.lastLocation?.at ? format(trip.lastLocation.at.toDate(), "HH:mm:ss") : "N/A"}</TableCell>
                       <TableCell className="text-right">
-                         <Button asChild variant="outline" size="sm">
-                            <Link href={`/supervisor/trips/${trip.id}`}>
-                                <Eye className="mr-2 h-4 w-4" />
-                                View
-                            </Link>
-                         </Button>
+                         <div className="flex items-center justify-end gap-2">
+                             <Button asChild variant="outline" size="sm">
+                                <Link href={`/supervisor/trips/${trip.id}`}>
+                                    <Eye className="mr-2 h-4 w-4" />
+                                    Roster
+                                </Link>
+                             </Button>
+                             <Button asChild variant="outline" size="sm">
+                                <Link href={`/admin/trips/${trip.id}/telemetry`}>
+                                    <Map className="mr-2 h-4 w-4" />
+                                    Replay
+                                </Link>
+                             </Button>
+                         </div>
                       </TableCell>
                     </TableRow>
                   );

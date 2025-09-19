@@ -7,7 +7,7 @@ import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 
 import { Button } from "@/components/ui/button";
-import { Bus, LayoutDashboard, LogOut, Route, Users, MapPin, GraduationCap, HeartHandshake, FileText } from "lucide-react";
+import { Bus, LayoutDashboard, LogOut, Route, Users, MapPin, GraduationCap, HeartHandshake, FileText, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AdminHeader() {
@@ -46,7 +46,7 @@ export function AdminHeader() {
              href={item.href}
              className={cn(
                "transition-colors hover:text-foreground",
-               pathname === item.href ? "text-foreground font-semibold" : "text-muted-foreground"
+               pathname.startsWith(item.href) && (item.href.length > 6 || pathname.length < 7) ? "text-foreground font-semibold" : "text-muted-foreground"
              )}
            >
              {item.label}
