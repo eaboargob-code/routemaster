@@ -9,9 +9,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Pin, ArrowLeft, PlusCircle, Trash2, Edit, Check, X } from "lucide-react";
+import { Pin, ArrowLeft, PlusCircle, Trash2, Pencil } from "lucide-react";
 import { useProfile } from "@/lib/useProfile";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, use } from "react";
 import { getRouteById, listStopsForRoute, addStopToRoute, updateStop, deleteStop } from "@/lib/firestoreQueries";
 import { Skeleton } from "@/components/ui/skeleton";
 import Link from "next/link";
@@ -107,7 +107,7 @@ function StopForm({ routeId, schoolId, stop, onComplete }: { routeId: string, sc
   );
 }
 
-export default function RouteStopsPage({ params }: { params: { id: string } }) {
+function RouteStopsClientPage({ routeId }: { routeId: string }) {
   const { profile, loading: profileLoading } = useProfile();
   const [route, setRoute] = useState<DocumentData | null>(null);
   const [stops, setStops] = useState<Stop[]>([]);
@@ -116,7 +116,6 @@ export default function RouteStopsPage({ params }: { params: { id: string } }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [isAddDialogOpen, setAddDialogOpen] = useState(false);
   const { toast } = useToast();
-  const routeId = params.id;
   const schoolId = profile?.schoolId;
 
   useEffect(() => {
@@ -253,4 +252,10 @@ export default function RouteStopsPage({ params }: { params: { id: string } }) {
       </CardContent>
     </Card>
   );
+}
+
+// This is a server component wrapper to handle the params promise
+export default function RouteStopsPage({ params }: { params: { id: string } }) {
+    const { id } = use(params);
+    return <RouteStopsClientPage routeId={id} />;
 }
