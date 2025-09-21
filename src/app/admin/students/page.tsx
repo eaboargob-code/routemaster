@@ -172,7 +172,6 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
                 stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
                 if (videoRef.current) {
                     videoRef.current.srcObject = stream;
-                    videoRef.current.play(); // Explicitly play the video
                 }
                 setHasPermission(true);
             } catch (error) {
@@ -190,6 +189,10 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
             stream?.getTracks().forEach(track => track.stop());
         };
     }, [toast]);
+
+    const handleCanPlay = () => {
+        videoRef.current?.play();
+    };
 
     const handleCapture = () => {
         if (!videoRef.current) return;
@@ -213,7 +216,7 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
                 <DialogTitle>Take Photo</DialogTitle>
             </DialogHeader>
             <div className="relative">
-                <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" autoPlay muted playsInline />
+                <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" muted playsInline onCanPlay={handleCanPlay} />
                 {hasPermission === false && (
                      <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-md">
                         <p className="text-white text-center p-4">Camera access is required. Please enable it in your browser settings.</p>
@@ -942,3 +945,4 @@ export default function StudentsPage() {
         </div>
     );
 }
+
