@@ -1,6 +1,4 @@
-
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{db}/documents {
 
@@ -26,12 +24,11 @@ service cloud.firestore {
 
     // uid -> schoolId lookup used at login/bootstrap
     match /usersIndex/{uid} {
-      allow get: if authed() && request.auth.uid == uid;
-      allow create: if authed() && request.auth.uid == uid;
+      allow get, create: if authed() && request.auth.uid == uid;
       allow list, update, delete: if false;
     }
 
-    // Display-only directory of users (global index, MUST contain schoolId).
+    // Global directory of users (display-only). Each doc MUST contain schoolId.
     match /users/{uid} {
       allow get: if authed() && (request.auth.uid == uid || hasMe(resource.data.schoolId));
       allow list, create, update, delete: if false;
@@ -40,18 +37,17 @@ service cloud.firestore {
     /* =================== School namespace =================== */
     match /schools/{schoolId} {
       allow create: if authed();
-      allow get: if authed();
+      allow get:    if authed();
 
       /* -------- users -------- */
       match /users/{uid} {
-        allow list:                 if isAdmin(schoolId);
-        allow read, update, delete: if isAdmin(schoolId);
-        allow create:               if isAdmin(schoolId);
+        // Admin directory management
+        allow list, read, update, delete, create: if isAdmin(schoolId);
 
-        // Self-create
+        // Self-create (bootstrap)
         allow create: if authed() && request.auth.uid == uid;
 
-        // Allow authenticated school members to read user docs
+        // Any school member can GET user docs (directory)
         allow get: if authed()
           && ( request.auth.uid == uid
                || (isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId) || isParent(schoolId)) );
@@ -61,31 +57,32 @@ service cloud.firestore {
           && request.auth.uid == uid
           && request.resource.data.diff(resource.data).changedKeys().hasOnly(['fcmTokens','phoneNumber']);
 
-        // Temporary: allow self to update own role/assignments (legacy)
+        // Temporary legacy self-updates (keep until app no longer needs it)
         allow update: if authed()
           && request.auth.uid == uid
           && request.resource.data.diff(resource.data).changedKeys().hasOnly(['role','assignedBusId','assignedRouteId']);
 
-        /* ---- users/{uid}/inbox subcollection ---- */
+        /* ---- inbox ----
+           Owners manage their own inbox.
+           Cloud Functions (if using callable with custom claims) may also create. */
         match /inbox/{noteId} {
-          // Owners manage their own inbox
           allow list, get, create, update, delete: if authed() && request.auth.uid == uid;
-
-          // Cloud Functions may also create (server writes behavior notes, trip notifications)
-          allow create: if request.auth.token.admin == true; // service account context
+          allow create: if request.auth != null && request.auth.token.admin == true; // optional; Admin SDK bypasses rules anyway
         }
       }
 
-      /* -------- students -------- */
+      /* -------- students --------
+         Admin manages student records (including grade, photoUrl, defaultStopId).
+         Staff (driver/supervisor) can read/list for roster.
+         Parent can read only their own child. */
       match /students/{id} {
-        // Admin manage (name, grade, defaultStopId, photoUrl)
         allow read, write, list: if isAdmin(schoolId);
 
-        // Staff read/list for roster
+        // Staff read/list for roster use
         allow read: if isDriver(schoolId) || isSupervisor(schoolId);
         allow list: if isDriver(schoolId) || isSupervisor(schoolId);
 
-        // Parent read only their own child
+        // Parent read only their child
         allow read: if isParent(schoolId) && isMyChild(schoolId, id);
       }
 
@@ -96,40 +93,51 @@ service cloud.firestore {
         allow read, write: if isAdmin(schoolId);
       }
 
-      /* -------- absences -------- */
+      /* -------- absences --------
+         Parents create their own child’s absence; can read their own records only.
+         Staff can read/list for roster prep. Admin full. */
       match /absences/{absenceId} {
-        // Admin full
+        // Admin
         allow read, write, list: if isAdmin(schoolId);
 
-        // Parent can create for their own child
+        // Parent creates for linked child
         allow create: if isParent(schoolId) 
           && request.resource.data.parentId == request.auth.uid
           && isMyChild(schoolId, request.resource.data.studentId);
 
-        // Parent can read/list own absences
+        // Parent can read their own absence document
         allow read: if isParent(schoolId) && resource.data.parentId == request.auth.uid;
-        allow list: if isParent(schoolId);
 
-        // Staff can read/list all absences
-        allow read: if isDriver(schoolId) || isSupervisor(schoolId);
-        allow list: if isDriver(schoolId) || isSupervisor(schoolId);
+        // Prevent parents from listing all absences
+        allow list: if false;
+
+        // Staff (driver/supervisor) read/list for today’s roster planning
+        allow read, list: if isDriver(schoolId) || isSupervisor(schoolId);
       }
 
       /* -------- routes -------- */
       match /routes/{id} {
+        // Admin manage
         allow read, write, list: if isAdmin(schoolId);
+
+        // Staff & parent read route meta
         allow read: if isDriver(schoolId) || isSupervisor(schoolId) || isParent(schoolId);
         allow list: if isDriver(schoolId) || isSupervisor(schoolId);
 
-        /* ---- stops subcollection ---- */
+        /* ---- stops subcollection ----
+           Parents may read a child’s stop info for map display.
+           Staff lists stops to render driver map & planning UI.
+           Admin writes. */
         match /stops/{stopId} {
-          allow read, list: if isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId);
+          allow read: if isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId) || isParent(schoolId);
+          allow list: if isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId);
           allow write: if isAdmin(schoolId);
         }
       }
 
       /* -------- trips -------- */
       match /trips/{id} {
+        // Collection queries allowed for roles (per-doc checks still apply elsewhere)
         allow list: if isAdmin(schoolId) || isSupervisor(schoolId) || isDriver(schoolId) || isParent(schoolId);
 
         // Admin full
@@ -137,9 +145,9 @@ service cloud.firestore {
 
         // Driver create/read own trip
         allow create: if isDriver(schoolId) && request.resource.data.driverId == request.auth.uid;
-        allow read: if isDriver(schoolId) && resource.data.driverId == request.auth.uid;
+        allow read:    if isDriver(schoolId) && resource.data.driverId == request.auth.uid;
 
-        // Driver may update only allowed fields
+        // Driver may update only allowed fields on own active trip
         allow update: if isDriver(schoolId)
           && resource.data.driverId == request.auth.uid
           && request.resource.data.diff(resource.data).changedKeys().hasOnly([
@@ -148,25 +156,29 @@ service cloud.firestore {
             'updatedAt'
           ]);
 
-        // Driver-as-supervisor counts
+        // Driver-as-supervisor may update counts (when allowed)
         allow update: if isDriver(schoolId)
           && resource.data.driverId == request.auth.uid
           && resource.data.allowDriverAsSupervisor == true
           && request.resource.data.diff(resource.data).changedKeys().hasOnly(['counts','updatedAt']);
 
-        // Supervisor/Parent read
+        // Supervisor & Parent read
         allow read: if isSupervisor(schoolId) || isParent(schoolId);
 
-        // Supervisor may update counts
+        // Supervisor may update counts on assigned trip
         allow update: if isSupervisor(schoolId)
           && resource.data.supervisorId == request.auth.uid
           && request.resource.data.diff(resource.data).changedKeys().hasOnly(['counts','updatedAt']);
-        
-        /* ---- telemetry subcollection ---- */
+
+        /* --- telemetry (optional breadcrumb replay) --- */
         match /telemetry/{pointId} {
-          allow read: if isAdmin(schoolId) || isSupervisor(schoolId);
-          allow list: if isAdmin(schoolId) || isSupervisor(schoolId);
-          allow create: if isDriver(schoolId) && get(parent).data.driverId == request.auth.uid;
+          function trip() {
+            return get(/databases/$(db)/documents/schools/$(schoolId)/trips/$(id));
+          }
+          // Admin & supervisors can read breadcrumb
+          allow read, list: if isAdmin(schoolId) || isSupervisor(schoolId);
+          // Driver writes telemetry for their active trip
+          allow create: if isDriver(schoolId) && trip().data.driverId == request.auth.uid;
         }
       }
 
@@ -176,41 +188,43 @@ service cloud.firestore {
           return get(/databases/$(db)/documents/schools/$(schoolId)/trips/$(tripId));
         }
 
-        // Admin full
+        // Admin
         allow read, write, list: if isAdmin(schoolId);
 
-        // Supervisor manage on their trip
+        // Supervisor manage on assigned trip
         allow read, write, list: if isSupervisor(schoolId)
           && trip().data.supervisorId == request.auth.uid;
 
         // Driver read/list own trip
         allow read, list: if isDriver(schoolId) && trip().data.driverId == request.auth.uid;
 
-        // Driver create passenger (pending only)
+        // Driver create passenger (pending only) when seeding roster
         allow create: if isDriver(schoolId)
           && trip().data.driverId == request.auth.uid
           && request.resource.data.status == "pending";
 
-        // Driver update/delete when supervisor mode enabled
+        // Driver may update/delete when supervisor mode enabled
         allow update, delete: if isDriver(schoolId)
           && trip().data.driverId == request.auth.uid
           && trip().data.allowDriverAsSupervisor == true;
 
-        // Parent can read only their child passenger doc
+        // Parent can read only their child's passenger doc
         allow get, read: if isParent(schoolId)
           && resource.data.studentId != null
           && isMyChild(schoolId, resource.data.studentId);
-        allow list: if isParent(schoolId);
+
+        // Prevent parents from listing all passengers
+        allow list: if false;
       }
 
       /* -------- buses -------- */
       match /buses/{busId} {
         allow read, write, list: if isAdmin(schoolId);
-        allow read: if isDriver(schoolId) || isSupervisor(schoolId);
-        allow list: if isDriver(schoolId) || isSupervisor(schoolId);
+        allow read, list: if isDriver(schoolId) || isSupervisor(schoolId);
       }
 
-      /* -------- config/transport -------- */
+      /* -------- config/transport --------
+         Admin-only configuration: allowDriverAsSupervisor, thresholds, etc. */
       match /config/transport {
         allow read, write: if isAdmin(schoolId);
       }
