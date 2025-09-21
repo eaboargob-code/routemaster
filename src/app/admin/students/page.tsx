@@ -14,6 +14,7 @@ import {
   deleteField,
   writeBatch,
   getDocs,
+  serverTimestamp,
 } from "firebase/firestore";
 import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { useProfile } from "@/lib/useProfile";
@@ -98,6 +99,7 @@ interface Student {
   name: string;
   grade?: string;
   photoUrl?: string;
+  photoUrlThumb?: string;
   assignedRouteId?: string | null;
   assignedBusId?: string | null;
   pickupLat?: number | null;
@@ -162,21 +164,29 @@ async function processImage(file: File): Promise<Blob> {
 
 function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) => void, onClose: () => void }) {
     const videoRef = useRef<HTMLVideoElement>(null);
-    const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+    const [stream, setStream] = useState<MediaStream | null>(null);
+    const [error, setError] = useState<string | null>(null);
     const { toast } = useToast();
 
     useEffect(() => {
-        let stream: MediaStream | null = null;
+        let activeStream: MediaStream | null = null;
         const getCameraPermission = async () => {
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+                const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: { ideal: 'environment' } }, 
+                    audio: false 
+                });
+                activeStream = mediaStream;
+                setStream(mediaStream);
                 if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
+                    videoRef.current.srcObject = mediaStream;
+                    videoRef.current.setAttribute('playsinline', '');
+                    videoRef.current.muted = true;
+                    await videoRef.current.play();
                 }
-                setHasPermission(true);
-            } catch (error) {
-                console.error("Camera access denied:", error);
-                setHasPermission(false);
+            } catch (err) {
+                console.error("Camera access denied:", err);
+                setError('Camera access denied. Please enable it in your browser settings and refresh.');
                 toast({
                     variant: 'destructive',
                     title: 'Camera Access Denied',
@@ -184,15 +194,13 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
                 });
             }
         };
+
         getCameraPermission();
+
         return () => {
-            stream?.getTracks().forEach(track => track.stop());
+            activeStream?.getTracks().forEach(track => track.stop());
         };
     }, [toast]);
-
-    const handleCanPlay = () => {
-        videoRef.current?.play();
-    };
 
     const handleCapture = () => {
         if (!videoRef.current) return;
@@ -216,16 +224,16 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
                 <DialogTitle>Take Photo</DialogTitle>
             </DialogHeader>
             <div className="relative">
-                <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" muted playsInline onCanPlay={handleCanPlay} />
-                {hasPermission === false && (
-                     <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-md">
-                        <p className="text-white text-center p-4">Camera access is required. Please enable it in your browser settings.</p>
+                <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" playsInline />
+                {error && (
+                     <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-md p-4">
+                        <p className="text-white text-center">{error}</p>
                     </div>
                 )}
             </div>
             <DialogFooter>
                 <Button variant="ghost" onClick={onClose}>Cancel</Button>
-                <Button onClick={handleCapture} disabled={!hasPermission}>
+                <Button onClick={handleCapture} disabled={!stream || !!error}>
                     <Camera className="mr-2" /> Capture
                 </Button>
             </DialogFooter>
@@ -277,16 +285,20 @@ function ImageUploader({ schoolId, studentId, currentPhotoUrl, onUrlChange }: { 
     const handleRemove = async () => {
         if (!currentPhotoUrl) return;
         const storage = getStorage();
-        const photoRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile.jpg`);
+        // The Functions-based thumbnailer uses this naming convention
+        const mainPhotoRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile.jpg`);
+        const thumbPhotoRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile_128.jpg`);
+        
         try {
-            await deleteObject(photoRef);
+            // Attempt to delete both, ignoring "not found" errors.
+            await Promise.all([
+                deleteObject(mainPhotoRef).catch(e => e.code !== 'storage/object-not-found' && Promise.reject(e)),
+                deleteObject(thumbPhotoRef).catch(e => e.code !== 'storage/object-not-found' && Promise.reject(e)),
+            ]);
         } catch (error: any) {
-            // Ignore "object-not-found" error if the file doesn't exist.
-            if (error.code !== 'storage/object-not-found') {
-                 console.error("Failed to delete photo from Storage", error);
-                 toast({ variant: "destructive", title: "Deletion Failed", description: "Could not remove the old photo from storage." });
-                 return; // Stop if we can't delete the file.
-            }
+             console.error("Failed to delete photo from Storage", error);
+             toast({ variant: "destructive", title: "Deletion Failed", description: "Could not remove the old photo from storage." });
+             return; // Stop if we can't delete the file.
         }
         onUrlChange(null);
         toast({ title: "Photo Removed" });
@@ -361,16 +373,15 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
             let studentId = student?.id;
             const isNewStudent = !isEditMode;
 
-            // For new students, we need to create the doc first to get an ID for photo uploads.
-            // But we can't upload photos for a new student yet, so we'll just create the doc with text data.
+            // For new students, create the doc first to get an ID.
             if (isNewStudent) {
                  const newStudentRef = await addDoc(scol(schoolId, "students"), { 
                      name: data.name, 
                      schoolId,
-                     createdAt: new Date(),
+                     createdAt: serverTimestamp(),
                  });
                  studentId = newStudentRef.id;
-                 toast({ title: "Student Created!", description: "You can now edit the student to add a photo."});
+                 toast({ title: "Student Created!", description: "You can now edit the student to add assignments and a photo."});
             }
             if (!studentId) throw new Error("Could not determine student ID.");
 
@@ -380,8 +391,16 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                 photoUrl: data.photoUrl || deleteField(),
                 pickupLat: data.pickupLat ?? deleteField(),
                 pickupLng: data.pickupLng ?? deleteField(),
-                photoUpdatedAt: data.photoUrl ? new Date() : deleteField(),
+                updatedAt: serverTimestamp()
             };
+            
+            // Only add photoUpdatedAt if the URL is being set/changed
+            if (data.photoUrl && data.photoUrl !== student?.photoUrl) {
+                studentData.photoUpdatedAt = serverTimestamp();
+            } else if (!data.photoUrl && student?.photoUrl) {
+                // If removing URL, also remove the timestamp.
+                 studentData.photoUpdatedAt = deleteField();
+            }
 
             const selectedRoute = routes.find(r => r.id === data.assignedRouteId);
             const selectedBus = buses.find(b => b.id === data.assignedBusId);
@@ -829,7 +848,7 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
                     <TableCell className="font-medium">
                         <div className="flex items-center gap-3">
                             <Avatar>
-                                <AvatarImage src={student.photoUrl} alt={student.name} />
+                                <AvatarImage src={student.photoUrlThumb || student.photoUrl} alt={student.name} />
                                 <AvatarFallback>
                                     <GraduationCap className="h-5 w-5 text-muted-foreground" />
                                 </AvatarFallback>

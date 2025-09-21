@@ -179,23 +179,27 @@ export const onPassengerWrite = onDocumentWritten(
 export const onProfilePhotoUpload = onObjectFinalized(
   {
     region: "us-central1",
-    bucket: "routemaster-admin-k1thy.appspot.com",
+    bucket: process.env.GCLOUD_PROJECT ? `${process.env.GCLOUD_PROJECT}.appspot.com` : undefined,
     cpu: 1,
     memory: "512MiB",
     timeoutSeconds: 120,
   },
   async (event) => {
-    const filePath = event.data.name; // e.g., schools/TRP001/students/student123/profile.jpg
+    const filePath = event.data.name;
     const bucket = storage.bucket(event.data.bucket);
     
     // 1. Path and context validation
     const pathParts = filePath.split("/");
-    if (pathParts.length !== 5 || pathParts[0] !== "schools" || pathParts[2] !== "students") {
+    if (pathParts.length < 4 || pathParts[0] !== "schools" || pathParts[2] !== "students") {
       logger.log(`Skipping file that is not a student profile photo: ${filePath}`);
       return;
     }
     
     const fileName = path.basename(filePath);
+    if (!fileName.startsWith('profile.')) {
+        logger.log(`Skipping non-profile file: ${fileName}`);
+        return;
+    }
     if (fileName.includes(`_${THUMB_WIDTH}.`)) {
         logger.log(`Skipping already-a-thumbnail file: ${fileName}`);
         return;
@@ -207,7 +211,15 @@ export const onProfilePhotoUpload = onObjectFinalized(
 
     // 2. Download original file to a temporary location
     const tempFilePath = path.join(os.tmpdir(), fileName);
-    await bucket.file(filePath).download({ destination: tempFilePath });
+    try {
+        await bucket.file(filePath).download({ destination: tempFilePath });
+    } catch (err: any) {
+        if (err.code === 404) {
+            logger.warn(`Original file not found, possibly already deleted: ${filePath}`);
+            return;
+        }
+        throw err; // re-throw other errors
+    }
     logger.info(`Downloaded original file to ${tempFilePath}`);
     
     // 3. Generate thumbnail using sharp
