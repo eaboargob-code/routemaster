@@ -1,7 +1,30 @@
 rules_version = '2';
-
 service firebase.storage {
   match /b/{bucket}/o {
+
+    // Helper to check if the caller belongs to the same school as in the path
+    function hasMe(schoolId) {
+      return request.auth != null
+        && exists(/databases/(default)/documents/schools/$(schoolId)/users/$(request.auth.uid));
+    }
+    function isAdmin(schoolId) {
+      return request.auth != null
+        && get(/databases/(default)/documents/schools/$(schoolId)/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    // Student profile photos
+    match /schools/{schoolId}/students/{studentId}/{fileName} {
+      // READ: allow all authenticated users of the same school (or tighten to roles if you prefer)
+      allow read: if hasMe(schoolId);
+
+      // WRITE: only admins of the school
+      allow write: if isAdmin(schoolId);
+
+      // Optional: restrict filenames to profile images only
+      // allow write: if isAdmin(schoolId) && fileName in ['profile.jpg','profile_128.jpg'];
+    }
+
+    // Default deny
     match /{allPaths=**} {
       allow read, write: if false;
     }
