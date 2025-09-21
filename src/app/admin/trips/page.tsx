@@ -42,7 +42,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Search, Frown, Eye, UserCheck, User, Route, Bus, Map } from "lucide-react";
+import { Search, Frown, Eye, UserCheck, User, Route, Bus, Map as MapIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 
@@ -296,7 +296,7 @@ export default function TripsPage() {
                              </Button>
                              <Button asChild variant="outline" size="sm">
                                 <Link href={`/admin/trips/${trip.id}/telemetry`}>
-                                    <Map className="mr-2 h-4 w-4" />
+                                    <MapIcon className="mr-2 h-4 w-4" />
                                     Replay
                                 </Link>
                              </Button>
