@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
@@ -11,6 +12,8 @@ import {
   deleteDoc,
   doc,
   deleteField,
+  writeBatch,
+  getDocs,
 } from "firebase/firestore";
 import { useProfile } from "@/lib/useProfile";
 import { listStudentsForSchool, listRoutesForSchool, listStopsForRoute, listBusesForSchool } from "@/lib/firestoreQueries";
@@ -71,8 +74,11 @@ import {
 } from "@/components/ui/select"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
-import { PlusCircle, Trash2, Pencil, Search, Route, Bus, GraduationCap, MapPin } from "lucide-react";
+import { PlusCircle, Trash2, Pencil, Search, Route, Bus, GraduationCap, Upload } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { db } from "@/lib/firebase";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Progress } from "@/components/ui/progress";
 
 const studentSchema = z.object({
   name: z.string().min(1, { message: "Student name is required." }),
@@ -139,15 +145,21 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
         const fetchStops = async () => {
             if (selectedRouteId && schoolId) {
                 setIsLoadingStops(true);
+                const currentStopValue = form.getValues("defaultStopId");
                 const stopsData = await listStopsForRoute(schoolId, selectedRouteId);
                 setStops(stopsData as StopInfo[]);
+                // If the previously selected stop is not in the new list, reset it
+                if (currentStopValue && !stopsData.some(s => s.id === currentStopValue)) {
+                    form.setValue("defaultStopId", null);
+                }
                 setIsLoadingStops(false);
             } else {
                 setStops([]);
+                form.setValue("defaultStopId", null);
             }
         };
         fetchStops();
-    }, [selectedRouteId, schoolId]);
+    }, [selectedRouteId, schoolId, form]);
 
 
     const onSubmit = async (data: StudentFormValues) => {
@@ -228,8 +240,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                   <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select a route" /></SelectTrigger></FormControl>
                     <SelectContent><SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>{routes.map((route) => (<SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>))}</SelectContent>
-                  </Select><FormMessage />
-                </FormItem>
+                  </Select><FormMessage /></FormItem>
             )}/>
             <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="assignedBusId" render={({ field }) => (
@@ -245,7 +256,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                         <FormControl><SelectTrigger><SelectValue placeholder={isLoadingStops ? "Loading stops..." : "Select a stop"} /></SelectTrigger></FormControl>
                         <SelectContent>
                             <SelectItem value={NONE_SENTINEL}>None</SelectItem>
-                            {stops.map((stop) => (<SelectItem key={stop.id} value={stop.id}>{stop.name}</SelectItem>))}
+                            {stops.sort((a,b) => a.order - b.order).map((stop) => (<SelectItem key={stop.id} value={stop.id}>{stop.name}</SelectItem>))}
                         </SelectContent>
                     </Select><FormMessage /></FormItem>
                 )}/>
@@ -281,6 +292,188 @@ function StudentDialog({ children, student, onComplete, routes, buses, schoolId 
                     </DialogDescription>
                 </DialogHeader>
                 <StudentForm student={student} routes={routes} buses={buses} schoolId={schoolId} onComplete={handleComplete} />
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+const importSchema = z.object({
+    studentId: z.string().min(1),
+    grade: z.string().optional(),
+    photoUrl: z.string().url().optional().or(z.literal('')),
+    defaultStopId: z.string().optional(),
+});
+type StudentImportRow = z.infer<typeof importSchema>;
+
+function ImportDialog({ onComplete, schoolId }: { onComplete: () => void, schoolId: string }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [file, setFile] = useState<File | null>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [logs, setLogs] = useState<string[]>([]);
+    const { toast } = useToast();
+
+    const resetState = () => {
+        setFile(null);
+        setIsProcessing(false);
+        setProgress(0);
+        setLogs([]);
+    }
+
+    const handleOpenChange = (open: boolean) => {
+        if (!open) {
+            resetState();
+        }
+        setIsOpen(open);
+    }
+    
+    const downloadTemplate = () => {
+        const headers = "studentId,grade,photoUrl,defaultStopId";
+        const content = "student001,5,https://example.com/photo.jpg,stop_abc\nstudent002,3,,\n";
+        const blob = new Blob([headers + "\n" + content], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", "students_template.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    const handleImport = async () => {
+        if (!file) {
+            toast({ variant: "destructive", title: "No file selected" });
+            return;
+        }
+
+        setIsProcessing(true);
+        setLogs(['Reading and validating student data...']);
+        
+        const text = await file.text();
+        const lines = text.split('\n').filter(Boolean);
+        const headers = lines.shift()?.trim().split(',') || [];
+        
+        const validRows: StudentImportRow[] = [];
+        const studentIds = new Set<string>();
+
+        // Pre-fetch all students to validate existence
+        const allStudentsSnap = await getDocs(scol(schoolId, 'students'));
+        const existingStudentIds = new Set(allStudentsSnap.docs.map(doc => doc.id));
+        setLogs(prev => [...prev, `Found ${existingStudentIds.size} existing student documents.`]);
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const values = line.split(',');
+            const rowData: any = headers.reduce((obj, header, index) => {
+                obj[header.trim()] = values[index]?.trim() || '';
+                return obj;
+            }, {} as any);
+
+            const result = importSchema.safeParse(rowData);
+            if (!result.success) {
+                setLogs(prev => [...prev, `[FAIL] Row ${i + 1}: Invalid data - ${result.error.errors.map(e => e.message).join(', ')}`]);
+                continue;
+            }
+            if (!existingStudentIds.has(result.data.studentId)) {
+                setLogs(prev => [...prev, `[FAIL] Row ${i + 1}: Student with ID "${result.data.studentId}" does not exist.`]);
+                continue;
+            }
+            if (studentIds.has(result.data.studentId)) {
+                setLogs(prev => [...prev, `[WARN] Row ${i + 1}: Duplicate student ID "${result.data.studentId}" in CSV. Skipping.`]);
+                continue;
+            }
+
+            studentIds.add(result.data.studentId);
+            validRows.push(result.data);
+        }
+
+        if (validRows.length === 0) {
+            setLogs(prev => [...prev, 'No valid rows to import.']);
+            setIsProcessing(false);
+            return;
+        }
+
+        setLogs(prev => [...prev, `Validated ${validRows.length} rows. Starting batched writes...`]);
+        setProgress(10);
+        
+        try {
+            const BATCH_SIZE = 100;
+            for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
+                const batch = writeBatch(db);
+                const chunk = validRows.slice(i, i + BATCH_SIZE);
+                
+                for (const row of chunk) {
+                    const studentRef = sdoc(schoolId, "students", row.studentId);
+                    const updateData: Record<string, any> = {};
+                    if (row.grade !== undefined) updateData.grade = row.grade;
+                    if (row.photoUrl !== undefined) updateData.photoUrl = row.photoUrl || deleteField();
+                    if (row.defaultStopId !== undefined) updateData.defaultStopId = row.defaultStopId || deleteField();
+                    
+                    if (Object.keys(updateData).length > 0) {
+                        batch.update(studentRef, updateData);
+                    }
+                }
+                
+                await batch.commit();
+                const currentProgress = ((i + chunk.length) / validRows.length) * 100;
+                setProgress(currentProgress);
+                setLogs(prev => [...prev, `Batch ${Math.floor(i / BATCH_SIZE) + 1} complete. ${Math.min(i + BATCH_SIZE, validRows.length)}/${validRows.length} students updated.`]);
+            }
+
+            toast({ title: "Import Successful!", description: `${validRows.length} students updated.` });
+            onComplete();
+            setIsOpen(false);
+        } catch (error) {
+            console.error("[import]", error);
+            setLogs(prev => [...prev, `[FATAL] Error during Firestore write: ${(error as Error).message}`]);
+            toast({ variant: "destructive", title: "Import Failed", description: "An error occurred during the write process." });
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+    
+    return (
+        <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+            <DialogTrigger asChild>
+                <Button variant="outline">
+                    <Upload className="mr-2 h-4 w-4" />
+                    Import
+                </Button>
+            </DialogTrigger>
+            <DialogContent>
+                <DialogHeader>
+                    <DialogTitle>Import Students from CSV</DialogTitle>
+                    <DialogDescription>
+                        Update existing students in bulk. The CSV must contain a 'studentId' column that matches the document ID of the student.
+                    </DialogDescription>
+                </DialogHeader>
+                 <div className="space-y-4 py-4">
+                    <Button variant="link" onClick={downloadTemplate} className="p-0 h-auto">
+                        Download sample CSV template
+                    </Button>
+                     <Input
+                        type="file"
+                        accept=".csv"
+                        onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)}
+                        disabled={isProcessing}
+                    />
+                    {isProcessing && (
+                        <div className="space-y-2">
+                             <Progress value={progress} />
+                             <Card className="max-h-48 overflow-y-auto">
+                                <CardContent className="p-2 text-xs font-mono">
+                                    {logs.map((log, i) => <p key={i}>{log}</p>)}
+                                </CardContent>
+                             </Card>
+                        </div>
+                    )}
+                </div>
+                <DialogFooter>
+                    <DialogClose asChild><Button variant="ghost">Cancel</Button></DialogClose>
+                    <Button onClick={handleImport} disabled={!file || isProcessing}>
+                        {isProcessing ? `Importing... (${Math.round(progress)}%)` : "Import"}
+                    </Button>
+                </DialogFooter>
             </DialogContent>
         </Dialog>
     );
@@ -370,12 +563,15 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
             Manage students for school {schoolId}.
             </CardDescription>
         </div>
-        <StudentDialog onComplete={onDataNeedsRefresh} routes={routes} buses={buses} schoolId={schoolId}>
-            <Button disabled={!schoolId}>
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Add Student
-            </Button>
-        </StudentDialog>
+        <div className="flex items-center gap-2">
+            <ImportDialog schoolId={schoolId} onComplete={onDataNeedsRefresh} />
+            <StudentDialog onComplete={onDataNeedsRefresh} routes={routes} buses={buses} schoolId={schoolId}>
+                <Button disabled={!schoolId}>
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    Add Student
+                </Button>
+            </StudentDialog>
+        </div>
       </CardHeader>
       <CardContent>
          <div className="relative w-full mb-4">
@@ -525,3 +721,6 @@ export default function StudentsPage() {
         </div>
     );
 }
+
+
+    
