@@ -13,7 +13,7 @@ import {
   deleteField,
 } from "firebase/firestore";
 import { useProfile } from "@/lib/useProfile";
-import { listStudentsForSchool, listRoutesForSchool, listBusesForSchool } from "@/lib/firestoreQueries";
+import { listStudentsForSchool, listRoutesForSchool, listStopsForRoute, listBusesForSchool } from "@/lib/firestoreQueries";
 import { scol, sdoc } from "@/lib/schoolPath";
 
 import { Button } from "@/components/ui/button";
@@ -69,14 +69,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
-import { PlusCircle, Trash2, Pencil, Search, Route, Bus } from "lucide-react";
+import { PlusCircle, Trash2, Pencil, Search, Route, Bus, GraduationCap, MapPin } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const studentSchema = z.object({
   name: z.string().min(1, { message: "Student name is required." }),
+  grade: z.string().max(15, "Grade is too long.").optional().nullable(),
+  photoUrl: z.string().url("Must be a valid URL.").optional().nullable(),
   assignedRouteId: z.string().nullable().optional(),
   assignedBusId: z.string().nullable().optional(),
+  defaultStopId: z.string().nullable().optional(),
 });
 
 type StudentFormValues = z.infer<typeof studentSchema>;
@@ -84,8 +88,11 @@ type StudentFormValues = z.infer<typeof studentSchema>;
 interface Student {
   id: string;
   name: string;
+  grade?: string;
+  photoUrl?: string;
   assignedRouteId?: string | null;
   assignedBusId?: string | null;
+  defaultStopId?: string | null;
   schoolId: string;
 }
 
@@ -99,27 +106,58 @@ interface BusInfo {
     busCode: string;
 }
 
+interface StopInfo {
+    id: string;
+    name: string;
+    order: number;
+}
+
 const NONE_SENTINEL = "__none__";
 
 function StudentForm({ student, onComplete, routes, buses, schoolId }: { student?: Student, onComplete: () => void, routes: RouteInfo[], buses: BusInfo[], schoolId: string }) {
     const { toast } = useToast();
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [stops, setStops] = useState<StopInfo[]>([]);
+    const [isLoadingStops, setIsLoadingStops] = useState(false);
     const isEditMode = !!student;
 
     const form = useForm<StudentFormValues>({
         resolver: zodResolver(studentSchema),
         defaultValues: {
             name: student?.name || "",
+            grade: student?.grade || "",
+            photoUrl: student?.photoUrl || "",
             assignedRouteId: student?.assignedRouteId || null,
             assignedBusId: student?.assignedBusId || null,
+            defaultStopId: student?.defaultStopId || null,
         },
     });
+
+    const selectedRouteId = form.watch("assignedRouteId");
+
+    useEffect(() => {
+        const fetchStops = async () => {
+            if (selectedRouteId && schoolId) {
+                setIsLoadingStops(true);
+                const stopsData = await listStopsForRoute(schoolId, selectedRouteId);
+                setStops(stopsData as StopInfo[]);
+                setIsLoadingStops(false);
+            } else {
+                setStops([]);
+            }
+        };
+        fetchStops();
+    }, [selectedRouteId, schoolId]);
+
 
     const onSubmit = async (data: StudentFormValues) => {
         setIsSubmitting(true);
         try {
             const studentData: any = {
                 name: data.name,
+                grade: data.grade || deleteField(),
+                photoUrl: data.photoUrl || deleteField(),
+                defaultStopId: data.defaultStopId || deleteField(),
             };
 
             const selectedRoute = routes.find(r => r.id === data.assignedRouteId);
@@ -174,79 +212,47 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
     return (
          <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-             <FormField
-                control={form.control}
-                name="name"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel>Student Name</FormLabel>
-                    <FormControl>
-                        <Input placeholder="e.g., Jane Doe" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                    </FormItem>
-                )}
-                />
-            <FormField
-              control={form.control}
-              name="assignedRouteId"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Assign to Route (Optional)</FormLabel>
-                  <Select
-                    value={field.value ?? NONE_SENTINEL}
-                    onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a route" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>
-                      {routes.map((route) => (
-                        <SelectItem key={route.id} value={route.id}>
-                          {route.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
+            <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="name" render={({ field }) => (
+                    <FormItem><FormLabel>Student Name</FormLabel><FormControl><Input placeholder="e.g., Jane Doe" {...field} /></FormControl><FormMessage /></FormItem>
+                )}/>
+                <FormField control={form.control} name="grade" render={({ field }) => (
+                    <FormItem><FormLabel>Grade</FormLabel><FormControl><Input placeholder="e.g., 5" {...field} value={field.value ?? ""} /></FormControl><FormMessage /></FormItem>
+                )}/>
+            </div>
+             <FormField control={form.control} name="photoUrl" render={({ field }) => (
+                <FormItem><FormLabel>Photo URL</FormLabel><FormControl><Input placeholder="https://example.com/photo.jpg" {...field} value={field.value ?? ""} /></FormControl><FormMessage /></FormItem>
+            )}/>
+            <FormField control={form.control} name="assignedRouteId" render={({ field }) => (
+                <FormItem><FormLabel>Assign to Route (Optional)</FormLabel>
+                  <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select a route" /></SelectTrigger></FormControl>
+                    <SelectContent><SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>{routes.map((route) => (<SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>))}</SelectContent>
+                  </Select><FormMessage />
                 </FormItem>
-              )}
-            />
-             <FormField
-              control={form.control}
-              name="assignedBusId"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Assign to Bus (Optional)</FormLabel>
-                  <Select
-                    value={field.value ?? NONE_SENTINEL}
-                    onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a bus" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>
-                      {buses.map((bus) => (
-                        <SelectItem key={bus.id} value={bus.id}>
-                          {bus.busCode}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            )}/>
+            <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="assignedBusId" render={({ field }) => (
+                    <FormItem><FormLabel>Assign to Bus (Optional)</FormLabel>
+                    <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select a bus" /></SelectTrigger></FormControl>
+                        <SelectContent><SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>{buses.map((bus) => (<SelectItem key={bus.id} value={bus.id}>{bus.busCode}</SelectItem>))}</SelectContent>
+                    </Select><FormMessage /></FormItem>
+                )}/>
+                 <FormField control={form.control} name="defaultStopId" render={({ field }) => (
+                    <FormItem><FormLabel>Default Stop (Optional)</FormLabel>
+                    <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)} disabled={!selectedRouteId || isLoadingStops}>
+                        <FormControl><SelectTrigger><SelectValue placeholder={isLoadingStops ? "Loading stops..." : "Select a stop"} /></SelectTrigger></FormControl>
+                        <SelectContent>
+                            <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                            {stops.map((stop) => (<SelectItem key={stop.id} value={stop.id}>{stop.name}</SelectItem>))}
+                        </SelectContent>
+                    </Select><FormMessage /></FormItem>
+                )}/>
+            </div>
+            
              <DialogFooter>
-                <DialogClose asChild>
-                    <Button type="button" variant="ghost">Cancel</Button>
-                </DialogClose>
+                <DialogClose asChild><Button type="button" variant="ghost">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={isSubmitting}>
                   {isSubmitting ? "Saving..." : (isEditMode ? "Save Changes" : "Add Student")}
                 </Button>
@@ -267,7 +273,7 @@ function StudentDialog({ children, student, onComplete, routes, buses, schoolId 
     return (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
             <DialogTrigger asChild>{children}</DialogTrigger>
-            <DialogContent>
+            <DialogContent className="sm:max-w-[625px]">
                 <DialogHeader>
                     <DialogTitle>{student ? 'Edit Student' : 'Add New Student'}</DialogTitle>
                     <DialogDescription>
@@ -333,23 +339,23 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
       );
   }, [students, searchTerm]);
   
-  const getRouteName = (routeId?: string | null) => {
-      if (!routeId) return <span className="text-muted-foreground">Not Assigned</span>;
-      const route = routes.find(r => r.id === routeId);
+  const getRouteName = (student: Student) => {
+      if (!student.assignedRouteId) return <span className="text-muted-foreground">Not Assigned</span>;
+      const route = routes.find(r => r.id === student.assignedRouteId);
       return route ? (
           <div className="flex items-center gap-2">
-            <Route className="h-4 w-4 text-primary"/>
+            <Route className="h-4 w-4 text-muted-foreground"/>
             {route.name}
           </div>
       ) : <span className="text-muted-foreground">Unknown Route</span>;
   }
   
-  const getBusCode = (busId?: string | null) => {
-      if (!busId) return <span className="text-muted-foreground">Not Assigned</span>;
-      const bus = buses.find(b => b.id === busId);
+  const getBusCode = (student: Student) => {
+      if (!student.assignedBusId) return <span className="text-muted-foreground">Not Assigned</span>;
+      const bus = buses.find(b => b.id === student.assignedBusId);
       return bus ? (
           <div className="flex items-center gap-2">
-            <Bus className="h-4 w-4 text-primary"/>
+            <Bus className="h-4 w-4 text-muted-foreground"/>
             {bus.busCode}
           </div>
       ) : <span className="text-muted-foreground">Unknown Bus</span>;
@@ -385,6 +391,7 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
+              <TableHead>Grade</TableHead>
               <TableHead>Assigned Route</TableHead>
               <TableHead>Assigned Bus</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -393,16 +400,27 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center">
+                <TableCell colSpan={5} className="h-24 text-center">
                   <Skeleton className="h-4 w-1/2 mx-auto" />
                 </TableCell>
               </TableRow>
             ) : filteredStudents.length > 0 ? (
               filteredStudents.map((student) => (
                 <TableRow key={student.id}>
-                    <TableCell className="font-medium">{student.name}</TableCell>
-                    <TableCell>{getRouteName(student.assignedRouteId)}</TableCell>
-                    <TableCell>{getBusCode(student.assignedBusId)}</TableCell>
+                    <TableCell className="font-medium">
+                        <div className="flex items-center gap-3">
+                            <Avatar>
+                                <AvatarImage src={student.photoUrl} alt={student.name} />
+                                <AvatarFallback>
+                                    <GraduationCap className="h-5 w-5 text-muted-foreground" />
+                                </AvatarFallback>
+                            </Avatar>
+                           <span>{student.name}</span>
+                        </div>
+                    </TableCell>
+                    <TableCell>{student.grade || "N/A"}</TableCell>
+                    <TableCell>{getRouteName(student)}</TableCell>
+                    <TableCell>{getBusCode(student)}</TableCell>
                     <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
                             <StudentDialog student={student} onComplete={onDataNeedsRefresh} routes={routes} buses={buses} schoolId={schoolId}>
@@ -437,7 +455,7 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center">
+                <TableCell colSpan={5} className="h-24 text-center">
                   No students found. Add one to get started!
                 </TableCell>
               </TableRow>
@@ -453,7 +471,7 @@ export default function StudentsPage() {
     const { profile, loading: profileLoading, error: profileError } = useProfile();
     const [routes, setRoutes] = useState<RouteInfo[]>([]);
     const [buses, setBuses] = useState<BusInfo[]>([]);
-    const [key, setKey] = useState(0); // Used to force-refresh child components
+    const [key, setKey] = useState(0); 
     const schoolId = profile?.schoolId;
 
     const onDataNeedsRefresh = useCallback(() => setKey(k => k+1), []);
