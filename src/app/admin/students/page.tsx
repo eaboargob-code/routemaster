@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { useProfile } from "@/lib/useProfile";
-import { listStudentsForSchool, listRoutesForSchool, listStopsForRoute, listBusesForSchool } from "@/lib/firestoreQueries";
+import { listStudentsForSchool, listRoutesForSchool, listBusesForSchool } from "@/lib/firestoreQueries";
 import { scol, sdoc } from "@/lib/schoolPath";
 
 import { Button } from "@/components/ui/button";
@@ -75,7 +75,7 @@ import {
 } from "@/components/ui/select"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
-import { PlusCircle, Trash2, Pencil, Search, Route, Bus, GraduationCap, Upload, Camera, X } from "lucide-react";
+import { PlusCircle, Trash2, Pencil, Search, Route, Bus, GraduationCap, Upload, Camera, X, MapPin } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { db } from "@/lib/firebase";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -88,7 +88,8 @@ const studentSchema = z.object({
   photoUrl: z.string().url("Must be a valid URL.").optional().nullable(),
   assignedRouteId: z.string().nullable().optional(),
   assignedBusId: z.string().nullable().optional(),
-  defaultStopId: z.string().nullable().optional(),
+  pickupLat: z.coerce.number().min(-90).max(90, "Invalid latitude.").optional().nullable(),
+  pickupLng: z.coerce.number().min(-180).max(180, "Invalid longitude.").optional().nullable(),
 });
 
 type StudentFormValues = z.infer<typeof studentSchema>;
@@ -100,7 +101,8 @@ interface Student {
   photoUrl?: string;
   assignedRouteId?: string | null;
   assignedBusId?: string | null;
-  defaultStopId?: string | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
   schoolId: string;
 }
 
@@ -112,12 +114,6 @@ interface RouteInfo {
 interface BusInfo {
     id: string;
     busCode: string;
-}
-
-interface StopInfo {
-    id: string;
-    name: string;
-    order: number;
 }
 
 const NONE_SENTINEL = "__none__";
@@ -193,8 +189,6 @@ function ImageUploader({ schoolId, studentId, currentPhotoUrl, onUrlChange }: { 
 function StudentForm({ student, onComplete, routes, buses, schoolId }: { student?: Student, onComplete: () => void, routes: RouteInfo[], buses: BusInfo[], schoolId: string }) {
     const { toast } = useToast();
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [stops, setStops] = useState<StopInfo[]>([]);
-    const [isLoadingStops, setIsLoadingStops] = useState(false);
     const isEditMode = !!student;
 
     const form = useForm<StudentFormValues>({
@@ -205,37 +199,14 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
             photoUrl: student?.photoUrl || "",
             assignedRouteId: student?.assignedRouteId || null,
             assignedBusId: student?.assignedBusId || null,
-            defaultStopId: student?.defaultStopId || null,
+            pickupLat: student?.pickupLat || null,
+            pickupLng: student?.pickupLng || null,
         },
     });
-
-    const selectedRouteId = form.watch("assignedRouteId");
-
-    useEffect(() => {
-        const fetchStops = async () => {
-            if (selectedRouteId && schoolId) {
-                setIsLoadingStops(true);
-                const currentStopValue = form.getValues("defaultStopId");
-                const stopsData = await listStopsForRoute(schoolId, selectedRouteId);
-                setStops(stopsData as StopInfo[]);
-                // If the previously selected stop is not in the new list, reset it
-                if (currentStopValue && !stopsData.some(s => s.id === currentStopValue)) {
-                    form.setValue("defaultStopId", null);
-                }
-                setIsLoadingStops(false);
-            } else {
-                setStops([]);
-                form.setValue("defaultStopId", null);
-            }
-        };
-        fetchStops();
-    }, [selectedRouteId, schoolId, form]);
-
 
     const onSubmit = async (data: StudentFormValues) => {
         setIsSubmitting(true);
         try {
-            // A new student must be created first to get an ID for the photo path.
             let studentId = student?.id;
             if (!isEditMode) {
                  const newStudentRef = await addDoc(scol(schoolId, "students"), { name: data.name, schoolId });
@@ -247,7 +218,8 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                 name: data.name,
                 grade: data.grade || deleteField(),
                 photoUrl: data.photoUrl || deleteField(),
-                defaultStopId: data.defaultStopId || deleteField(),
+                pickupLat: data.pickupLat ?? deleteField(),
+                pickupLng: data.pickupLng ?? deleteField(),
             };
 
             const selectedRoute = routes.find(r => r.id === data.assignedRouteId);
@@ -312,14 +284,14 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                 )}/>
             </div>
             
-            <FormField control={form.control} name="assignedRouteId" render={({ field }) => (
-                <FormItem><FormLabel>Assign to Route (Optional)</FormLabel>
-                  <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select a route" /></SelectTrigger></FormControl>
-                    <SelectContent><SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>{routes.map((route) => (<SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>))}</SelectContent>
-                  </Select><FormMessage /></FormItem>
-            )}/>
-            <div className="grid grid-cols-2 gap-4">
+             <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="assignedRouteId" render={({ field }) => (
+                    <FormItem><FormLabel>Assign to Route (Optional)</FormLabel>
+                    <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select a route" /></SelectTrigger></FormControl>
+                        <SelectContent><SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>{routes.map((route) => (<SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>))}</SelectContent>
+                    </Select><FormMessage /></FormItem>
+                )}/>
                 <FormField control={form.control} name="assignedBusId" render={({ field }) => (
                     <FormItem><FormLabel>Assign to Bus (Optional)</FormLabel>
                     <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}>
@@ -327,15 +299,13 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                         <SelectContent><SelectItem value={NONE_SENTINEL}>Not Assigned</SelectItem>{buses.map((bus) => (<SelectItem key={bus.id} value={bus.id}>{bus.busCode}</SelectItem>))}</SelectContent>
                     </Select><FormMessage /></FormItem>
                 )}/>
-                 <FormField control={form.control} name="defaultStopId" render={({ field }) => (
-                    <FormItem><FormLabel>Default Stop (Optional)</FormLabel>
-                    <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)} disabled={!selectedRouteId || isLoadingStops}>
-                        <FormControl><SelectTrigger><SelectValue placeholder={isLoadingStops ? "Loading stops..." : "Select a stop"} /></SelectTrigger></FormControl>
-                        <SelectContent>
-                            <SelectItem value={NONE_SENTINEL}>None</SelectItem>
-                            {stops.sort((a,b) => a.order - b.order).map((stop) => (<SelectItem key={stop.id} value={stop.id}>{stop.name}</SelectItem>))}
-                        </SelectContent>
-                    </Select><FormMessage /></FormItem>
+            </div>
+             <div className="grid grid-cols-2 gap-4">
+                 <FormField control={form.control} name="pickupLat" render={({ field }) => (
+                    <FormItem><FormLabel>Pickup Latitude</FormLabel><FormControl><Input type="number" step="any" placeholder="e.g., 32.8853" {...field} value={field.value ?? ""} /></FormControl><FormMessage /></FormItem>
+                )}/>
+                 <FormField control={form.control} name="pickupLng" render={({ field }) => (
+                    <FormItem><FormLabel>Pickup Longitude</FormLabel><FormControl><Input type="number" step="any" placeholder="e.g., 13.1802" {...field} value={field.value ?? ""} /></FormControl><FormMessage /></FormItem>
                 )}/>
             </div>
             
@@ -378,7 +348,8 @@ const importSchema = z.object({
     studentId: z.string().min(1),
     grade: z.string().optional(),
     photoUrl: z.string().url().optional().or(z.literal('')),
-    defaultStopId: z.string().optional(),
+    pickupLat: z.coerce.number().optional(),
+    pickupLng: z.coerce.number().optional(),
 });
 type StudentImportRow = z.infer<typeof importSchema>;
 
@@ -405,8 +376,8 @@ function ImportDialog({ onComplete, schoolId }: { onComplete: () => void, school
     }
     
     const downloadTemplate = () => {
-        const headers = "studentId,grade,photoUrl,defaultStopId";
-        const content = "student001,5,https://example.com/photo.jpg,stop_abc\nstudent002,3,,\n";
+        const headers = "studentId,grade,photoUrl,pickupLat,pickupLng";
+        const content = "student001,5,https://example.com/photo.jpg,32.88,13.18\nstudent002,3,,,\n";
         const blob = new Blob([headers + "\n" + content], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
         const url = URL.createObjectURL(blob);
@@ -484,7 +455,8 @@ function ImportDialog({ onComplete, schoolId }: { onComplete: () => void, school
                     const updateData: Record<string, any> = {};
                     if (row.grade !== undefined) updateData.grade = row.grade;
                     if (row.photoUrl !== undefined) updateData.photoUrl = row.photoUrl || deleteField();
-                    if (row.defaultStopId !== undefined) updateData.defaultStopId = row.defaultStopId || deleteField();
+                    if (row.pickupLat !== undefined) updateData.pickupLat = row.pickupLat;
+                    if (row.pickupLng !== undefined) updateData.pickupLng = row.pickupLng;
                     
                     if (Object.keys(updateData).length > 0) {
                         batch.update(studentRef, updateData);
@@ -631,6 +603,16 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
       ) : <span className="text-muted-foreground">Unknown Bus</span>;
   }
 
+  const getPickupLocation = (student: Student) => {
+      if (student.pickupLat != null && student.pickupLng != null) {
+          return <div className="flex items-center gap-2">
+            <MapPin className="h-4 w-4 text-muted-foreground"/>
+            <span>{student.pickupLat.toFixed(4)}, {student.pickupLng.toFixed(4)}</span>
+          </div>
+      }
+      return <span className="text-muted-foreground">Not Set</span>;
+  }
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -667,13 +649,14 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
               <TableHead>Grade</TableHead>
               <TableHead>Assigned Route</TableHead>
               <TableHead>Assigned Bus</TableHead>
+              <TableHead>Pickup Location</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center">
+                <TableCell colSpan={6} className="h-24 text-center">
                   <Skeleton className="h-4 w-1/2 mx-auto" />
                 </TableCell>
               </TableRow>
@@ -694,6 +677,7 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
                     <TableCell>{student.grade || "N/A"}</TableCell>
                     <TableCell>{getRouteName(student)}</TableCell>
                     <TableCell>{getBusCode(student)}</TableCell>
+                    <TableCell>{getPickupLocation(student)}</TableCell>
                     <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
                             <StudentDialog student={student} onComplete={onDataNeedsRefresh} routes={routes} buses={buses} schoolId={schoolId}>
@@ -728,7 +712,7 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center">
+                <TableCell colSpan={6} className="h-24 text-center">
                   No students found. Add one to get started!
                 </TableCell>
               </TableRow>
@@ -799,5 +783,7 @@ export default function StudentsPage() {
     );
 }
 
+
+    
 
     
