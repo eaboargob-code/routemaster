@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
@@ -171,6 +172,7 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
                 stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
                 if (videoRef.current) {
                     videoRef.current.srcObject = stream;
+                    videoRef.current.play(); // Explicitly play the video
                 }
                 setHasPermission(true);
             } catch (error) {
