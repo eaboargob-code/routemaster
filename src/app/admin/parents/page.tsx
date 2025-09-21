@@ -7,13 +7,12 @@ import {
   where,
   getDocs,
   doc,
-  writeBatch,
   updateDoc,
   setDoc,
   getDoc,
   arrayUnion,
   arrayRemove,
-  collection,
+  collectionGroup,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
@@ -45,26 +44,35 @@ import {
   DialogTrigger,
   DialogFooter,
   DialogClose,
+  DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LinkIcon, UserPlus, GraduationCap, X } from "lucide-react";
+import { LinkIcon, UserPlus, GraduationCap, X, Phone, Star } from "lucide-react";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Input } from "@/components/ui/input";
 
 
 // --- Data Interfaces ---
-interface Parent {
-  id: string;
-  email: string;
-  active: boolean;
-  schoolId: string;
-}
-
 interface Student {
   id: string;
   name: string;
+  primaryParentId?: string | null;
+}
+
+interface Parent {
+  id: string;
+  displayName: string;
+  email: string;
+  phoneNumber?: string | null;
 }
 
 interface ParentStudentLink {
@@ -72,61 +80,29 @@ interface ParentStudentLink {
 }
 
 
-function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { parent: Parent, students: Student[], existingStudentIds: string[], onLink: () => void }) {
+function EditPhoneDialog({ parent, schoolId, onUpdate }: { parent: Parent, schoolId: string, onUpdate: () => void }) {
     const [isOpen, setIsOpen] = useState(false);
-    const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
+    const [phone, setPhone] = useState(parent.phoneNumber || "");
     const [isSubmitting, setIsSubmitting] = useState(false);
     const { toast } = useToast();
 
-    const availableStudents = useMemo(() => {
-        const linkedStudentIds = new Set(existingStudentIds);
-        return students.filter(s => !linkedStudentIds.has(s.id));
-    }, [students, existingStudentIds]);
-    
-    const handleToggleStudent = (studentId: string) => {
-        setSelectedStudentIds(prev => {
-            const newSet = new Set(prev);
-            if (newSet.has(studentId)) {
-                newSet.delete(studentId);
-            } else {
-                newSet.add(studentId);
-            }
-            return newSet;
-        });
-    }
+    const PHONE_REGEX = /^\+?[1-9]\d{1,14}$/;
 
-    const handleLink = async () => {
-        if (selectedStudentIds.size === 0) {
-            toast({ variant: "destructive", title: "No students selected" });
+    const handleSave = async () => {
+        if (phone && !PHONE_REGEX.test(phone)) {
+            toast({ variant: "destructive", title: "Invalid Phone Number", description: "Please enter a valid E.164 format number (e.g., +15551234567)." });
             return;
         }
         setIsSubmitting(true);
-        const studentIdsToLink = Array.from(selectedStudentIds);
         try {
-            const parentLinkRef = sdoc(parent.schoolId, "parentStudents", parent.id);
-
-            // Ensure the document exists before updating with arrayUnion
-            const docSnap = await getDoc(parentLinkRef);
-            if (!docSnap.exists()) {
-                await setDoc(parentLinkRef, { studentIds: [] });
-            }
-
-            // Now, safely update the array
-            await updateDoc(parentLinkRef, {
-                studentIds: arrayUnion(...studentIdsToLink)
-            });
-
-            toast({
-                title: "Students Linked!",
-                description: `${studentIdsToLink.length} student(s) have been successfully linked.`,
-                className: 'bg-accent text-accent-foreground border-0',
-            });
-            setSelectedStudentIds(new Set());
-            onLink();
+            const userRef = sdoc(schoolId, "users", parent.id);
+            await updateDoc(userRef, { phoneNumber: phone || null });
+            toast({ title: "Phone Number Updated", className: 'bg-accent text-accent-foreground border-0' });
+            onUpdate();
             setIsOpen(false);
         } catch (error) {
-            console.error("[link students]", error);
-            toast({ variant: "destructive", title: "Linking failed", description: (error as Error).message });
+            console.error("[update phone]", error);
+            toast({ variant: "destructive", title: "Update Failed", description: (error as Error).message });
         } finally {
             setIsSubmitting(false);
         }
@@ -135,66 +111,34 @@ function LinkStudentDialog({ parent, students, existingStudentIds, onLink }: { p
     return (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
             <DialogTrigger asChild>
-                <Button variant="outline" size="sm">
-                    <LinkIcon className="mr-2 h-4 w-4" />
-                    Link Students
-                </Button>
+                <button className="text-blue-600 hover:underline text-xs">Edit Phone</button>
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Link Students to {parent.email}</DialogTitle>
+                    <DialogTitle>Edit Phone for {parent.displayName}</DialogTitle>
+                    <DialogDescription>Use E.164 format (e.g., +15551234567).</DialogDescription>
                 </DialogHeader>
-                <div className="py-4 space-y-4">
-                    {availableStudents.length > 0 ? (
-                        <>
-                            <p className="text-sm text-muted-foreground">Select one or more students to link.</p>
-                             <ScrollArea className="h-64 border rounded-md p-4">
-                                <div className="space-y-4">
-                                    {availableStudents.map(student => (
-                                        <div key={student.id} className="flex items-center space-x-2">
-                                            <Checkbox
-                                                id={`student-${student.id}`}
-                                                checked={selectedStudentIds.has(student.id)}
-                                                onCheckedChange={() => handleToggleStudent(student.id)}
-                                            />
-                                            <label
-                                                htmlFor={`student-${student.id}`}
-                                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                                            >
-                                                {student.name}
-                                            </label>
-                                        </div>
-                                    ))}
-                                </div>
-                            </ScrollArea>
-                        </>
-                    ) : (
-                       <Alert>
-                            <GraduationCap className="h-4 w-4" />
-                            <AlertTitle>All Students Linked</AlertTitle>
-                            <AlertDescription>
-                                There are no un-linked students available to assign to this parent.
-                            </AlertDescription>
-                       </Alert>
-                    )}
+                <div className="py-4">
+                    <Input 
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="+15551234567"
+                    />
                 </div>
                 <DialogFooter>
-                    <DialogClose asChild>
-                        <Button type="button" variant="ghost">Cancel</Button>
-                    </DialogClose>
-                    <Button onClick={handleLink} disabled={isSubmitting || selectedStudentIds.size === 0}>
-                        {isSubmitting ? "Linking..." : `Link ${selectedStudentIds.size} Student(s)`}
-                    </Button>
+                    <DialogClose asChild><Button variant="ghost">Cancel</Button></DialogClose>
+                    <Button onClick={handleSave} disabled={isSubmitting}>{isSubmitting ? "Saving..." : "Save"}</Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
-    );
+    )
 }
 
-function ParentsList({ schoolId }: { schoolId: string }) {
-  const [parents, setParents] = useState<Parent[]>([]);
+
+function ParentContactsList({ schoolId }: { schoolId: string }) {
   const [students, setStudents] = useState<Student[]>([]);
-  const [links, setLinks] = useState<Map<string, ParentStudentLink>>(new Map());
+  const [parents, setParents] = useState<Parent[]>([]);
+  const [studentParentMap, setStudentParentMap] = useState<Map<string, string[]>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const { toast } = useToast();
@@ -207,37 +151,37 @@ function ParentsList({ schoolId }: { schoolId: string }) {
         setIsLoading(true);
 
         try {
-            const parentsQuery = query(scol(schoolId, "users"), where("role", "==", "parent"));
+            // Fetch all students and all parents for the school
             const studentsQuery = scol(schoolId, "students");
-            
-            const [parentsSnapshot, studentsSnapshot] = await Promise.all([
-                getDocs(parentsQuery),
+            const parentsQuery = query(scol(schoolId, "users"), where("role", "==", "parent"));
+            const [studentsSnapshot, parentsSnapshot] = await Promise.all([
                 getDocs(studentsQuery),
+                getDocs(parentsQuery),
             ]);
-
-            const parentsData = parentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Parent));
             const studentsData = studentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
-            
-            setParents(parentsData);
+            const parentsData = parentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Parent));
             setStudents(studentsData);
+            setParents(parentsData);
 
-            // Fetch all parentLink docs based on parent IDs
-            if (parentsData.length > 0) {
-                const parentIds = parentsData.map(p => p.id);
-                const parentLinksMap = new Map<string, ParentStudentLink>();
-                
-                const linksQuery = query(scol(schoolId, "parentStudents"), where("__name__", "in", parentIds.slice(0, 30)));
-                const linksSnapshot = await getDocs(linksQuery);
-                linksSnapshot.forEach(doc => {
-                    parentLinksMap.set(doc.id, doc.data() as ParentStudentLink);
-                });
-                setLinks(parentLinksMap);
-            } else {
-                setLinks(new Map());
-            }
+            // Fetch all parent-student links and build a map of student -> [parent IDs]
+            const parentLinksSnapshot = await getDocs(collectionGroup(db, 'parentStudents'));
+            const newStudentParentMap = new Map<string, string[]>();
+            parentLinksSnapshot.forEach(doc => {
+                if (doc.ref.path.startsWith(`schools/${schoolId}`)) {
+                    const parentId = doc.ref.parent.parent?.id;
+                    if (!parentId) return;
+                    const data = doc.data() as ParentStudentLink;
+                    data.studentIds?.forEach(studentId => {
+                        const links = newStudentParentMap.get(studentId) || [];
+                        links.push(parentId);
+                        newStudentParentMap.set(studentId, links);
+                    });
+                }
+            });
+            setStudentParentMap(newStudentParentMap);
 
         } catch (error) {
-            console.error("Error fetching parent data:", error);
+            console.error("Error fetching data:", error);
             toast({ variant: "destructive", title: "Error", description: "Could not load parent and student data." });
         } finally {
             setIsLoading(false);
@@ -246,93 +190,84 @@ function ParentsList({ schoolId }: { schoolId: string }) {
     fetchData();
   }, [schoolId, refreshKey, toast]);
 
-  const studentMap = useMemo(() => new Map(students.map(s => [s.id, s.name])), [students]);
+  const parentMap = useMemo(() => new Map(parents.map(p => [p.id, p])), [parents]);
 
-  const handleUnlink = async (parentId: string, studentId: string) => {
-      try {
-          const parentLinkRef = sdoc(schoolId, "parentStudents", parentId);
-          await updateDoc(parentLinkRef, {
-              studentIds: arrayRemove(studentId)
-          });
-          toast({ title: "Student Unlinked", description: "The student is no longer linked to this parent." });
-          onDataNeedsRefresh();
-      } catch (error) {
-          console.error("[unlink student]", error);
-          toast({ variant: "destructive", title: "Unlinking Failed", description: (error as Error).message });
-      }
-  };
-  
-  const handleToggleActive = async (parent: Parent) => {
-      try {
-          await updateDoc(doc(db, "users", parent.id), { active: !parent.active });
-          toast({ title: "Status Updated", description: `Parent ${parent.email} has been ${!parent.active ? 'activated' : 'deactivated'}.` });
-          onDataNeedsRefresh();
-      } catch (error) {
-          console.error("[toggle active]", error);
-          toast({ variant: "destructive", title: "Update Failed", description: (error as Error).message });
-      }
+  const handleSetPrimary = async (studentId: string, parentId: string | null) => {
+    try {
+        const studentRef = sdoc(schoolId, "students", studentId);
+        await updateDoc(studentRef, { primaryParentId: parentId });
+        toast({ title: "Primary Parent Updated", className: 'bg-accent text-accent-foreground border-0' });
+        onDataNeedsRefresh();
+    } catch(e) {
+        toast({ variant: "destructive", title: "Update failed", description: (e as Error).message });
+    }
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Parent Management</CardTitle>
-        <CardDescription>Link parents to students for school {schoolId}.</CardDescription>
+        <CardTitle>Parent Contacts</CardTitle>
+        <CardDescription>Manage parent contact information and primary contacts for each student.</CardDescription>
       </CardHeader>
       <CardContent>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Parent Email</TableHead>
-              <TableHead>Linked Students</TableHead>
-              <TableHead>Active</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead>Student</TableHead>
+              <TableHead>Linked Parents</TableHead>
+              <TableHead>Primary Parent</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={4}><Skeleton className="h-24 w-full" /></TableCell>
+                <TableCell colSpan={3}><Skeleton className="h-24 w-full" /></TableCell>
               </TableRow>
-            ) : parents.length > 0 ? (
-              parents.map(parent => {
-                const parentLinkData = links.get(parent.id);
-                const studentIds = parentLinkData?.studentIds || [];
+            ) : students.length > 0 ? (
+              students.map(student => {
+                const linkedParentIds = studentParentMap.get(student.id) || [];
+                const linkedParents = linkedParentIds.map(id => parentMap.get(id)).filter(Boolean) as Parent[];
                 return (
-                    <TableRow key={parent.id}>
-                        <TableCell className="font-medium">{parent.email}</TableCell>
+                    <TableRow key={student.id}>
+                        <TableCell className="font-medium">{student.name}</TableCell>
                         <TableCell>
-                            {studentIds.length > 0 ? (
-                                <div className="flex flex-wrap gap-2">
-                                    {studentIds.map(studentId => (
-                                        <Badge key={studentId} variant="secondary" className="flex items-center gap-1.5">
-                                            {studentMap.get(studentId) || "Unknown Student"}
-                                            <button onClick={() => handleUnlink(parent.id, studentId)} className="rounded-full hover:bg-muted-foreground/20 p-0.5">
-                                                <X className="h-3 w-3" />
-                                            </button>
-                                        </Badge>
+                            <div className="flex flex-col gap-2 items-start">
+                               {linkedParents.length > 0 ? linkedParents.map(p => (
+                                   <div key={p.id} className="flex items-center gap-2">
+                                       <Badge variant="secondary" className="text-sm">
+                                            {p.displayName || p.email}
+                                       </Badge>
+                                       <span className="text-xs text-muted-foreground">{p.phoneNumber || "No phone"}</span>
+                                       <EditPhoneDialog parent={p} schoolId={schoolId} onUpdate={onDataNeedsRefresh} />
+                                   </div>
+                               )) : <span className="text-muted-foreground text-xs">No parents linked</span>}
+                            </div>
+                        </TableCell>
+                        <TableCell>
+                           {linkedParents.length > 0 && (
+                             <Select
+                                value={student.primaryParentId ?? ""}
+                                onValueChange={(val) => handleSetPrimary(student.id, val || null)}
+                              >
+                                <SelectTrigger className="w-[220px]">
+                                  <SelectValue placeholder="Select a primary contact..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="">None</SelectItem>
+                                    {linkedParents.map(p => (
+                                        <SelectItem key={p.id} value={p.id}>{p.displayName || p.email}</SelectItem>
                                     ))}
-                                </div>
-                            ) : <span className="text-muted-foreground">No students linked</span>}
-                        </TableCell>
-                        <TableCell>
-                            <Switch checked={parent.active} onCheckedChange={() => handleToggleActive(parent)} />
-                        </TableCell>
-                        <TableCell className="text-right">
-                             <LinkStudentDialog 
-                                parent={parent}
-                                students={students}
-                                existingStudentIds={studentIds}
-                                onLink={onDataNeedsRefresh}
-                             />
+                                </SelectContent>
+                              </Select>
+                           )}
                         </TableCell>
                     </TableRow>
                 )
               })
             ) : (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center">
-                  No parents found. Invite a user with the 'parent' role to begin.
+                <TableCell colSpan={3} className="h-24 text-center">
+                  No students found. Add students in the Student Management page first.
                 </TableCell>
               </TableRow>
             )}
@@ -371,7 +306,7 @@ export default function ParentsPage() {
 
     return (
         <div className="grid gap-8">
-            <ParentsList schoolId={schoolId} />
+            <ParentContactsList schoolId={schoolId} />
         </div>
     );
 }
