@@ -15,6 +15,9 @@ import {
   Timestamp,
   type DocumentData,
   type QueryConstraint,
+  addDoc,
+  updateDoc,
+  deleteDoc,
 } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
 
@@ -95,6 +98,44 @@ export async function getRouteById(schoolId: string, routeId?: string | null) {
   if (!routeId) return null;
   const snap = await getDoc(sdoc(schoolId, "routes", routeId));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
+/* ============================================================
+   STOPS (new)
+   ============================================================ */
+export async function listStopsForRoute(schoolId: string, routeId: string) {
+    const q = query(collection(db, `schools/${schoolId}/routes/${routeId}/stops`), orderBy("order"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function addStopToRoute(schoolId: string, routeId: string, data: any) {
+    const coll = collection(db, `schools/${schoolId}/routes/${routeId}/stops`);
+    return await addDoc(coll, data);
+}
+
+export async function updateStop(schoolId: string, routeId: string, stopId: string, data: any) {
+    const ref = doc(db, `schools/${schoolId}/routes/${routeId}/stops`, stopId);
+    return await updateDoc(ref, data);
+}
+
+export async function deleteStop(schoolId: string, routeId: string, stopId: string) {
+    const ref = doc(db, `schools/${schoolId}/routes/${routeId}/stops`, stopId);
+    return await deleteDoc(ref);
+}
+
+/* ============================================================
+   CONFIG (new)
+   ============================================================ */
+export async function getTransportConfig(schoolId: string) {
+    const ref = doc(db, `schools/${schoolId}/config/transport`);
+    const snap = await getDoc(ref);
+    return snap.exists() ? snap.data() : null;
+}
+
+export async function updateTransportConfig(schoolId: string, data: any) {
+    const ref = doc(db, `schools/${schoolId}/config/transport`);
+    return await updateDoc(ref, data);
 }
 
 /* ============================================================
