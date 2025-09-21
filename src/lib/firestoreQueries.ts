@@ -18,6 +18,9 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
+  arrayUnion,
+  arrayRemove,
 } from "firebase/firestore";
 import { scol, sdoc } from "@/lib/schoolPath";
 
@@ -74,6 +77,51 @@ export async function listUsersForSchool(
   const s = await getDocs(qUsers);
   return s.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
+
+/** Update a user's phone number */
+export async function updateUserPhone(schoolId: string, userId: string, phoneNumber: string | null) {
+    const userRef = sdoc(schoolId, "users", userId);
+    return await updateDoc(userRef, { phoneNumber });
+}
+
+/* ============================================================
+   PARENT-STUDENT LINKING
+   ============================================================ */
+
+/** Atomically links a parent to a student. */
+export async function linkParentToStudent(schoolId: string, parentId: string, studentId: string) {
+    const parentLinkRef = sdoc(schoolId, "parentStudents", parentId);
+    // Use set with merge to create if not exists, or update if it does.
+    return await updateDoc(parentLinkRef, {
+        studentIds: arrayUnion(studentId)
+    });
+}
+
+/** Atomically unlinks a parent from a student, optionally clearing the primary parent field. */
+export async function unlinkParentFromStudent(schoolId: string, parentId: string, studentId: string, wasPrimary: boolean) {
+    const batch = writeBatch(db);
+    const parentLinkRef = sdoc(schoolId, "parentStudents", parentId);
+    const studentRef = sdoc(schoolId, "students", studentId);
+
+    // 1. Remove studentId from parent's list
+    batch.update(parentLinkRef, {
+        studentIds: arrayRemove(studentId)
+    });
+
+    // 2. If this parent was the primary, clear the field on the student doc
+    if (wasPrimary) {
+        batch.update(studentRef, { primaryParentId: null });
+    }
+
+    return await batch.commit();
+}
+
+/** Sets or unsets the primary parent for a student. */
+export async function setPrimaryParent(schoolId: string, studentId: string, parentId: string | null) {
+    const studentRef = sdoc(schoolId, "students", studentId);
+    return await updateDoc(studentRef, { primaryParentId: parentId });
+}
+
 
 /* ============================================================
    REFERENCE LOOKUPS (school-scoped)
