@@ -169,21 +169,18 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
     const { toast } = useToast();
 
     useEffect(() => {
-        let stream: MediaStream | null = null;
-        
+        let activeStream: MediaStream | null = null;
         const getCameraPermission = async () => {
+            if (!videoRef.current) return;
             try {
                 const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: { ideal: 'environment' } }, 
+                    video: { facingMode: 'user' }, 
                     audio: false 
                 });
-                stream = mediaStream;
-                setStream(mediaStream);
+                activeStream = mediaStream;
+                setStream(activeStream);
                 if (videoRef.current) {
-                    videoRef.current.srcObject = mediaStream;
-                    videoRef.current.setAttribute('playsinline', '');
-                    videoRef.current.muted = true;
-                    await videoRef.current.play();
+                    videoRef.current.srcObject = activeStream;
                 }
             } catch (err) {
                 console.error("Camera access denied:", err);
@@ -199,7 +196,7 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
         getCameraPermission();
 
         return () => {
-            stream?.getTracks().forEach(track => track.stop());
+            activeStream?.getTracks().forEach(track => track.stop());
         };
     }, [toast]);
 
@@ -225,7 +222,13 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
                 <DialogTitle>Take Photo</DialogTitle>
             </DialogHeader>
             <div className="relative">
-                <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" playsInline />
+                <video 
+                    ref={videoRef} 
+                    className="w-full aspect-video rounded-md bg-muted" 
+                    autoPlay 
+                    playsInline 
+                    muted 
+                />
                 {error && (
                      <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-md p-4">
                         <p className="text-white text-center">{error}</p>
@@ -908,4 +911,63 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
 }
 
 export default function StudentsPage() {
-    const { profile, loading: profileLoading, error: profileError }
+    const { profile, loading: profileLoading, error: profileError } = useProfile();
+    const [routes, setRoutes] = useState<RouteInfo[]>([]);
+    const [buses, setBuses] = useState<BusInfo[]>([]);
+    const [key, setKey] = useState(0); 
+    const [isLoading, setIsLoading] = useState(true);
+    const schoolId = profile?.schoolId;
+
+    const onDataNeedsRefresh = useCallback(() => setKey(k => k+1), []);
+
+    useEffect(() => {
+        const fetchData = async () => {
+            if (!schoolId) return;
+            setIsLoading(true);
+
+            try {
+                const [routesData, busesData] = await Promise.all([
+                    listRoutesForSchool(schoolId),
+                    listBusesForSchool(schoolId)
+                ]);
+                setRoutes(routesData as RouteInfo[]);
+                setBuses(busesData as BusInfo[]);
+            } catch(error) {
+                console.error("Error fetching related data:", error);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        if (schoolId) {
+          fetchData();
+        }
+      }, [schoolId, key]);
+
+    if (profileLoading || (isLoading && !profileError)) {
+        return (
+             <Card>
+                <CardHeader>
+                    <Skeleton className="h-8 w-1/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                </CardHeader>
+                <CardContent>
+                    <Skeleton className="h-40 w-full" />
+                </CardContent>
+            </Card>
+        )
+    }
+
+    if (profileError) {
+        return <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{profileError.message}</AlertDescription></Alert>
+    }
+
+    if (!profile) {
+        return <Alert><AlertTitle>No Profile</AlertTitle><AlertDescription>User profile not found. Access denied.</AlertDescription></Alert>
+    }
+
+    return (
+        <div className="grid gap-8">
+            <StudentsList key={key} routes={routes} buses={buses} schoolId={profile.schoolId} onDataNeedsRefresh={onDataNeedsRefresh} />
+        </div>
+    );
+}
