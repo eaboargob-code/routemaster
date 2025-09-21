@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -15,6 +15,7 @@ import {
   writeBatch,
   getDocs,
 } from "firebase/firestore";
+import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { useProfile } from "@/lib/useProfile";
 import { listStudentsForSchool, listRoutesForSchool, listStopsForRoute, listBusesForSchool } from "@/lib/firestoreQueries";
 import { scol, sdoc } from "@/lib/schoolPath";
@@ -74,11 +75,12 @@ import {
 } from "@/components/ui/select"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
-import { PlusCircle, Trash2, Pencil, Search, Route, Bus, GraduationCap, Upload } from "lucide-react";
+import { PlusCircle, Trash2, Pencil, Search, Route, Bus, GraduationCap, Upload, Camera, X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { db } from "@/lib/firebase";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
+import Image from "next/image";
 
 const studentSchema = z.object({
   name: z.string().min(1, { message: "Student name is required." }),
@@ -119,6 +121,74 @@ interface StopInfo {
 }
 
 const NONE_SENTINEL = "__none__";
+
+function ImageUploader({ schoolId, studentId, currentPhotoUrl, onUrlChange }: { schoolId: string, studentId: string, currentPhotoUrl?: string | null, onUrlChange: (url: string | null) => void }) {
+    const [uploading, setUploading] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const { toast } = useToast();
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleUpload = (file: File) => {
+        const storage = getStorage();
+        const storageRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile.jpg`);
+        const uploadTask = uploadBytesResumable(storageRef, file);
+
+        setUploading(true);
+
+        uploadTask.on('state_changed',
+            (snapshot) => {
+                const prog = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                setProgress(prog);
+            },
+            (error) => {
+                console.error("Upload failed:", error);
+                toast({ variant: "destructive", title: "Upload Failed", description: error.message });
+                setUploading(false);
+            },
+            () => {
+                getDownloadURL(uploadTask.snapshot.ref).then((downloadURL) => {
+                    onUrlChange(downloadURL);
+                    toast({ title: "Photo Updated!" });
+                    setUploading(false);
+                });
+            }
+        );
+    };
+
+    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (file) {
+            handleUpload(file);
+        }
+    };
+    
+    return (
+        <div className="space-y-2">
+            <FormLabel>Student Photo</FormLabel>
+            <div className="flex items-center gap-4">
+                <Avatar className="h-24 w-24 rounded-md">
+                    <AvatarImage src={currentPhotoUrl || undefined} alt="Student photo" className="object-cover" />
+                    <AvatarFallback className="rounded-md">
+                        <GraduationCap className="h-10 w-10 text-muted-foreground" />
+                    </AvatarFallback>
+                </Avatar>
+                <div className="flex-1 space-y-2">
+                     <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+                     <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                        <Upload className="mr-2" /> Upload Image
+                     </Button>
+                    {currentPhotoUrl && (
+                        <Button type="button" variant="ghost" className="text-red-500" onClick={() => onUrlChange(null)} disabled={uploading}>
+                            <X className="mr-2" /> Remove Photo
+                        </Button>
+                    )}
+                    {uploading && <Progress value={progress} className="w-full" />}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 
 function StudentForm({ student, onComplete, routes, buses, schoolId }: { student?: Student, onComplete: () => void, routes: RouteInfo[], buses: BusInfo[], schoolId: string }) {
     const { toast } = useToast();
@@ -165,6 +235,14 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
     const onSubmit = async (data: StudentFormValues) => {
         setIsSubmitting(true);
         try {
+            // A new student must be created first to get an ID for the photo path.
+            let studentId = student?.id;
+            if (!isEditMode) {
+                 const newStudentRef = await addDoc(scol(schoolId, "students"), { name: data.name, schoolId });
+                 studentId = newStudentRef.id;
+            }
+            if (!studentId) throw new Error("Could not determine student ID.");
+
             const studentData: any = {
                 name: data.name,
                 grade: data.grade || deleteField(),
@@ -191,22 +269,15 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                 studentData.busCode = deleteField();
             }
 
-            if (isEditMode) {
-                const studentRef = sdoc(schoolId, "students", student.id);
-                await updateDoc(studentRef, studentData);
-                toast({
-                    title: "Success!",
-                    description: "Student has been updated.",
-                    className: 'bg-accent text-accent-foreground border-0',
-                });
-            } else {
-                await addDoc(scol(schoolId, "students"), studentData);
-                toast({
-                    title: "Success!",
-                    description: "New student has been added.",
-                    className: 'bg-accent text-accent-foreground border-0',
-                });
-            }
+            const studentRef = sdoc(schoolId, "students", studentId);
+            await updateDoc(studentRef, studentData);
+
+            toast({
+                title: "Success!",
+                description: `Student has been ${isEditMode ? 'updated' : 'created'}.`,
+                className: 'bg-accent text-accent-foreground border-0',
+            });
+            
             form.reset();
             onComplete();
         } catch (error) {
@@ -224,6 +295,14 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
     return (
          <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            {isEditMode && student && (
+                <ImageUploader 
+                    schoolId={schoolId} 
+                    studentId={student.id} 
+                    currentPhotoUrl={form.watch('photoUrl')}
+                    onUrlChange={(url) => form.setValue('photoUrl', url)}
+                />
+            )}
             <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="name" render={({ field }) => (
                     <FormItem><FormLabel>Student Name</FormLabel><FormControl><Input placeholder="e.g., Jane Doe" {...field} /></FormControl><FormMessage /></FormItem>
@@ -232,9 +311,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                     <FormItem><FormLabel>Grade</FormLabel><FormControl><Input placeholder="e.g., 5" {...field} value={field.value ?? ""} /></FormControl><FormMessage /></FormItem>
                 )}/>
             </div>
-             <FormField control={form.control} name="photoUrl" render={({ field }) => (
-                <FormItem><FormLabel>Photo URL</FormLabel><FormControl><Input placeholder="https://example.com/photo.jpg" {...field} value={field.value ?? ""} /></FormControl><FormMessage /></FormItem>
-            )}/>
+            
             <FormField control={form.control} name="assignedRouteId" render={({ field }) => (
                 <FormItem><FormLabel>Assign to Route (Optional)</FormLabel>
                   <Select value={field.value ?? NONE_SENTINEL} onValueChange={(value) => field.onChange(value === NONE_SENTINEL ? null : value)}>
