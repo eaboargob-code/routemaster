@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
@@ -15,7 +14,7 @@ import {
   writeBatch,
   getDocs,
 } from "firebase/firestore";
-import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { useProfile } from "@/lib/useProfile";
 import { listStudentsForSchool, listRoutesForSchool, listBusesForSchool } from "@/lib/firestoreQueries";
 import { scol, sdoc } from "@/lib/schoolPath";
@@ -80,7 +79,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { db } from "@/lib/firebase";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-import Image from "next/image";
 
 const studentSchema = z.object({
   name: z.string().min(1, { message: "Student name is required." }),
@@ -118,38 +116,176 @@ interface BusInfo {
 
 const NONE_SENTINEL = "__none__";
 
+
+// --- Image & Camera Components ---
+
+async function processImage(file: File): Promise<Blob> {
+    const MAX_DIMENSION = 1024;
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let { width, height } = img;
+
+                if (width > height) {
+                    if (width > MAX_DIMENSION) {
+                        height *= MAX_DIMENSION / width;
+                        width = MAX_DIMENSION;
+                    }
+                } else {
+                    if (height > MAX_DIMENSION) {
+                        width *= MAX_DIMENSION / height;
+                        height = MAX_DIMENSION;
+                    }
+                }
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return reject(new Error("Failed to get canvas context"));
+                ctx.drawImage(img, 0, 0, width, height);
+                canvas.toBlob((blob) => {
+                    if (!blob) return reject(new Error("Canvas to Blob conversion failed"));
+                    resolve(blob);
+                }, 'image/jpeg', 0.85);
+            };
+            img.onerror = reject;
+            img.src = event.target?.result as string;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+
+function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) => void, onClose: () => void }) {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+    const { toast } = useToast();
+
+    useEffect(() => {
+        let stream: MediaStream | null = null;
+        const getCameraPermission = async () => {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                }
+                setHasPermission(true);
+            } catch (error) {
+                console.error("Camera access denied:", error);
+                setHasPermission(false);
+                toast({
+                    variant: 'destructive',
+                    title: 'Camera Access Denied',
+                    description: 'Please enable camera permissions to use this feature.',
+                });
+            }
+        };
+        getCameraPermission();
+        return () => {
+            stream?.getTracks().forEach(track => track.stop());
+        };
+    }, [toast]);
+
+    const handleCapture = () => {
+        if (!videoRef.current) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+            if (blob) {
+                onCapture(blob);
+                onClose();
+            }
+        }, 'image/jpeg', 0.85);
+    };
+
+    return (
+        <DialogContent>
+            <DialogHeader>
+                <DialogTitle>Take Photo</DialogTitle>
+            </DialogHeader>
+            <div className="relative">
+                <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted" autoPlay muted playsInline />
+                {hasPermission === false && (
+                     <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-md">
+                        <p className="text-white text-center p-4">Camera access is required. Please enable it in your browser settings.</p>
+                    </div>
+                )}
+            </div>
+            <DialogFooter>
+                <Button variant="ghost" onClick={onClose}>Cancel</Button>
+                <Button onClick={handleCapture} disabled={!hasPermission}>
+                    <Camera className="mr-2" /> Capture
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    );
+}
+
 function ImageUploader({ schoolId, studentId, currentPhotoUrl, onUrlChange }: { schoolId: string, studentId: string, currentPhotoUrl?: string | null, onUrlChange: (url: string | null) => void }) {
     const [uploading, setUploading] = useState(false);
     const [progress, setProgress] = useState(0);
+    const [isCameraOpen, setIsCameraOpen] = useState(false);
     const { toast } = useToast();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const handleUpload = (file: File) => {
-        const storage = getStorage();
-        const storageRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile.jpg`);
-        const uploadTask = uploadBytesResumable(storageRef, file);
-
+    const handleUpload = async (file: File | Blob) => {
         setUploading(true);
+        setProgress(0);
+        try {
+            const imageBlob = file instanceof File ? await processImage(file) : file;
+            const storage = getStorage();
+            const storageRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile.jpg`);
+            const uploadTask = uploadBytesResumable(storageRef, imageBlob, { contentType: 'image/jpeg' });
 
-        uploadTask.on('state_changed',
-            (snapshot) => {
-                const prog = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                setProgress(prog);
-            },
-            (error) => {
-                console.error("Upload failed:", error);
-                toast({ variant: "destructive", title: "Upload Failed", description: error.message });
-                setUploading(false);
-            },
-            () => {
-                getDownloadURL(uploadTask.snapshot.ref).then((downloadURL) => {
-                    onUrlChange(downloadURL);
-                    toast({ title: "Photo Updated!" });
+            uploadTask.on('state_changed',
+                (snapshot) => {
+                    const prog = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                    setProgress(prog);
+                },
+                (error) => {
+                    console.error("Upload failed:", error);
+                    toast({ variant: "destructive", title: "Upload Failed", description: error.message });
                     setUploading(false);
-                });
-            }
-        );
+                },
+                () => {
+                    getDownloadURL(uploadTask.snapshot.ref).then((downloadURL) => {
+                        onUrlChange(downloadURL);
+                        toast({ title: "Photo Updated!" });
+                        setUploading(false);
+                    });
+                }
+            );
+        } catch (error) {
+            console.error("Image processing failed:", error);
+            toast({ variant: "destructive", title: "Image Processing Failed", description: (error as Error).message });
+            setUploading(false);
+        }
     };
+    
+    const handleRemove = async () => {
+        if (!currentPhotoUrl) return;
+        const storage = getStorage();
+        const photoRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile.jpg`);
+        try {
+            await deleteObject(photoRef);
+        } catch (error: any) {
+            // Ignore "object-not-found" error if the file doesn't exist.
+            if (error.code !== 'storage/object-not-found') {
+                 console.error("Failed to delete photo from Storage", error);
+                 toast({ variant: "destructive", title: "Deletion Failed", description: "Could not remove the old photo from storage." });
+                 return; // Stop if we can't delete the file.
+            }
+        }
+        onUrlChange(null);
+        toast({ title: "Photo Removed" });
+    }
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -170,11 +306,22 @@ function ImageUploader({ schoolId, studentId, currentPhotoUrl, onUrlChange }: { 
                 </Avatar>
                 <div className="flex-1 space-y-2">
                      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-                     <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                        <Upload className="mr-2" /> Upload Image
-                     </Button>
+                     <div className="flex gap-2">
+                        <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                            <Upload className="mr-2" /> Upload
+                        </Button>
+                        <Dialog open={isCameraOpen} onOpenChange={setIsCameraOpen}>
+                           <DialogTrigger asChild>
+                              <Button type="button" variant="outline" disabled={uploading}><Camera className="mr-2"/> Camera</Button>
+                           </DialogTrigger>
+                           <CameraCaptureDialog 
+                               onCapture={(blob) => handleUpload(blob)} 
+                               onClose={() => setIsCameraOpen(false)}
+                           />
+                        </Dialog>
+                     </div>
                     {currentPhotoUrl && (
-                        <Button type="button" variant="ghost" className="text-red-500" onClick={() => onUrlChange(null)} disabled={uploading}>
+                        <Button type="button" variant="ghost" className="text-red-500" onClick={handleRemove} disabled={uploading}>
                             <X className="mr-2" /> Remove Photo
                         </Button>
                     )}
@@ -184,7 +331,6 @@ function ImageUploader({ schoolId, studentId, currentPhotoUrl, onUrlChange }: { 
         </div>
     );
 }
-
 
 function StudentForm({ student, onComplete, routes, buses, schoolId }: { student?: Student, onComplete: () => void, routes: RouteInfo[], buses: BusInfo[], schoolId: string }) {
     const { toast } = useToast();
@@ -196,7 +342,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
         defaultValues: {
             name: student?.name || "",
             grade: student?.grade || "",
-            photoUrl: student?.photoUrl || "",
+            photoUrl: student?.photoUrl || null,
             assignedRouteId: student?.assignedRouteId || null,
             assignedBusId: student?.assignedBusId || null,
             pickupLat: student?.pickupLat || null,
@@ -208,9 +354,18 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
         setIsSubmitting(true);
         try {
             let studentId = student?.id;
-            if (!isEditMode) {
-                 const newStudentRef = await addDoc(scol(schoolId, "students"), { name: data.name, schoolId });
+            const isNewStudent = !isEditMode;
+
+            // For new students, we need to create the doc first to get an ID for photo uploads.
+            // But we can't upload photos for a new student yet, so we'll just create the doc with text data.
+            if (isNewStudent) {
+                 const newStudentRef = await addDoc(scol(schoolId, "students"), { 
+                     name: data.name, 
+                     schoolId,
+                     createdAt: new Date(),
+                 });
                  studentId = newStudentRef.id;
+                 toast({ title: "Student Created!", description: "You can now edit the student to add a photo."});
             }
             if (!studentId) throw new Error("Could not determine student ID.");
 
@@ -220,6 +375,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                 photoUrl: data.photoUrl || deleteField(),
                 pickupLat: data.pickupLat ?? deleteField(),
                 pickupLng: data.pickupLng ?? deleteField(),
+                photoUpdatedAt: data.photoUrl ? new Date() : deleteField(),
             };
 
             const selectedRoute = routes.find(r => r.id === data.assignedRouteId);
@@ -244,11 +400,13 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
             const studentRef = sdoc(schoolId, "students", studentId);
             await updateDoc(studentRef, studentData);
 
-            toast({
-                title: "Success!",
-                description: `Student has been ${isEditMode ? 'updated' : 'created'}.`,
-                className: 'bg-accent text-accent-foreground border-0',
-            });
+            if (!isNewStudent) {
+                toast({
+                    title: "Success!",
+                    description: `Student has been updated.`,
+                    className: 'bg-accent text-accent-foreground border-0',
+                });
+            }
             
             form.reset();
             onComplete();
@@ -272,7 +430,7 @@ function StudentForm({ student, onComplete, routes, buses, schoolId }: { student
                     schoolId={schoolId} 
                     studentId={student.id} 
                     currentPhotoUrl={form.watch('photoUrl')}
-                    onUrlChange={(url) => form.setValue('photoUrl', url)}
+                    onUrlChange={(url) => form.setValue('photoUrl', url, { shouldDirty: true })}
                 />
             )}
             <div className="grid grid-cols-2 gap-4">
@@ -782,8 +940,3 @@ export default function StudentsPage() {
         </div>
     );
 }
-
-
-    
-
-    
