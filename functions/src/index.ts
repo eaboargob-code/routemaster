@@ -1,10 +1,12 @@
 // functions/src/index.ts
-import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { onDocumentWritten, Change } from "firebase-functions/v2/firestore";
+import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { onObjectFinalized } from "firebase-functions/v2/storage";
 import * as logger from "firebase-functions/logger";
 
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
 import { getStorage } from "firebase-admin/storage";
 import * as path from "path";
 import * as os from "os";
@@ -21,13 +23,15 @@ if (getApps().length === 0) {
 
 const db = getFirestore();
 const storage = getStorage();
+const messaging = getMessaging();
 
 const THUMB_WIDTH = 128;
 const THUMB_HEIGHT = 128;
 
 /* ------------------------------------------------------------------ */
-/* Trigger: onPassengerWrite                                          */
+/*                         Passenger Updates                          */
 /* ------------------------------------------------------------------ */
+
 
 /**
  * Recompute counts for a trip by scanning its passengers subcollection.
@@ -67,6 +71,70 @@ async function recomputeTripCounts(schoolId: string, tripId: string): Promise<vo
   });
 }
 
+/**
+ * Sends a push notification to all linked parents of a student.
+ */
+async function sendNotificationsToParents(schoolId: string, studentId: string, studentName: string, status: string) {
+    if (!studentId || !schoolId) return;
+
+    logger.info(`Sending notifications for ${studentName} (${studentId}) with status ${status}`);
+
+    try {
+        // 1. Find all parents linked to this student
+        const parentLinksQuery = db.collection(`schools/${schoolId}/parentStudents`).where('studentIds', 'array-contains', studentId);
+        const parentLinksSnap = await parentLinksQuery.get();
+
+        if (parentLinksSnap.empty) {
+            logger.log(`No parents linked to student ${studentId}.`);
+            return;
+        }
+
+        const parentIds = parentLinksSnap.docs.map(doc => doc.id);
+        
+        // 2. Get FCM tokens for each parent
+        const parentDocs = await db.getAll(...parentIds.map(id => db.doc(`schools/${schoolId}/users/${id}`)));
+        
+        const allTokens: string[] = [];
+        parentDocs.forEach(doc => {
+            const tokens = doc.data()?.fcmTokens;
+            if (Array.isArray(tokens)) {
+                allTokens.push(...tokens);
+            }
+        });
+        
+        if (allTokens.length === 0) {
+            logger.log(`No FCM tokens found for parents of student ${studentId}.`);
+            return;
+        }
+        
+        // 3. Construct and send the message
+        const message = {
+            notification: {
+                title: `Bus Status Update for ${studentName}`,
+                body: `${studentName} has been marked as '${status}'.`,
+            },
+            data: {
+                studentId: studentId,
+                studentName: studentName,
+                status: status,
+                kind: 'passengerStatus',
+            },
+            tokens: allTokens,
+        };
+
+        const response = await messaging.sendEachForMulticast(message);
+        logger.info(`Successfully sent ${response.successCount} messages for student ${studentId}.`);
+        if (response.failureCount > 0) {
+            // Basic error logging, can be expanded to handle token cleanup
+            logger.warn(`Failed to send ${response.failureCount} messages for student ${studentId}.`);
+        }
+
+    } catch (error) {
+        logger.error(`Error sending notifications for student ${studentId}:`, error);
+    }
+}
+
+
 export const onPassengerWrite = onDocumentWritten(
   "schools/{schoolId}/trips/{tripId}/passengers/{passengerId}",
   {
@@ -76,24 +144,36 @@ export const onPassengerWrite = onDocumentWritten(
   },
   async (event) => {
     const { schoolId, tripId } = event.params as { schoolId: string; tripId: string };
-
-    if (!schoolId || !tripId) {
-      logger.warn("Missing path params", event.params);
-      return;
-    }
-
+    
+    // --- Recompute Counts ---
     try {
       await recomputeTripCounts(schoolId, tripId);
     } catch (err) {
       logger.error("recomputeTripCounts failed", { schoolId, tripId, err });
-      throw err;
+      // We don't re-throw because we still want to attempt notifications
+    }
+
+    // --- Send Notifications ---
+    const beforeData = event.data?.before.data();
+    const afterData = event.data?.after.data();
+
+    // Check if the status has actually changed to avoid sending notifications on other updates.
+    if (afterData && beforeData?.status !== afterData?.status) {
+        const studentId = afterData.studentId;
+        const studentName = afterData.studentName || 'Your child';
+        const newStatus = afterData.status;
+
+        // Don't send for 'pending' or on initial document creation
+        if (newStatus && newStatus !== 'pending') {
+            await sendNotificationsToParents(schoolId, studentId, studentName, newStatus);
+        }
     }
   }
 );
 
 
 /* ------------------------------------------------------------------ */
-/* Trigger: onProfilePhotoUpload                                      */
+/*                       Profile Photo Thumbnailing                     */
 /* ------------------------------------------------------------------ */
 
 export const onProfilePhotoUpload = onObjectFinalized(
