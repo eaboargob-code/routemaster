@@ -98,11 +98,11 @@ function EditPhoneDialog({ parent, schoolId, onUpdate }: { parent: Parent, schoo
     const [isSubmitting, setIsSubmitting] = useState(false);
     const { toast } = useToast();
 
-    const PHONE_REGEX = /^\+?[1-9]\d{1,14}$/;
+    const PHONE_REGEX = /^\+2189\d{9}$/;
 
     const handleSave = async () => {
         if (phone && !PHONE_REGEX.test(phone)) {
-            toast({ variant: "destructive", title: "Invalid Phone Number", description: "Please enter a valid E.164 format number (e.g., +15551234567)." });
+            toast({ variant: "destructive", title: "Invalid Phone Number", description: "Please enter a valid Libyan phone number format (e.g., +2189xxxxxxxxx)." });
             return;
         }
         setIsSubmitting(true);
@@ -127,13 +127,13 @@ function EditPhoneDialog({ parent, schoolId, onUpdate }: { parent: Parent, schoo
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Edit Phone for {parent.displayName}</DialogTitle>
-                    <DialogDescription>Use E.164 format (e.g., +15551234567).</DialogDescription>
+                    <DialogDescription>Use the format +2189xxxxxxxxx.</DialogDescription>
                 </DialogHeader>
                 <div className="py-4">
                     <Input 
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
-                        placeholder="+15551234567"
+                        placeholder="+218912345678"
                     />
                 </div>
                 <DialogFooter>
