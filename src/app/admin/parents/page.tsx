@@ -88,6 +88,8 @@ interface Parent {
   phoneNumber?: string | null;
 }
 
+const NONE_SENTINEL = "__none__";
+
 // --- Sub-components ---
 
 function EditPhoneDialog({ parent, schoolId, onUpdate }: { parent: Parent, schoolId: string, onUpdate: () => void }) {
@@ -160,14 +162,14 @@ function PrimaryParentSelect({ student, linkedParents, schoolId, onUpdate }: { s
 
     return (
         <Select
-            value={student.primaryParentId ?? ""}
-            onValueChange={(val) => handleSetPrimary(val || null)}
+            value={student.primaryParentId ?? NONE_SENTINEL}
+            onValueChange={(val) => handleSetPrimary(val === NONE_SENTINEL ? null : val)}
         >
             <SelectTrigger className="w-[220px]">
               <SelectValue placeholder="Select a primary contact..." />
             </SelectTrigger>
             <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value={NONE_SENTINEL}>None</SelectItem>
                 {linkedParents.map(p => (
                     <SelectItem key={p.id} value={p.id}>
                         <div className="flex items-center gap-2">
