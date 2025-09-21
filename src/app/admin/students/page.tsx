@@ -169,14 +169,15 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
     const { toast } = useToast();
 
     useEffect(() => {
-        let activeStream: MediaStream | null = null;
+        let stream: MediaStream | null = null;
+        
         const getCameraPermission = async () => {
             try {
                 const mediaStream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: { ideal: 'environment' } }, 
                     audio: false 
                 });
-                activeStream = mediaStream;
+                stream = mediaStream;
                 setStream(mediaStream);
                 if (videoRef.current) {
                     videoRef.current.srcObject = mediaStream;
@@ -198,7 +199,7 @@ function CameraCaptureDialog({ onCapture, onClose }: { onCapture: (blob: Blob) =
         getCameraPermission();
 
         return () => {
-            activeStream?.getTracks().forEach(track => track.stop());
+            stream?.getTracks().forEach(track => track.stop());
         };
     }, [toast]);
 
@@ -907,61 +908,4 @@ function StudentsList({ routes, buses, schoolId, onDataNeedsRefresh }: { routes:
 }
 
 export default function StudentsPage() {
-    const { profile, loading: profileLoading, error: profileError } = useProfile();
-    const [routes, setRoutes] = useState<RouteInfo[]>([]);
-    const [buses, setBuses] = useState<BusInfo[]>([]);
-    const [key, setKey] = useState(0); 
-    const schoolId = profile?.schoolId;
-
-    const onDataNeedsRefresh = useCallback(() => setKey(k => k+1), []);
-
-    useEffect(() => {
-        const fetchData = async () => {
-            if (!schoolId) return;
-            try {
-                const routesData = await listRoutesForSchool(schoolId);
-                setRoutes(routesData as RouteInfo[]);
-            } catch (error) {
-              console.error("Error fetching routes:", error);
-            }
-            try {
-                const busesData = await listBusesForSchool(schoolId);
-                setBuses(busesData as BusInfo[]);
-            } catch (error) {
-              console.error("Error fetching buses:", error);
-            }
-        };
-        if (schoolId) {
-            fetchData();
-        }
-      }, [schoolId, key]);
-
-    if (profileLoading) {
-        return (
-             <Card>
-                <CardHeader>
-                    <Skeleton className="h-8 w-1/4" />
-                    <Skeleton className="h-4 w-1/2" />
-                </CardHeader>
-                <CardContent>
-                    <Skeleton className="h-40 w-full" />
-                </CardContent>
-            </Card>
-        )
-    }
-
-    if (profileError) {
-        return <div className="text-red-500">Error loading profile: {profileError.message}</div>
-    }
-
-    if (!profile) {
-        return <div>No user profile found. Access denied.</div>
-    }
-
-    return (
-        <div className="grid gap-8">
-            <StudentsList key={key} routes={routes} buses={buses} schoolId={profile.schoolId} onDataNeedsRefresh={onDataNeedsRefresh} />
-        </div>
-    );
-}
-
+    const { profile, loading: profileLoading, error: profileError }
