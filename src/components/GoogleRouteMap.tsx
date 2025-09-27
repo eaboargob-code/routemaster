@@ -119,75 +119,151 @@ function GoogleMap({
 
   // Create custom marker with student photo
   const createStudentPhotoMarker = (photoUrl: string | undefined, status: string, index: number, currentStopIndex: number): string => {
-    // Determine border color based on status
+    // Determine border color and styling based on status and position
     let borderColor = '#3b82f6'; // Default blue
-    if (status === 'boarded') borderColor = '#22c55e'; // Green
-    else if (status === 'absent') borderColor = '#ef4444'; // Red
-    else if (index === currentStopIndex) borderColor = '#f59e0b'; // Orange for current
-    else if (index === currentStopIndex + 1) borderColor = '#8b5cf6'; // Purple for next
+    let backgroundColor = '#ffffff'; // Default white background
+    let statusIndicator = '';
+    
+    if (status === 'boarded') {
+      borderColor = '#22c55e'; // Green
+      backgroundColor = '#dcfce7'; // Light green background
+      statusIndicator = '✓'; // Checkmark
+    } else if (status === 'absent') {
+      borderColor = '#ef4444'; // Red
+      backgroundColor = '#fee2e2'; // Light red background
+      statusIndicator = '✗'; // X mark
+    } else if (status === 'dropped') {
+      borderColor = '#06b6d4'; // Cyan
+      backgroundColor = '#cffafe'; // Light cyan background
+      statusIndicator = '↓'; // Down arrow
+    } else if (index === currentStopIndex) {
+      borderColor = '#f59e0b'; // Orange for current stop
+      backgroundColor = '#fef3c7'; // Light orange background
+      statusIndicator = '→'; // Right arrow
+    } else if (index === currentStopIndex + 1) {
+      borderColor = '#8b5cf6'; // Purple for next stop
+      backgroundColor = '#f3e8ff'; // Light purple background
+      statusIndicator = '◉'; // Target symbol
+    }
 
-    // Create SVG marker with photo or fallback
-    const size = 40;
+    // Create SVG marker with enhanced styling
+    const size = 44; // Slightly larger for better visibility
     const borderWidth = 3;
+    const statusSize = 12; // Size for status indicator
     
     if (photoUrl) {
-      // SVG with student photo
+      // SVG with student photo and status indicator
       return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
-        <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+        <svg width="${size}" height="${size + 8}" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <clipPath id="circle-clip">
+            <clipPath id="circle-clip-${index}">
               <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}"/>
             </clipPath>
+            <filter id="shadow-${index}" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.3)"/>
+            </filter>
           </defs>
+          <!-- Shadow circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="rgba(0,0,0,0.1)" filter="url(#shadow-${index})"/>
+          <!-- Border circle -->
           <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="${borderColor}"/>
-          <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="white"/>
+          <!-- Background circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="${backgroundColor}"/>
+          <!-- Student photo -->
           <image x="${borderWidth}" y="${borderWidth}" width="${size-borderWidth*2}" height="${size-borderWidth*2}" 
-                 href="${photoUrl}" clip-path="url(#circle-clip)" preserveAspectRatio="xMidYMid slice"/>
+                 href="${photoUrl}" clip-path="url(#circle-clip-${index})" preserveAspectRatio="xMidYMid slice"/>
+          <!-- Status indicator -->
+          ${statusIndicator ? `
+            <circle cx="${size - 8}" cy="8" r="8" fill="${borderColor}" stroke="white" stroke-width="2"/>
+            <text x="${size - 8}" y="12" font-family="Arial" font-size="10" fill="white" text-anchor="middle" font-weight="bold">${statusIndicator}</text>
+          ` : ''}
+          <!-- Stop number -->
+          <circle cx="8" cy="${size - 8}" r="8" fill="white" stroke="${borderColor}" stroke-width="2"/>
+          <text x="8" y="${size - 4}" font-family="Arial" font-size="8" fill="${borderColor}" text-anchor="middle" font-weight="bold">${index + 1}</text>
         </svg>
       `)}`;
     } else {
-      // SVG with fallback icon
+      // SVG with fallback icon and enhanced styling
       return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
-        <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+        <svg width="${size}" height="${size + 8}" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="shadow-${index}" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.3)"/>
+            </filter>
+          </defs>
+          <!-- Shadow circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="rgba(0,0,0,0.1)" filter="url(#shadow-${index})"/>
+          <!-- Border circle -->
           <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="${borderColor}"/>
-          <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="white"/>
-          <g transform="translate(${size/2-8}, ${size/2-8})">
-            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" 
+          <!-- Background circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="${backgroundColor}"/>
+          <!-- Student icon -->
+          <g transform="translate(${size/2-10}, ${size/2-10})">
+            <path d="M10 10c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" 
                   fill="#6b7280" stroke="none"/>
           </g>
+          <!-- Status indicator -->
+          ${statusIndicator ? `
+            <circle cx="${size - 8}" cy="8" r="8" fill="${borderColor}" stroke="white" stroke-width="2"/>
+            <text x="${size - 8}" y="12" font-family="Arial" font-size="10" fill="white" text-anchor="middle" font-weight="bold">${statusIndicator}</text>
+          ` : ''}
+          <!-- Stop number -->
+          <circle cx="8" cy="${size - 8}" r="8" fill="white" stroke="${borderColor}" stroke-width="2"/>
+          <text x="8" y="${size - 4}" font-family="Arial" font-size="8" fill="${borderColor}" text-anchor="middle" font-weight="bold">${index + 1}</text>
         </svg>
       `)}`;
     }
   };
 
-  // Create custom marker with yellow school bus icon
+  // Create custom marker with enhanced yellow school bus icon
   const createDriverBusMarker = (): string => {
-    const size = 50;
-    const borderWidth = 3;
+    const size = 56; // Larger for better visibility
+    const borderWidth = 4;
     const borderColor = '#f59e0b'; // Orange/yellow border
     
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
-      <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+      <svg width="${size}" height="${size + 8}" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <filter id="bus-shadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="rgba(0,0,0,0.4)"/>
+          </filter>
+          <linearGradient id="busGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#fbbf24;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:1" />
+          </linearGradient>
+        </defs>
+        <!-- Shadow circle -->
+        <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="rgba(0,0,0,0.15)" filter="url(#bus-shadow)"/>
+        <!-- Border circle -->
         <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="${borderColor}"/>
+        <!-- Background circle -->
         <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="white"/>
-        <g transform="translate(${size/2-14}, ${size/2-10})">
-          <!-- School bus body -->
-          <rect x="2" y="8" width="24" height="12" rx="2" fill="#fbbf24" stroke="#f59e0b" stroke-width="1"/>
+        <!-- School bus -->
+        <g transform="translate(${size/2-16}, ${size/2-12})">
+          <!-- Bus body with gradient -->
+          <rect x="2" y="8" width="28" height="14" rx="3" fill="url(#busGradient)" stroke="#f59e0b" stroke-width="1"/>
           <!-- Bus front -->
-          <rect x="0" y="10" width="4" height="8" rx="1" fill="#fbbf24" stroke="#f59e0b" stroke-width="1"/>
+          <rect x="0" y="10" width="4" height="10" rx="2" fill="url(#busGradient)" stroke="#f59e0b" stroke-width="1"/>
           <!-- Windows -->
-          <rect x="4" y="10" width="4" height="3" fill="#93c5fd"/>
-          <rect x="9" y="10" width="4" height="3" fill="#93c5fd"/>
-          <rect x="14" y="10" width="4" height="3" fill="#93c5fd"/>
-          <rect x="19" y="10" width="4" height="3" fill="#93c5fd"/>
-          <!-- Wheels -->
-          <circle cx="6" cy="20" r="2" fill="#374151"/>
-          <circle cx="20" cy="20" r="2" fill="#374151"/>
+          <rect x="4" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <rect x="10" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <rect x="16" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <rect x="22" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <!-- Wheels with better styling -->
+          <circle cx="7" cy="22" r="2.5" fill="#374151" stroke="#111827" stroke-width="1"/>
+          <circle cx="7" cy="22" r="1" fill="#6b7280"/>
+          <circle cx="23" cy="22" r="2.5" fill="#374151" stroke="#111827" stroke-width="1"/>
+          <circle cx="23" cy="22" r="1" fill="#6b7280"/>
           <!-- Door -->
-          <rect x="24" y="12" width="2" height="6" fill="#dc2626"/>
+          <rect x="28" y="12" width="2" height="8" rx="1" fill="#dc2626"/>
           <!-- School text -->
-          <text x="13" y="17" font-family="Arial" font-size="3" fill="#dc2626" text-anchor="middle" font-weight="bold">SCHOOL</text>
+          <text x="15" y="18" font-family="Arial" font-size="3.5" fill="#dc2626" text-anchor="middle" font-weight="bold">SCHOOL</text>
+          <!-- Driver indicator -->
+          <circle cx="6" cy="12" r="1.5" fill="#fbbf24"/>
         </g>
+        <!-- "YOU" indicator -->
+        <circle cx="${size/2}" cy="${size - 10}" r="10" fill="#dc2626" stroke="white" stroke-width="2"/>
+        <text x="${size/2}" y="${size - 6}" font-family="Arial" font-size="6" fill="white" text-anchor="middle" font-weight="bold">YOU</text>
       </svg>
     `)}`;
   };
@@ -231,7 +307,7 @@ function GoogleMap({
       
       const newMap = new google.maps.Map(ref.current, {
         center: mapCenter,
-        zoom: 12,
+        zoom: 10, // Lower initial zoom to allow bounds to take precedence
         mapTypeId: google.maps.MapTypeId.ROADMAP,
         mapId: 'DEMO_MAP_ID', // Required for Advanced Markers
         // Mobile-optimized controls
@@ -360,55 +436,89 @@ function GoogleMap({
       markersRef.current.push(driverMarker as any);
     }
 
-    // Student markers
+    // Student markers - try optimizedStops first, fallback to students prop
+    let studentsToShow = [];
+    
+    if (optimizedStops && optimizedStops.length > 0) {
+      // Use optimized stops if available
       const validStops = optimizedStops.filter(stop => stop.student.latitude && stop.student.longitude);
-      
-      validStops.forEach((stop, index) => {
-        const passengerStatus = passengerStatuses.find(p => p.studentId === stop.student.id);
-        const status = passengerStatus?.status || 'pending';
-        
-        let studentMarker;
-        
-        // Try to use AdvancedMarkerElement if available, fallback to regular Marker
-        if (google.maps.marker && google.maps.marker.AdvancedMarkerElement) {
-          // Create marker content element
-          const studentMarkerContent = document.createElement('img');
-          studentMarkerContent.src = createStudentPhotoMarker(stop.student.photoUrl, status, index, currentStopIndex);
-          studentMarkerContent.style.width = '40px';
-          studentMarkerContent.style.height = '40px';
-          studentMarkerContent.style.cursor = 'pointer';
-          
-          studentMarker = new google.maps.marker.AdvancedMarkerElement({
-            position: { lat: stop.student.latitude, lng: stop.student.longitude },
-            map: map,
-            title: stop.student.name,
-            content: studentMarkerContent
-          });
-        } else {
-          // Fallback to regular Marker
-          studentMarker = new google.maps.Marker({
-            position: { lat: stop.student.latitude, lng: stop.student.longitude },
-            map: map,
-            title: stop.student.name,
-            icon: {
-              url: createStudentPhotoMarker(stop.student.photoUrl, status, index, currentStopIndex),
-              scaledSize: new google.maps.Size(40, 40),
-              anchor: new google.maps.Point(20, 20)
-            }
-          });
-        }
+      studentsToShow = validStops.map((stop, index) => ({
+        ...stop.student,
+        order: index,
+        isOptimized: true
+      }));
+    } else if (students && students.length > 0) {
+      // Fallback to students prop if no optimized stops
+      const validStudents = students.filter(student => 
+        typeof student.lat === 'number' && 
+        typeof student.lng === 'number' && 
+        !isNaN(student.lat) && 
+        !isNaN(student.lng) &&
+        student.lat !== 0 && 
+        student.lng !== 0
+      );
+      studentsToShow = validStudents.map((student, index) => ({
+        id: student.studentId,
+        name: student.name,
+        latitude: student.lat,
+        longitude: student.lng,
+        photoUrl: student.photoUrl,
+        order: index,
+        isOptimized: false
+      }));
+    }
 
-        // Add click listener for navigation
-        studentMarker.addListener('click', () => {
-          if (onNavigateToStop) {
-            onNavigateToStop(stop);
+    console.log('🎯 [GoogleRouteMap] Students to show:', studentsToShow.length);
+    
+    studentsToShow.forEach((student, index) => {
+      const passengerStatus = passengerStatuses.find(p => p.studentId === student.id);
+      const status = passengerStatus?.status || 'pending';
+      
+      let studentMarker;
+      
+      // Try to use AdvancedMarkerElement if available, fallback to regular Marker
+      if (google.maps.marker && google.maps.marker.AdvancedMarkerElement) {
+        // Create marker content element
+        const studentMarkerContent = document.createElement('img');
+        studentMarkerContent.src = createStudentPhotoMarker(student.photoUrl, status, index, currentStopIndex);
+        studentMarkerContent.style.width = '40px';
+        studentMarkerContent.style.height = '40px';
+        studentMarkerContent.style.cursor = 'pointer';
+        
+        studentMarker = new google.maps.marker.AdvancedMarkerElement({
+          position: { lat: student.latitude, lng: student.longitude },
+          map: map,
+          title: student.name,
+          content: studentMarkerContent
+        });
+      } else {
+        // Fallback to regular Marker
+        studentMarker = new google.maps.Marker({
+          position: { lat: student.latitude, lng: student.longitude },
+          map: map,
+          title: student.name,
+          icon: {
+            url: createStudentPhotoMarker(student.photoUrl, status, index, currentStopIndex),
+            scaledSize: new google.maps.Size(40, 40),
+            anchor: new google.maps.Point(20, 20)
           }
         });
+      }
 
-        markersRef.current.push(studentMarker);
-      });
+      // Add click listener for navigation (only if optimized)
+      if (student.isOptimized && onNavigateToStop) {
+        const stop = optimizedStops.find(s => s.student.id === student.id);
+        if (stop) {
+          studentMarker.addListener('click', () => {
+            onNavigateToStop(stop);
+          });
+        }
+      }
 
-    // Fit bounds to show all markers
+      markersRef.current.push(studentMarker);
+    });
+
+    // Fit bounds to show all markers with proper padding
     if (markersRef.current.length > 0) {
       const bounds = new google.maps.LatLngBounds();
       markersRef.current.forEach(marker => {
@@ -422,10 +532,30 @@ function GoogleMap({
           bounds.extend(position);
         }
       });
-      map.fitBounds(bounds);
+      
+      // Add padding to the bounds for better visibility
+      const padding = {
+        top: 50,
+        right: 50,
+        bottom: 50,
+        left: 50
+      };
+      
+      // Use setTimeout to ensure bounds calculation happens after map is fully rendered
+      setTimeout(() => {
+        map.fitBounds(bounds, padding);
+        
+        // Ensure minimum zoom level to avoid zooming too close
+        const listener = google.maps.event.addListenerOnce(map, 'bounds_changed', () => {
+          const currentZoom = map.getZoom();
+          if (currentZoom && currentZoom > 15) {
+            map.setZoom(15);
+          }
+        });
+      }, 100);
     }
 
-  }, [map, optimizedStops, driverLocation, currentDriverLocation, passengerStatuses, currentStopIndex, schoolLocation, onNavigateToStop, clearMarkers]);
+  }, [map, students, optimizedStops, driverLocation, currentDriverLocation, passengerStatuses, currentStopIndex, schoolLocation, onNavigateToStop, clearMarkers]);
 
   // Draw route when trip is started
   useEffect(() => {
@@ -516,26 +646,21 @@ export default function GoogleRouteMap({
     });
   };
 
-  // Handle trip start
-  const handleStartTrip = async () => {
+  // Handle navigation route display
+  const handleNavigateRoute = async () => {
     try {
       const location = await getCurrentLocation();
       setCurrentDriverLocation(location);
-      if (onStartTrip) {
-        onStartTrip(location);
-      }
+      // The route will be automatically drawn by the routeCoordinates logic below
     } catch (error) {
       console.error('Error getting current location:', error);
       alert('Unable to get your current location. Please enable location services.');
     }
   };
 
-  // Handle trip stop
-  const handleStopTrip = () => {
+  // Handle clearing the route
+  const handleClearRoute = () => {
     setCurrentDriverLocation(null);
-    if (onStopTrip) {
-      onStopTrip();
-    }
   };
 
   // Create route coordinates for Google Maps
@@ -547,11 +672,12 @@ export default function GoogleRouteMap({
       ? { lat: driverLocation.latitude, lng: driverLocation.longitude } 
       : null);
   
-  if (tripStarted && activeDriverLocation) {
+  // Show route when navigation is active (currentDriverLocation is set)
+  if (currentDriverLocation && optimizedStops.length > 0) {
     // Start from driver's current location
-    routeCoordinates.push(activeDriverLocation);
+    routeCoordinates.push(currentDriverLocation);
     
-    // Add student stops
+    // Add student stops in optimized order (farthest to nearest)
     optimizedStops
       .filter(stop => typeof stop.student.latitude === 'number' && typeof stop.student.longitude === 'number')
       .forEach(stop => {
@@ -608,34 +734,48 @@ export default function GoogleRouteMap({
 
   return (
     <div className={`space-y-4 ${className}`}>
-      {/* Trip Control */}
+      {/* Navigation Control */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <CardTitle className="flex items-center gap-2">
               <RouteIcon className="h-5 w-5" />
-              Trip Control
+              Navigation Control
             </CardTitle>
             <div className="flex gap-2">
-              {!tripStarted ? (
-                <Button onClick={handleStartTrip} className="flex items-center gap-2 w-full sm:w-auto" size="sm">
-                  <Play className="h-4 w-4" />
-                  Start Trip
-                </Button>
-              ) : (
-                <Button onClick={handleStopTrip} variant="destructive" className="flex items-center gap-2 w-full sm:w-auto" size="sm">
+              <Button 
+                onClick={handleNavigateRoute} 
+                className="flex items-center gap-2 w-full sm:w-auto" 
+                size="sm"
+                disabled={!driverLocation || optimizedStops.length === 0}
+              >
+                <Navigation className="h-4 w-4" />
+                Navigate Route
+              </Button>
+              {routeCoordinates.length > 0 && (
+                <Button 
+                  onClick={handleClearRoute} 
+                  variant="outline" 
+                  className="flex items-center gap-2 w-full sm:w-auto" 
+                  size="sm"
+                >
                   <Square className="h-4 w-4" />
-                  Stop Trip
+                  Clear Route
                 </Button>
               )}
             </div>
           </div>
         </CardHeader>
-        {tripStarted && currentDriverLocation && (
+        {routeCoordinates.length > 0 && (
           <CardContent className="pt-0">
             <div className="text-sm text-gray-600">
-              Trip started from: {currentDriverLocation.lat.toFixed(6)}, {currentDriverLocation.lng.toFixed(6)}
+              Route displayed: {optimizedStops.length} student stops → School
             </div>
+            {driverLocation && (
+              <div className="text-sm text-gray-500 mt-1">
+                Starting from: {driverLocation.latitude.toFixed(6)}, {driverLocation.longitude.toFixed(6)}
+              </div>
+            )}
           </CardContent>
         )}
       </Card>

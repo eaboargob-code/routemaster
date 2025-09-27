@@ -18,6 +18,10 @@ export interface DriverLocation {
   latitude: number;
   longitude: number;
   photoUrl?: string;
+  accuracy?: number;
+  speed?: number;
+  heading?: number;
+  timestamp?: Date;
 }
 
 export interface OptimizedStop {

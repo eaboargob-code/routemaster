@@ -16,7 +16,7 @@ import {
   setDoc,
   Timestamp,
 } from "firebase/firestore";
-import { startOfToday } from "@/lib/firestoreQueries";
+import { startOfToday, listStudentsForSchool } from "@/lib/firestoreQueries";
 import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +51,7 @@ import { QRScanner, ScanResult } from "@/components/QRScanner";
 import { boardStudent, dropStudent, markAbsent } from "@/lib/roster";
 import EnhancedPassengerList from "@/components/EnhancedPassengerList";
 import { audioFeedbackService } from "@/lib/audioFeedback";
+import { parseLocationLink } from "@/lib/locationParser";
 import {
   StudentLocation,
   SchoolLocation,
@@ -320,8 +321,8 @@ export default function DriverRoutePage() {
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
         const newDriverLocation: DriverLocation = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
           accuracy: position.coords.accuracy,
           speed: position.coords.speed || 0,
           heading: position.coords.heading || 0,
@@ -329,6 +330,7 @@ export default function DriverRoutePage() {
         };
 
         setDriverLocation(newDriverLocation);
+        console.log("🚗 Driver location updated:", newDriverLocation);
         setGeolocationState((prev) => ({
           ...prev,
           position,
@@ -545,10 +547,55 @@ export default function DriverRoutePage() {
                 orderBy("studentName")
               );
 
-              const passengersUnsubscribe = onSnapshot(passengersQuery, (passengersSnapshot) => {
-                // Use passenger data directly like the roster does
+              const passengersUnsubscribe = onSnapshot(passengersQuery, async (passengersSnapshot) => {
+                // Fetch student data from the students collection to get pickup coordinates
+                let allStudentsData: any[] = [];
+                try {
+                  allStudentsData = await listStudentsForSchool(profile.schoolId);
+                } catch (error) {
+                  console.error("Error fetching students data:", error);
+                }
+                
+                // Create a map of student ID to student data for quick lookup
+                const studentsMap = new Map();
+                allStudentsData.forEach(student => {
+                  studentsMap.set(student.id, student);
+                });
+                
+                // Merge passenger data with student location data
                 const studentsData: Student[] = passengersSnapshot.docs.map((passengerDoc) => {
                   const passengerData = passengerDoc.data();
+                  const studentData = studentsMap.get(passengerDoc.id) || {};
+                  
+                  // Priority order for coordinates:
+                  // 1. Student collection pickupLat/pickupLng (primary source)
+                  // 2. Passenger data pickupLat/pickupLng (fallback)
+                  // 3. Parse from pickupLocationLink (Google Maps URL)
+                  let pickupLat = studentData.pickupLat || passengerData.pickupLat;
+                  let pickupLng = studentData.pickupLng || passengerData.pickupLng;
+                  let coordinates = undefined;
+                  
+                  // If coordinates are valid, use them
+                  if (typeof pickupLat === "number" && typeof pickupLng === "number" && pickupLat !== 0 && pickupLng !== 0) {
+                    coordinates = { lat: pickupLat, lng: pickupLng };
+                  } 
+                  // Otherwise, try to parse from pickupLocationLink (Google Maps URL)
+                  else if (passengerData.pickupLocationLink && typeof passengerData.pickupLocationLink === "string") {
+                    try {
+                      const parseResult = parseLocationLink(passengerData.pickupLocationLink.trim());
+                      if (parseResult.success && parseResult.coordinates) {
+                        pickupLat = parseResult.coordinates.latitude;
+                        pickupLng = parseResult.coordinates.longitude;
+                        coordinates = { lat: pickupLat, lng: pickupLng };
+                        console.log(`Parsed coordinates for student ${passengerDoc.id}: ${pickupLat}, ${pickupLng}`);
+                      } else {
+                        console.warn(`Could not parse location link for student ${passengerDoc.id}: ${parseResult.error}`);
+                      }
+                    } catch (error) {
+                      console.warn(`Error parsing location link for student ${passengerDoc.id}:`, error);
+                    }
+                  }
+                  
                   return {
                     id: passengerDoc.id,
                     name: passengerData.studentName || passengerDoc.id,
@@ -557,17 +604,14 @@ export default function DriverRoutePage() {
                     photoUrlThumb: passengerData.photoUrlThumb,
                     assignedRouteId: passengerData.assignedRouteId,
                     assignedBusId: passengerData.assignedBusId,
-                    pickupLat: passengerData.pickupLat,
-                    pickupLng: passengerData.pickupLng,
+                    pickupLat: pickupLat,
+                    pickupLng: pickupLng,
                     schoolId: profile.schoolId,
-                    coordinates:
-                      typeof passengerData.pickupLat === "number" && typeof passengerData.pickupLng === "number"
-                        ? { lat: passengerData.pickupLat, lng: passengerData.pickupLng }
-                        : undefined,
+                    coordinates: coordinates,
                     address:
                       passengerData.address ||
-                      (typeof passengerData.pickupLat === "number" && typeof passengerData.pickupLng === "number"
-                        ? `Pickup Location (${passengerData.pickupLat}, ${passengerData.pickupLng})`
+                      (coordinates
+                        ? `Pickup Location (${pickupLat}, ${pickupLng})`
                         : undefined),
                     parentPhone: passengerData.parentPhone,
                     pickupTime: passengerData.pickupTime,
@@ -599,14 +643,36 @@ export default function DriverRoutePage() {
                   });
                 }
                 
+                console.log('[DEBUG] Setting students data:', studentsData);
                 setStudents(studentsData);
 
-                // Optimize route (only students with coordinates)
-                const withCoords = studentsData.filter(
-                  (s) =>
-                    (s.coordinates && typeof s.coordinates.lat === "number" && typeof s.coordinates.lng === "number") ||
-                    (typeof s.pickupLat === "number" && typeof s.pickupLng === "number")
-                );
+                // Optimize route (only students with valid coordinates)
+                const withCoords = studentsData.filter((s) => {
+                  // Check if coordinates object exists and has valid values
+                  if (s.coordinates && 
+                      typeof s.coordinates.lat === "number" && 
+                      typeof s.coordinates.lng === "number" &&
+                      s.coordinates.lat !== 0 && 
+                      s.coordinates.lng !== 0 &&
+                      !isNaN(s.coordinates.lat) && 
+                      !isNaN(s.coordinates.lng)) {
+                    return true;
+                  }
+                  
+                  // Fallback: check direct pickup coordinates
+                  if (typeof s.pickupLat === "number" && 
+                      typeof s.pickupLng === "number" &&
+                      s.pickupLat !== 0 && 
+                      s.pickupLng !== 0 &&
+                      !isNaN(s.pickupLat) && 
+                      !isNaN(s.pickupLng)) {
+                    return true;
+                  }
+                  
+                  return false;
+                });
+                
+                console.log('[DEBUG] Students with coordinates:', withCoords.length);
                 
                 if (withCoords.length > 0) {
                   const studentLocations: StudentLocation[] = withCoords.map((s) => ({
@@ -617,18 +683,24 @@ export default function DriverRoutePage() {
                     photoUrl: s.photoUrl || s.photoUrlThumb,
                   }));
 
+                  console.log('[DEBUG] Student locations for optimization:', studentLocations);
+                  console.log('[DEBUG] School location:', schoolLocation);
+                  console.log('[DEBUG] Driver location:', driverLocation);
+
                   // Use driver location-based optimization if available, otherwise use school-based optimization
                   const optimized = schoolLocation ? (driverLocation 
                     ? optimizeRouteWithDriverLocation(studentLocations, driverLocation, schoolLocation)
                     : optimizeRoute(studentLocations, schoolLocation)) : { optimizedStops: [], currentStopIndex: 0, currentStop: null, nextStop: null };
-                  const stats = getRouteStatistics(optimized, studentLocations);
+                  
+                  console.log('[DEBUG] Optimized route result:', optimized);
+                  const stats = getRouteStatistics(optimized.optimizedStops);
 
                   const currentIndex = tripData.routeOptimization?.currentStopIndex || 0;
                   setRouteOptimization({
-                    optimizedStops: optimized,
+                    optimizedStops: optimized.optimizedStops,
                     currentStopIndex: currentIndex,
-                    currentStop: getCurrentStop(optimized, currentIndex),
-                    nextStop: getNextStop(optimized, currentIndex),
+                    currentStop: getCurrentStop(optimized.optimizedStops, currentIndex),
+                    nextStop: getNextStop(optimized.optimizedStops, currentIndex),
                   });
 
                   setTripStats((prev) => ({
@@ -644,36 +716,40 @@ export default function DriverRoutePage() {
                 console.error("Error fetching passengers:", error);
                 // Fallback: Create mock data to test the passenger count functionality
                 // Note: These coordinates will be overridden by real student data from Firebase
+                // Using realistic coordinates around New York area for testing
                 const mockStudents: Student[] = [
                   {
                     id: "student1",
                     name: "Alice Johnson",
                     grade: "5th Grade",
                     schoolId: profile.schoolId,
-                    pickupLat: 0,
-                    pickupLng: 0,
-                    coordinates: { lat: 0, lng: 0 },
-                    address: "Student Address 1"
+                    pickupLat: 40.7589,
+                    pickupLng: -73.9851,
+                    coordinates: { lat: 40.7589, lng: -73.9851 },
+                    address: "123 Main Street, New York, NY",
+                    photoUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=100&h=100&fit=crop&crop=face"
                   },
                   {
                     id: "student2", 
                     name: "Bob Smith",
                     grade: "4th Grade",
                     schoolId: profile.schoolId,
-                    pickupLat: 0,
-                    pickupLng: 0,
-                    coordinates: { lat: 0, lng: 0 },
-                    address: "Student Address 2"
+                    pickupLat: 40.7505,
+                    pickupLng: -73.9934,
+                    coordinates: { lat: 40.7505, lng: -73.9934 },
+                    address: "456 Oak Avenue, New York, NY",
+                    photoUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop&crop=face"
                   },
                   {
                     id: "student3",
                     name: "Carol Davis", 
                     grade: "6th Grade",
                     schoolId: profile.schoolId,
-                    pickupLat: 0,
-                    pickupLng: 0,
-                    coordinates: { lat: 0, lng: 0 },
-                    address: "Student Address 3"
+                    pickupLat: 40.7614,
+                    pickupLng: -73.9776,
+                    coordinates: { lat: 40.7614, lng: -73.9776 },
+                    address: "789 Pine Road, New York, NY",
+                    photoUrl: "https://images.unsplash.com/photo-1494790108755-2616b612b786?w=100&h=100&fit=crop&crop=face"
                   }
                 ] as Student[];
                 
@@ -692,14 +768,15 @@ export default function DriverRoutePage() {
                 const optimized = schoolLocation ? (driverLocation 
                   ? optimizeRouteWithDriverLocation(studentLocations, driverLocation, schoolLocation)
                   : optimizeRoute(studentLocations, schoolLocation)) : [];
-                const stats = getRouteStatistics(optimized, studentLocations);
+                const stats = getRouteStatistics(Array.isArray(optimized) ? optimized : optimized.optimizedStops);
 
                 const currentIndex = tripData.routeOptimization?.currentStopIndex || 0;
+                const optimizedStops = Array.isArray(optimized) ? optimized : optimized.optimizedStops;
                 setRouteOptimization({
-                  optimizedStops: optimized,
+                  optimizedStops: optimizedStops,
                   currentStopIndex: currentIndex,
-                  currentStop: getCurrentStop(optimized, currentIndex),
-                  nextStop: getNextStop(optimized, currentIndex),
+                  currentStop: getCurrentStop(optimizedStops, currentIndex),
+                  nextStop: getNextStop(optimizedStops, currentIndex),
                 });
 
                 setTripStats((prev) => ({
@@ -766,8 +843,8 @@ export default function DriverRoutePage() {
         status: "ended",
         endedAt: serverTimestamp(),
         currentLocation: {
-          lat: driverLocation.lat,
-          lng: driverLocation.lng,
+          lat: driverLocation.latitude,
+          lng: driverLocation.longitude,
           timestamp: serverTimestamp(),
         },
       });
@@ -853,7 +930,7 @@ export default function DriverRoutePage() {
           studentId: result.data!.studentId,
           status: newStatusValue,
           timestamp: serverTimestamp(),
-          location: driverLocation ? { lat: driverLocation.lat, lng: driverLocation.lng } : undefined,
+          location: driverLocation ? { lat: driverLocation.latitude, lng: driverLocation.longitude } : undefined,
           method: "qr",
         };
 
@@ -911,7 +988,7 @@ export default function DriverRoutePage() {
           studentId,
           status,
           timestamp: serverTimestamp(),
-          location: driverLocation ? { lat: driverLocation.lat, lng: driverLocation.lng } : undefined,
+          location: driverLocation ? { lat: driverLocation.latitude, lng: driverLocation.longitude } : undefined,
           method: "manual",
         };
 
@@ -1335,6 +1412,7 @@ export default function DriverRoutePage() {
         </TabsContent>
 
         <TabsContent value="map">
+          {console.log("🗺️ Passing to GoogleRouteMap - driverLocation:", driverLocation, "tripStarted:", activeTrip.status === "active")}
           <GoogleRouteMap
             students={students
               .filter(
