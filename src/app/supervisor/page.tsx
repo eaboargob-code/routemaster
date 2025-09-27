@@ -35,7 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Frown, Eye, UserCheck, AlertTriangle } from "lucide-react";
+import { Frown, Eye, UserCheck, AlertTriangle, User } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 type Trip = {
@@ -182,7 +182,19 @@ export default function SupervisorPage() {
   /* ------------------ UI ------------------ */
 
   return (
-    <Card>
+    <div className="space-y-6">
+      {/* Navigation Header */}
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">Supervisor Dashboard</h1>
+        <Link href="/supervisor/profile">
+          <Button variant="outline" size="sm" className="flex items-center gap-2">
+            <User className="h-4 w-4" />
+            My Profile
+          </Button>
+        </Link>
+      </div>
+
+      <Card>
       <CardHeader>
         <CardTitle>Today's Trips</CardTitle>
         <CardDescription>
@@ -275,5 +287,6 @@ export default function SupervisorPage() {
         </div>
       </CardContent>
     </Card>
+    </div>
   );
 }

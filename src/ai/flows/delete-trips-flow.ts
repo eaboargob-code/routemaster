@@ -6,7 +6,7 @@
 
 import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
-import * as admin from 'firebase-admin';
+import { adminDb } from '@/lib/firebase-admin';
 
 const DeleteTripsInputSchema = z.object({
   schoolId: z.string().describe('The ID of the school to delete trips from.'),
@@ -23,12 +23,7 @@ const DeleteTripsOutputSchema = z.object({
 });
 export type DeleteTripsOutput = z.infer<typeof DeleteTripsOutputSchema>;
 
-
-// Ensure Firebase Admin is initialized
-if (admin.apps.length === 0) {
-    admin.initializeApp();
-}
-const db = admin.firestore();
+const db = adminDb;
 
 
 async function deleteTrips(input: DeleteTripsInput): Promise<DeleteTripsOutput> {

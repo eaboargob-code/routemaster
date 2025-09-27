@@ -1,4 +1,3 @@
-
 // src/lib/useProfile.ts
 "use client";
 
@@ -10,6 +9,7 @@ import {
   getDoc,
   DocumentData,
 } from "firebase/firestore";
+import { getSchoolProfile } from "./firestoreQueries";
 
 export type UserRole = "admin" | "driver" | "supervisor" | "parent";
 
@@ -19,8 +19,12 @@ export interface UserProfile {
   displayName?: string;
   role: UserRole;
   schoolId: string;
+  schoolName?: string;
+  schoolLocation?: string;
   active?: boolean;
   pending?: boolean;
+  photoUrl?: string;
+  phoneNumber?: string;
   // add other fields you store in users docs (fcmTokens, etc.)
 }
 
@@ -34,7 +38,7 @@ type UseProfileState = {
 async function resolveSchoolId(u: FirebaseUser): Promise<string | null> {
   // 1) try custom claims
   try {
-    const token = await getIdTokenResult(u, true);
+    const token = await getIdTokenResult(u, true); // Force refresh
     const schoolIdFromClaims = (token.claims as any)?.schoolId as string | undefined;
     if (schoolIdFromClaims) return schoolIdFromClaims;
   } catch {
@@ -51,38 +55,89 @@ async function resolveSchoolId(u: FirebaseUser): Promise<string | null> {
   } catch {
     /* keep going */
   }
+  
+  // 3) Fallback: read from /users/{uid} (for older data structures)
+  try {
+    const userSnap = await getDoc(doc(db, "users", u.uid));
+    if (userSnap.exists()) {
+        const schoolIdFromUserDoc = (userSnap.data() as any)?.schoolId as string | undefined;
+        if(schoolIdFromUserDoc) return schoolIdFromUserDoc;
+    }
+  } catch {
+      /* nothing to do */
+  }
 
   return null;
 }
 
+
 export async function fetchProfile(u: FirebaseUser): Promise<UserProfile | null> {
   const schoolId = await resolveSchoolId(u);
   if (!schoolId) {
-    throw new Error("No schoolId in user claims or usersIndex.");
+    // This is not an error, but it means we can't find a profile in a school context.
+    // For a multi-school setup, this is expected if the user isn't linked yet.
+    // However, for this app, we assume one school, so this implies a problem.
+    throw new Error(`Could not resolve a schoolId for user ${u.uid}.`);
   }
 
-  const userRef = doc(db, "schools", schoolId, "users", u.uid);
-  const snap = await getDoc(userRef);
-  if (!snap.exists()) {
-    throw new Error("User document not found in school.");
+  // Fetch school information
+  let schoolName: string | undefined;
+  let schoolLocation: string | undefined;
+  try {
+    const schoolProfile = await getSchoolProfile(schoolId);
+    if (schoolProfile) {
+      schoolName = schoolProfile.name;
+      schoolLocation = schoolProfile.city;
+    }
+  } catch (error) {
+    // School profile not found or error fetching, continue without school info
+    console.warn(`Could not fetch school profile for schoolId ${schoolId}:`, error);
   }
 
-  const data = snap.data() as DocumentData;
+  // Look for the user's profile within the school's subcollection first.
+  const schoolUserRef = doc(db, "schools", schoolId, "users", u.uid);
+  const schoolUserSnap = await getDoc(schoolUserRef);
+  if (schoolUserSnap.exists()) {
+      const data = schoolUserSnap.data() as DocumentData;
+      return {
+        uid: u.uid,
+        email: u.email,
+        displayName: data.displayName ?? u.displayName ?? undefined,
+        role: data.role as UserRole,
+        schoolId: schoolId,
+        schoolName,
+        schoolLocation,
+        active: data.active,
+        pending: data.pending,
+        photoUrl: data.photoUrl,
+        phoneNumber: data.phoneNumber,
+      };
+  }
+  
+  // Fallback to the root users collection
+  const rootUserRef = doc(db, "users", u.uid);
+  const rootUserSnap = await getDoc(rootUserRef);
+  if (rootUserSnap.exists()) {
+      const data = rootUserSnap.data() as DocumentData;
+       return {
+        uid: u.uid,
+        email: u.email,
+        displayName: data.displayName ?? u.displayName ?? undefined,
+        role: data.role as UserRole,
+        schoolId: schoolId,
+        schoolName,
+        schoolLocation,
+        active: data.active,
+        pending: data.pending,
+        photoUrl: data.photoUrl,
+        phoneNumber: data.phoneNumber,
+      };
+  }
 
-  // normalize into the shape your app expects
-  const profile: UserProfile = {
-    uid: u.uid,
-    email: u.email,
-    displayName: data.displayName ?? u.displayName ?? null ?? undefined,
-    role: data.role as UserRole,
-    schoolId: schoolId,
-    active: data.active,
-    pending: data.pending,
-    // include any other fields you rely on
-  };
-
-  return profile;
+  throw new Error(`User document not found for uid ${u.uid} in school ${schoolId} or at the root.`);
 }
+
+const profileCache = new Map<string, UserProfile>();
 
 export function useProfile() {
   const [state, setState] = useState<UseProfileState>({
@@ -97,9 +152,16 @@ export function useProfile() {
       setState({ user: null, profile: null, loading: false, error: null });
       return;
     }
+    // Return from cache if available to prevent re-fetching on every HMR
+    if (profileCache.has(u.uid)) {
+        setState({ user: u, profile: profileCache.get(u.uid)!, loading: false, error: null });
+        return;
+    }
+
     setState(prev => ({ ...prev, loading: true, error: null }));
     try {
       const p = await fetchProfile(u);
+      if(p) profileCache.set(u.uid, p);
       setState({ user: u, profile: p, loading: false, error: null });
     } catch (err: any) {
       setState({ user: u, profile: null, loading: false, error: err });
@@ -114,9 +176,18 @@ export function useProfile() {
   }, [load]);
 
   const refresh = useCallback(async () => {
-    await auth.currentUser?.getIdToken(true);
+    profileCache.delete(auth.currentUser?.uid || '');
+    await auth.currentUser?.getIdToken(true); // Force refresh token to get new claims
     await load(auth.currentUser);
   }, [load]);
+  
+  const setProfile = useCallback((profile: UserProfile) => {
+    if (state.user) {
+        profileCache.set(state.user.uid, profile);
+        setState(prev => ({...prev, profile}));
+    }
+  }, [state.user]);
+
 
   return useMemo(() => ({
     user: state.user,
@@ -124,5 +195,6 @@ export function useProfile() {
     loading: state.loading,
     error: state.error,
     refresh,
-  }), [state, refresh]);
+    setProfile, // used by SharedAccessGuard
+  }), [state, refresh, setProfile]);
 }

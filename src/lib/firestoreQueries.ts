@@ -17,6 +17,7 @@ import {
   type QueryConstraint,
   addDoc,
   updateDoc,
+  setDoc,
   deleteDoc,
   writeBatch,
   arrayUnion,
@@ -320,4 +321,85 @@ export async function listAllTripsForSchool(schoolId: string) {
     const q = query(scol(schoolId, "trips"));
     const snapshot = await getDocs(q);
     return snapshot.docs;
+}
+
+/* ============================================================
+   SCHOOL PROFILE
+   ============================================================ */
+
+export interface SchoolProfile {
+  name: string;
+  address: string;
+  city: string;
+  country: string;
+  phone?: string;
+  email?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export async function getSchoolProfile(schoolId: string): Promise<SchoolProfile | null> {
+  const ref = doc(db, `schools/${schoolId}/config/profile`);
+  const snap = await getDoc(ref);
+  return snap.exists() ? (snap.data() as SchoolProfile) : null;
+}
+
+export async function updateSchoolProfile(schoolId: string, data: Partial<SchoolProfile>) {
+  const ref = doc(db, `schools/${schoolId}/config/profile`);
+  return await setDoc(ref, data, { merge: true });
+}
+
+export async function createSchoolProfile(schoolId: string, data: SchoolProfile) {
+  const ref = doc(db, `schools/${schoolId}/config/profile`);
+  return await setDoc(ref, data);
+}
+
+/* ============================================================
+   SCHOOL LOCATION (Driver-accessible)
+   ============================================================ */
+
+export interface SchoolLocation {
+  latitude: number;
+  longitude: number;
+}
+
+export async function getSchoolLocation(schoolId: string): Promise<SchoolLocation | null> {
+  console.log(`[getSchoolLocation] Starting for schoolId: ${schoolId}`);
+  
+  // Read location data from school profile document
+  try {
+    console.log(`[getSchoolLocation] Reading from profile document`);
+    const profileRef = doc(db, `schools/${schoolId}/config/profile`);
+    const profileSnap = await getDoc(profileRef);
+    
+    console.log(`[getSchoolLocation] Profile document exists: ${profileSnap.exists()}`);
+    if (profileSnap.exists()) {
+      const profile = profileSnap.data() as SchoolProfile;
+      console.log(`[getSchoolLocation] Profile data:`, {
+        latitude: profile.latitude,
+        longitude: profile.longitude,
+        hasLatitude: profile.latitude !== undefined,
+        hasLongitude: profile.longitude !== undefined
+      });
+      
+      if (profile.latitude !== undefined && profile.longitude !== undefined) {
+        const locationData = {
+          latitude: profile.latitude,
+          longitude: profile.longitude
+        };
+        console.log(`[getSchoolLocation] Returning location from profile:`, locationData);
+        return locationData;
+      }
+    }
+  } catch (profileError: any) {
+    console.log(`[getSchoolLocation] Profile document access failed:`, profileError.code || profileError.message);
+  }
+  
+  console.log(`[getSchoolLocation] No location data found`);
+  return null;
+}
+
+export async function updateSchoolLocation(schoolId: string, data: SchoolLocation) {
+  const ref = doc(db, `schools/${schoolId}/config/location`);
+  return await setDoc(ref, data, { merge: true });
 }

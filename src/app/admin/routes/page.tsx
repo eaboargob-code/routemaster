@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { listRoutesForSchool } from "@/lib/firestoreQueries";
 import { scol, sdoc } from "@/lib/schoolPath";
 import Link from 'next/link';
+import RouteDetails from "./RouteDetails";
 
 
 import { Button } from "@/components/ui/button";
@@ -69,7 +70,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { PlusCircle, Trash2, Edit, X, Check, ArrowUpDown, Search, Wrench, Pin } from "lucide-react";
+import { PlusCircle, Trash2, Edit, X, Check, ArrowUpDown, Search, Wrench, Pin, Eye, ArrowLeft } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface RouteDoc extends DocumentData {
@@ -186,6 +187,8 @@ export default function RoutesPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [isAddModalOpen, setAddModalOpen] = useState(false);
+  const [selectedRoute, setSelectedRoute] = useState<RouteDoc | null>(null);
+  const [viewMode, setViewMode] = useState<"list" | "details">("list");
   
   const schoolId = profile?.schoolId;
 
@@ -290,6 +293,16 @@ export default function RoutesPage() {
     if(schoolId) loadRoutes(schoolId);
   }
 
+  const handleViewDetails = (route: RouteDoc) => {
+    setSelectedRoute(route);
+    setViewMode("details");
+  };
+
+  const handleBackToList = () => {
+    setSelectedRoute(null);
+    setViewMode("list");
+  };
+
   if (profileLoading) {
     return (
         <Card>
@@ -310,6 +323,37 @@ export default function RoutesPage() {
 
   if (!profile || !schoolId) {
       return <Alert><AlertTitle>Access Denied</AlertTitle><AlertDescription>No user profile found.</AlertDescription></Alert>
+  }
+
+  if (viewMode === "details" && selectedRoute) {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-4">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleBackToList}
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Routes
+            </Button>
+            <div>
+              <CardTitle>Route Details</CardTitle>
+              <CardDescription>
+                Detailed information for {selectedRoute.name}
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <RouteDetails 
+            routeId={selectedRoute.id} 
+            routeName={selectedRoute.name} 
+          />
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
@@ -405,6 +449,14 @@ export default function RoutesPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => handleViewDetails(route)}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          View Details
+                        </Button>
                         <Button asChild variant="outline" size="sm">
                             <Link href={`/admin/routes/${route.id}/stops`}>
                                 <Pin className="h-4 w-4 mr-2" />

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Coordinate Test</title>
+    <script>
+        // Test to see what coordinates are being used
+        console.log('=== COORDINATE TEST ===');
+        
+        // Check localStorage
+        console.log('localStorage:', localStorage);
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            const value = localStorage.getItem(key);
+            console.log(`localStorage[${key}]:`, value);
+            if (value && (value.includes('40.7') || value.includes('-74.'))) {
+                console.log('FOUND NY COORDINATES IN LOCALSTORAGE:', key, value);
+            }
+        }
+        
+        // Check sessionStorage
+        console.log('sessionStorage:', sessionStorage);
+        for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i);
+            const value = sessionStorage.getItem(key);
+            console.log(`sessionStorage[${key}]:`, value);
+            if (value && (value.includes('40.7') || value.includes('-74.'))) {
+                console.log('FOUND NY COORDINATES IN SESSIONSTORAGE:', key, value);
+            }
+        }
+        
+        // Check if there are any global variables
+        console.log('window object keys:', Object.keys(window));
+        
+        // Check for any coordinates in the page
+        setTimeout(() => {
+            const pageText = document.body.innerText;
+            if (pageText.includes('40.7') || pageText.includes('-74.')) {
+                console.log('FOUND NY COORDINATES IN PAGE TEXT');
+            }
+            
+            // Check for any script tags with coordinates
+            const scripts = document.querySelectorAll('script');
+            scripts.forEach((script, index) => {
+                if (script.innerHTML.includes('40.7') || script.innerHTML.includes('-74.')) {
+                    console.log(`FOUND NY COORDINATES IN SCRIPT ${index}:`, script.innerHTML.substring(0, 200));
+                }
+            });
+        }, 1000);
+    </script>
+</head>
+<body>
+    <h1>Coordinate Test</h1>
+    <p>Check the browser console for coordinate information.</p>
+    <button onclick="location.href='http://localhost:3000/driver/route'">Go to Driver Route</button>
+</body>
+</html>

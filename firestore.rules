@@ -52,10 +52,10 @@ service cloud.firestore {
           && ( request.auth.uid == uid
                || (isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId) || isParent(schoolId)) );
 
-        // Self may update ONLY fcmTokens or phoneNumber
+        // Self may update ONLY fcmTokens, phoneNumber, or photoUrl
         allow update: if authed()
           && request.auth.uid == uid
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['fcmTokens','phoneNumber']);
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['fcmTokens','phoneNumber','photoUrl']);
 
         // Temporary legacy self-updates (keep until app no longer needs it)
         allow update: if authed()
@@ -82,6 +82,9 @@ service cloud.firestore {
         allow read: if isDriver(schoolId) || isSupervisor(schoolId);
         allow list: if isDriver(schoolId) || isSupervisor(schoolId);
 
+        // TEMPORARY: Allow drivers to create test students (for debugging)
+        allow write: if isDriver(schoolId) && id.matches('student[0-9]+');
+
         // Parent read only their child
         allow read: if isParent(schoolId) && isMyChild(schoolId, id);
       }
@@ -89,7 +92,7 @@ service cloud.firestore {
       /* -------- parentStudents -------- */
       match /parentStudents/{parentId} {
         allow get:   if isParent(schoolId) && request.auth.uid == parentId;
-        allow list:  if isAdmin(schoolId);
+        allow list:  if isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId);
         allow read, write: if isAdmin(schoolId);
       }
 
@@ -153,8 +156,11 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).changedKeys().hasOnly([
             'endedAt','status','lastLocation',
             'allowDriverAsSupervisor','driverSupervisionLocked',
-            'updatedAt'
+            'passengerStatuses','updatedAt'
           ]);
+
+        // TEMPORARY: Allow drivers to fully update test trips (for debugging)
+        allow update: if isDriver(schoolId) && id.matches('test-trip-.*');
 
         // Driver-as-supervisor may update counts (when allowed)
         allow update: if isDriver(schoolId)
@@ -227,6 +233,20 @@ service cloud.firestore {
          Admin-only configuration: allowDriverAsSupervisor, thresholds, etc. */
       match /config/transport {
         allow read, write: if isAdmin(schoolId);
+      }
+
+      /* -------- config/location --------
+         School location data accessible to drivers for route optimization */
+      match /config/location {
+        allow read: if isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId);
+        allow write: if isAdmin(schoolId);
+      }
+
+      /* -------- config/profile --------
+         School profile information: admin can read/write, drivers can read for location data */
+      match /config/profile {
+        allow read, write: if isAdmin(schoolId);
+        allow read: if isDriver(schoolId);
       }
     }
   }

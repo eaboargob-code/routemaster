@@ -24,6 +24,15 @@ service firebase.storage {
       // allow write: if isAdmin(schoolId) && fileName in ['profile.jpg','profile_128.jpg'];
     }
 
+    // User profile photos (drivers, supervisors, admins, parents)
+    match /schools/{schoolId}/users/{userId}/{fileName} {
+      // READ: allow all authenticated users of the same school
+      allow read: if hasMe(schoolId);
+
+      // WRITE: only admins of the school (for managing user photos)
+      allow write: if isAdmin(schoolId);
+    }
+
     // Default deny
     match /{allPaths=**} {
       allow read, write: if false;

@@ -46,7 +46,10 @@ import {
   Users,
   UserCheck,
   Eye,
+  User,
+  Map,
 } from "lucide-react";
+import Link from "next/link";
 import { format } from "date-fns";
 import { Roster } from "@/app/supervisor/trips/[id]/TripRoster";
 import { Switch } from "@/components/ui/switch";
@@ -145,19 +148,33 @@ export default function DriverPage() {
   }, [user?.uid]);
 
   const fetchData = useCallback(async () => {
-    if (!user || !profile) return;
+    if (!user || !profile) {
+      console.log("[DriverPage] fetchData: Missing user or profile", { user: !!user, profile: !!profile });
+      return;
+    }
+    
+    console.log("[DriverPage] fetchData: Starting with", {
+      userId: user.uid,
+      userEmail: user.email,
+      profileRole: profile.role,
+      schoolId: profile.schoolId
+    });
+    
     setUiState({ status: "loading" });
 
     try {
       // 1) Find the bus assigned to this driver (scoped to school)
+      console.log("[DriverPage] Step 1: Querying buses for driver", user.uid, "in school", profile.schoolId);
       const busQ = query(
         collection(db, "schools", profile.schoolId, "buses"),
         where("driverId", "==", user.uid),
         limit(1)
       );
       const busSnap = await getDocs(busQ);
+      console.log("[DriverPage] Step 1 complete: Found", busSnap.size, "buses");
 
       if (busSnap.empty) {
+        console.log("[DriverPage] No buses found for driver, setting empty state");
         setBus(null);
         setRoute(null);
         setSupervisor(null);
@@ -170,8 +187,10 @@ export default function DriverPage() {
         ...busSnap.docs[0].data(),
       } as BusDoc;
       setBus(foundBus);
+      console.log("[DriverPage] Found bus:", { id: foundBus.id, busCode: foundBus.busCode });
 
       // 2) Fetch today's trips for this driver (scoped to school)
+      console.log("[DriverPage] Step 2: Querying trips for driver", user.uid, "since", startOfToday());
       const tripsQ = query(
         collection(db, "schools", profile.schoolId, "trips"),
         where("driverId", "==", user.uid),
@@ -179,6 +198,8 @@ export default function DriverPage() {
         orderBy("startedAt", "desc")
       );
       const tripsSnap = await getDocs(tripsQ);
+      console.log("[DriverPage] Step 2 complete: Found", tripsSnap.size, "trips");
+      
       const todaysTrips = tripsSnap.docs.map(
         (d) => ({ id: d.id, ...d.data() } as Trip)
       );
@@ -187,8 +208,10 @@ export default function DriverPage() {
         ?? todaysTrips.find(t => !t.endedAt)
         ?? null;
       setActiveTrip(foundTrip);
+      console.log("[DriverPage] Active trip:", foundTrip ? { id: foundTrip.id, status: foundTrip.status } : "none");
 
       // 3) Related route + supervisor (parallel). Both must be school-scoped.
+      console.log("[DriverPage] Step 3: Fetching route and supervisor data");
       const [routeData, supervisorData] = await Promise.all([
         foundBus.assignedRouteId
           ? getRouteById(profile.schoolId, foundBus.assignedRouteId)
@@ -197,6 +220,7 @@ export default function DriverPage() {
           ? getDoc(sdoc(profile.schoolId, "users", foundBus.supervisorId))
           : Promise.resolve(null),
       ]);
+      console.log("[DriverPage] Step 3 complete: Route data:", !!routeData, "Supervisor data:", !!supervisorData);
 
       setRoute(routeData ? (routeData as RouteInfo) : null);
       setSupervisor(
@@ -205,9 +229,15 @@ export default function DriverPage() {
           : null
       );
 
+      console.log("[DriverPage] fetchData completed successfully");
       setUiState({ status: "ready" });
     } catch (e: any) {
       console.error("[DriverPage] Fetch data error:", e);
+      console.error("[DriverPage] Error details:", {
+        code: e.code,
+        message: e.message,
+        stack: e.stack
+      });
       setUiState({
         status: "error",
         errorMessage: e.message || "Could not load your assignment.",
@@ -482,7 +512,19 @@ export default function DriverPage() {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+    <div className="space-y-6">
+      {/* Navigation Header */}
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">Driver Dashboard</h1>
+        <Link href="/driver/profile">
+          <Button variant="outline" size="sm" className="flex items-center gap-2">
+            <User className="h-4 w-4" />
+            My Profile
+          </Button>
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
       <div className="lg:col-span-2 space-y-8">
         <Card>
           <CardHeader>
@@ -545,14 +587,22 @@ export default function DriverPage() {
                   <StopCircle className="mr-2" />
                   {isSubmitting ? "Ending Trip..." : "End Trip"}
                 </Button>
-                <Button
-                  onClick={() => handleSendLocation(false)}
-                  className="w-full"
-                  variant="outline"
-                >
-                  <Send className="mr-2" />
-                  Send Location Now
-                </Button>
+                <div className="flex gap-2 w-full">
+                  <Button
+                    onClick={() => handleSendLocation(false)}
+                    className="flex-1"
+                    variant="outline"
+                  >
+                    <Send className="mr-2" />
+                    Send Location
+                  </Button>
+                  <Link href="/driver/route" className="flex-1">
+                    <Button className="w-full" variant="outline">
+                      <Map className="mr-2" />
+                      Route Map
+                    </Button>
+                  </Link>
+                </div>
               </>
             ) : (
               <Button
@@ -599,6 +649,7 @@ export default function DriverPage() {
           </CardContent>
         </Card>
       )}
+      </div>
     </div>
   );
 }

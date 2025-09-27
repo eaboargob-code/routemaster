@@ -1,18 +1,20 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
-  "projectId": "routemaster-admin-k1thy",
-  "appId": "1:1071157867562:web:e6a8686b2849d515157f53",
-  "storageBucket": "routemaster-admin-k1thy.firebasestorage.app",
-  "apiKey": "AIzaSyAX-YaK7opiuKe8vQ0bH4RStr6UCVdlOEk",
-  "authDomain": "routemaster-admin-k1thy.firebaseapp.com",
-  "messagingSenderId": "1071157867562"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 
-export { app, auth, db };
+export { app, auth, db, storage };

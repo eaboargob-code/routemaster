@@ -1,1 +1,50 @@
-iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=
+<svg width="192" height="192" viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="96" cy="96" r="96" fill="#FFF8DC"/>
+  
+  <!-- Location pin -->
+  <g transform="translate(40, 30)">
+    <path d="M20 0C8.954 0 0 8.954 0 20c0 15 20 35 20 35s20-20 20-35c0-11.046-8.954-20-20-20z" fill="#FFD700"/>
+    <circle cx="20" cy="20" r="8" fill="#FFFFFF"/>
+  </g>
+  
+  <!-- School bus -->
+  <g transform="translate(55, 80)">
+    <!-- Bus body -->
+    <rect x="0" y="0" width="82" height="45" rx="8" ry="8" fill="#FFD700"/>
+    
+    <!-- Bus roof -->
+    <rect x="8" y="-8" width="66" height="12" rx="6" ry="6" fill="#FFA500"/>
+    
+    <!-- Front windshield -->
+    <rect x="65" y="8" width="12" height="20" rx="2" ry="2" fill="#E6F3FF"/>
+    
+    <!-- Side windows -->
+    <rect x="12" y="8" width="45" height="20" rx="2" ry="2" fill="#E6F3FF"/>
+    
+    <!-- Door -->
+    <rect x="5" y="12" width="6" height="25" rx="1" ry="1" fill="#FF8C00"/>
+    <rect x="6" y="14" width="4" height="8" rx="1" ry="1" fill="#E6F3FF"/>
+    
+    <!-- Headlights -->
+    <circle cx="75" cy="35" r="4" fill="#FFFFFF"/>
+    <circle cx="7" cy="35" r="4" fill="#FFFFFF"/>
+    
+    <!-- Grille -->
+    <rect x="60" y="32" width="12" height="3" fill="#FF8C00"/>
+    <rect x="60" y="37" width="8" height="2" fill="#FF8C00"/>
+    
+    <!-- Wheels -->
+    <circle cx="15" cy="50" r="8" fill="#333333"/>
+    <circle cx="15" cy="50" r="5" fill="#666666"/>
+    <circle cx="67" cy="50" r="8" fill="#333333"/>
+    <circle cx="67" cy="50" r="5" fill="#666666"/>
+    
+    <!-- Bumper -->
+    <rect x="0" y="45" width="82" height="6" rx="3" ry="3" fill="#FFA500"/>
+  </g>
+  
+  <!-- Route indicator -->
+  <rect x="70" y="140" width="52" height="8" rx="4" ry="4" fill="#FFD700"/>
+  <text x="96" y="147" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#333333">ROUTE</text>
+</svg>

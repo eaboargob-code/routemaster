@@ -4,13 +4,12 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  query,
-  where,
-  getDocs,
   doc,
   updateDoc,
   getDoc,
+  getDocs,
 } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { useProfile } from "@/lib/useProfile";
 import { useToast } from "@/hooks/use-toast";
 import { scol } from "@/lib/schoolPath";
@@ -59,8 +58,7 @@ import {
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Link as LinkIcon, UserPlus, X, Phone, Star, UserX } from "lucide-react";
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Link as LinkIcon, X, Phone, Star, UserX, Search, Filter, UserPlus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
     AlertDialog,
@@ -91,6 +89,7 @@ interface Parent {
 
 const NONE_SENTINEL = "__none__";
 
+// --- Schema for parent creation ---
 // --- Sub-components ---
 
 function EditPhoneDialog({ parent, schoolId, onUpdate }: { parent: Parent, schoolId: string, onUpdate: () => void }) {
@@ -233,10 +232,6 @@ function AddParentDialog({ student, allParents, onUpdate, schoolId }: { student:
                             </ScrollArea>
                         </SelectContent>
                     </Select>
-                    <Alert>
-                        <AlertTitle>TODO: Create New Parent</AlertTitle>
-                        <AlertDescription>The UI to create a new parent user from this modal is not yet implemented.</AlertDescription>
-                    </Alert>
                 </div>
                 <DialogFooter>
                     <DialogClose asChild><Button variant="ghost">Cancel</Button></DialogClose>
@@ -290,9 +285,13 @@ function ParentContactsList({ schoolId }: { schoolId: string }) {
   const [allParents, setAllParents] = useState<Parent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeFilter, setActiveFilter] = useState<string>("all");
   const { toast } = useToast();
 
-  const onDataNeedsRefresh = useCallback(() => setRefreshKey(k => k + 1), []);
+  const onDataNeedsRefresh = useCallback(() => {
+    setRefreshKey(prev => prev + 1);
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -350,40 +349,153 @@ function ParentContactsList({ schoolId }: { schoolId: string }) {
 
   const parentMap = useMemo(() => new Map(allParents.map(p => [p.id, p])), [allParents]);
 
+  // Filter students based on search query and active filter
+  const filteredStudents = useMemo(() => {
+    let filtered = students;
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(student => {
+        const studentName = student.name.toLowerCase();
+        const linkedParents = student.linkedParentIds.map(id => parentMap.get(id)).filter(Boolean) as Parent[];
+        const parentNames = linkedParents.map(p => (p.displayName || p.email).toLowerCase()).join(' ');
+        const parentEmails = linkedParents.map(p => p.email.toLowerCase()).join(' ');
+        const parentPhones = linkedParents.map(p => p.phoneNumber || '').join(' ');
+        
+        return studentName.includes(query) || 
+               parentNames.includes(query) || 
+               parentEmails.includes(query) ||
+               parentPhones.includes(query);
+      });
+    }
+
+    // Apply status filter
+    switch (activeFilter) {
+      case "no-parents":
+        filtered = filtered.filter(student => student.linkedParentIds.length === 0);
+        break;
+      case "no-phone":
+        filtered = filtered.filter(student => {
+          const linkedParents = student.linkedParentIds.map(id => parentMap.get(id)).filter(Boolean) as Parent[];
+          return linkedParents.some(p => !p.phoneNumber);
+        });
+        break;
+      case "no-primary":
+        filtered = filtered.filter(student => !student.primaryParentId);
+        break;
+      case "all":
+      default:
+        // No additional filtering
+        break;
+    }
+
+    return filtered;
+  }, [students, searchQuery, activeFilter, parentMap]);
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Parent Contacts</CardTitle>
-        <CardDescription>Link parents to students and manage primary contacts.</CardDescription>
+        <div>
+          <CardTitle>Parent Contacts</CardTitle>
+          <CardDescription>Link parents to students and manage primary contacts.</CardDescription>
+        </div>
       </CardHeader>
       <CardContent>
-        <Table>
+        {/* Search and Filter Section */}
+        <div className="space-y-4 mb-6">
+          {/* Search Bar */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+            <Input
+              placeholder="Search students, parents, emails, or phone numbers..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+          
+          {/* Filter Chips */}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={activeFilter === "all" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setActiveFilter("all")}
+              className="h-8"
+            >
+              All Students
+            </Button>
+            <Button
+              variant={activeFilter === "no-parents" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setActiveFilter("no-parents")}
+              className="h-8"
+            >
+              <UserX className="h-3 w-3 mr-1" />
+              No Parents
+            </Button>
+            <Button
+              variant={activeFilter === "no-phone" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setActiveFilter("no-phone")}
+              className="h-8"
+            >
+              <Phone className="h-3 w-3 mr-1" />
+              Missing Phone
+            </Button>
+            <Button
+              variant={activeFilter === "no-primary" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setActiveFilter("no-primary")}
+              className="h-8"
+            >
+              <Star className="h-3 w-3 mr-1" />
+              No Primary
+            </Button>
+          </div>
+          
+          {/* Results Count */}
+          {(searchQuery.trim() || activeFilter !== "all") && (
+            <div className="text-sm text-muted-foreground">
+              Showing {filteredStudents.length} of {students.length} students
+              {searchQuery.trim() && ` matching "${searchQuery}"`}
+            </div>
+          )}
+        </div>
+
+        {/* Mobile-responsive table wrapper */}
+        <div className="rounded-md border overflow-x-auto">
+          <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Student</TableHead>
-              <TableHead>Linked Parents</TableHead>
-              <TableHead>Primary Parent</TableHead>
+              <TableHead className="min-w-[120px]">Student</TableHead>
+              <TableHead className="min-w-[250px]">Linked Parents</TableHead>
+              <TableHead className="min-w-[150px]">Primary Parent</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               Array.from({length: 3}).map((_, i) => <TableRow key={i}><TableCell colSpan={3}><Skeleton className="h-12 w-full" /></TableCell></TableRow>)
-            ) : students.length > 0 ? (
-              students.map(student => {
+            ) : filteredStudents.length > 0 ? (
+              filteredStudents.map(student => {
                 const linkedParents = student.linkedParentIds.map(id => parentMap.get(id)).filter(Boolean) as Parent[];
                 return (
                     <TableRow key={student.id}>
-                        <TableCell className="font-medium">{student.name}</TableCell>
-                        <TableCell>
+                        <TableCell className="font-medium whitespace-nowrap">{student.name}</TableCell>
+                        <TableCell className="min-w-0">
                             <div className="flex flex-col gap-2 items-start">
                                {linkedParents.length > 0 ? linkedParents.map(p => (
-                                   <div key={p.id} className="flex items-center gap-2">
-                                       <Badge variant="secondary" className="text-sm">
-                                            {p.displayName || p.email}
-                                            <UnlinkParentDialog student={student} parent={p} onUpdate={onDataNeedsRefresh} schoolId={schoolId} />
-                                       </Badge>
-                                       <span className="text-xs text-muted-foreground">{p.phoneNumber || "No phone"}</span>
-                                       <EditPhoneDialog parent={p} schoolId={schoolId} onUpdate={onDataNeedsRefresh} />
+                                   <div key={p.id} className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                                       <div className="flex items-center gap-1">
+                                         <Badge variant="secondary" className="text-xs sm:text-sm">
+                                              {p.displayName || p.email}
+                                              <UnlinkParentDialog student={student} parent={p} onUpdate={onDataNeedsRefresh} schoolId={schoolId} />
+                                         </Badge>
+                                       </div>
+                                       <div className="flex items-center gap-1">
+                                         <span className="text-xs text-muted-foreground">{p.phoneNumber || "No phone"}</span>
+                                         <EditPhoneDialog parent={p} schoolId={schoolId} onUpdate={onDataNeedsRefresh} />
+                                       </div>
                                    </div>
                                )) : <span className="text-muted-foreground text-xs">No parents linked</span>}
                                <AddParentDialog student={student} allParents={allParents} onUpdate={onDataNeedsRefresh} schoolId={schoolId} />
@@ -398,12 +510,16 @@ function ParentContactsList({ schoolId }: { schoolId: string }) {
             ) : (
               <TableRow>
                 <TableCell colSpan={3} className="h-24 text-center">
-                  No students found. Add students in the Student Management page first.
+                  {students.length === 0 
+                    ? "No students found. Add students in the Student Management page first."
+                    : "No students match your current search or filter criteria."
+                  }
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
+        </div>
       </CardContent>
     </Card>
   );

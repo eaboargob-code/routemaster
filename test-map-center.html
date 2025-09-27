@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Map Center Test</title>
+    <style>
+        #map { height: 400px; width: 100%; }
+        #info { margin: 20px; padding: 20px; background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h2>Map Center Test</h2>
+        <p>This page tests Google Maps initialization to identify coordinate issues.</p>
+        <div id="results"></div>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        function initMap() {
+            const results = document.getElementById('results');
+            
+            // Test 1: Default center (should be 0,0)
+            results.innerHTML += '<h3>Test 1: Default Center (0,0)</h3>';
+            const map1 = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 0, lng: 0 },
+                zoom: 2
+            });
+            
+            setTimeout(() => {
+                const center1 = map1.getCenter();
+                results.innerHTML += `<p>Map center: ${center1.lat()}, ${center1.lng()}</p>`;
+                
+                // Test 2: Riyadh coordinates (from LocationPicker default)
+                results.innerHTML += '<h3>Test 2: Riyadh Center (24.7136, 46.6753)</h3>';
+                const riyadhCenter = { lat: 24.7136, lng: 46.6753 };
+                map1.setCenter(riyadhCenter);
+                
+                setTimeout(() => {
+                    const center2 = map1.getCenter();
+                    results.innerHTML += `<p>Map center after Riyadh: ${center2.lat()}, ${center2.lng()}</p>`;
+                    
+                    // Test 3: Check if map automatically changes to NY
+                    results.innerHTML += '<h3>Test 3: Waiting 5 seconds to see if center changes...</h3>';
+                    
+                    setTimeout(() => {
+                        const center3 = map1.getCenter();
+                        results.innerHTML += `<p>Map center after 5 seconds: ${center3.lat()}, ${center3.lng()}</p>`;
+                        
+                        // Check if it's New York
+                        if (center3.lat() >= 40.0 && center3.lat() <= 41.0 && center3.lng() >= -75.0 && center3.lng() <= -73.0) {
+                            results.innerHTML += '<p style="color: red; font-weight: bold;">🗽 WARNING: Map center changed to New York area!</p>';
+                        } else {
+                            results.innerHTML += '<p style="color: green; font-weight: bold;">✅ Map center remained stable</p>';
+                        }
+                        
+                        // Test 4: Check browser storage
+                        results.innerHTML += '<h3>Test 4: Browser Storage Check</h3>';
+                        let foundCoords = false;
+                        
+                        // Check localStorage
+                        for (let i = 0; i < localStorage.length; i++) {
+                            const key = localStorage.key(i);
+                            const value = localStorage.getItem(key);
+                            if (value && (value.includes('40.7') || value.includes('-74.'))) {
+                                results.innerHTML += `<p>Found NY coords in localStorage[${key}]: ${value.substring(0, 100)}</p>`;
+                                foundCoords = true;
+                            }
+                        }
+                        
+                        // Check sessionStorage
+                        for (let i = 0; i < sessionStorage.length; i++) {
+                            const key = sessionStorage.key(i);
+                            const value = sessionStorage.getItem(key);
+                            if (value && (value.includes('40.7') || value.includes('-74.'))) {
+                                results.innerHTML += `<p>Found NY coords in sessionStorage[${key}]: ${value.substring(0, 100)}</p>`;
+                                foundCoords = true;
+                            }
+                        }
+                        
+                        if (!foundCoords) {
+                            results.innerHTML += '<p>No New York coordinates found in browser storage</p>';
+                        }
+                        
+                    }, 5000);
+                }, 1000);
+            }, 1000);
+        }
+        
+        // Load Google Maps API
+        const script = document.createElement('script');
+        script.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyAn3WJOWzSmcqYdvYI_85Ph8MDtwLk4oJw&callback=initMap';
+        script.async = true;
+        document.head.appendChild(script);
+    </script>
+</body>
+</html>
