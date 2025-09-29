@@ -7,6 +7,7 @@ import { auth, db } from "@/lib/firebase";
 import {
   doc,
   getDoc,
+  onSnapshot,
   DocumentData,
 } from "firebase/firestore";
 import { getSchoolProfile } from "./firestoreQueries";
@@ -25,6 +26,7 @@ export interface UserProfile {
   pending?: boolean;
   photoUrl?: string;
   phoneNumber?: string;
+  supervisorMode?: boolean;
   // add other fields you store in users docs (fcmTokens, etc.)
 }
 
@@ -111,6 +113,7 @@ export async function fetchProfile(u: FirebaseUser): Promise<UserProfile | null>
         pending: data.pending,
         photoUrl: data.photoUrl,
         phoneNumber: data.phoneNumber,
+        supervisorMode: data.supervisorMode,
       };
   }
   
@@ -131,6 +134,7 @@ export async function fetchProfile(u: FirebaseUser): Promise<UserProfile | null>
         pending: data.pending,
         photoUrl: data.photoUrl,
         phoneNumber: data.phoneNumber,
+        supervisorMode: data.supervisorMode,
       };
   }
 
@@ -147,39 +151,119 @@ export function useProfile() {
     error: null,
   });
 
-  const load = useCallback(async (u: FirebaseUser | null) => {
-    if (!u) {
-      setState({ user: null, profile: null, loading: false, error: null });
-      return;
-    }
-    // Return from cache if available to prevent re-fetching on every HMR
-    if (profileCache.has(u.uid)) {
-        setState({ user: u, profile: profileCache.get(u.uid)!, loading: false, error: null });
-        return;
-    }
-
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    try {
-      const p = await fetchProfile(u);
-      if(p) profileCache.set(u.uid, p);
-      setState({ user: u, profile: p, loading: false, error: null });
-    } catch (err: any) {
-      setState({ user: u, profile: null, loading: false, error: err });
-    }
-  }, []);
-
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      void load(u);
+    let profileUnsubscribe: (() => void) | null = null;
+
+    const authUnsubscribe = onAuthStateChanged(auth, async (u) => {
+      // Clean up previous profile subscription
+      if (profileUnsubscribe) {
+        profileUnsubscribe();
+        profileUnsubscribe = null;
+      }
+
+      if (!u) {
+        setState({ user: null, profile: null, loading: false, error: null });
+        return;
+      }
+
+      setState(prev => ({ ...prev, user: u, loading: true, error: null }));
+
+      try {
+        // Resolve schoolId first
+        const schoolId = await resolveSchoolId(u);
+        if (!schoolId) {
+          throw new Error(`Could not resolve a schoolId for user ${u.uid}.`);
+        }
+
+        // Fetch school information once
+        let schoolName: string | undefined;
+        let schoolLocation: string | undefined;
+        try {
+          const schoolProfile = await getSchoolProfile(schoolId);
+          if (schoolProfile) {
+            schoolName = schoolProfile.name;
+            schoolLocation = schoolProfile.city;
+          }
+        } catch (error) {
+          console.warn(`Could not fetch school profile for schoolId ${schoolId}:`, error);
+        }
+
+        // Subscribe to the school-scoped user document
+        const schoolUserRef = doc(db, "schools", schoolId, "users", u.uid);
+        profileUnsubscribe = onSnapshot(
+          schoolUserRef,
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data() as DocumentData;
+              const profile: UserProfile = {
+                uid: u.uid,
+                email: u.email,
+                displayName: data.displayName ?? u.displayName ?? undefined,
+                role: data.role as UserRole,
+                schoolId: schoolId,
+                schoolName,
+                schoolLocation,
+                active: data.active,
+                pending: data.pending,
+                photoUrl: data.photoUrl,
+                phoneNumber: data.phoneNumber,
+                supervisorMode: data.supervisorMode,
+              };
+              profileCache.set(u.uid, profile);
+              setState(prev => ({ ...prev, profile, loading: false, error: null }));
+            } else {
+              // Document doesn't exist, try fallback to root users collection
+              const rootUserRef = doc(db, "users", u.uid);
+              getDoc(rootUserRef).then((rootUserSnap) => {
+                if (rootUserSnap.exists()) {
+                  const data = rootUserSnap.data() as DocumentData;
+                  const profile: UserProfile = {
+                    uid: u.uid,
+                    email: u.email,
+                    displayName: data.displayName ?? u.displayName ?? undefined,
+                    role: data.role as UserRole,
+                    schoolId: schoolId,
+                    schoolName,
+                    schoolLocation,
+                    active: data.active,
+                    pending: data.pending,
+                    photoUrl: data.photoUrl,
+                    phoneNumber: data.phoneNumber,
+                    supervisorMode: data.supervisorMode,
+                  };
+                  profileCache.set(u.uid, profile);
+                  setState(prev => ({ ...prev, profile, loading: false, error: null }));
+                } else {
+                  const error = new Error(`User document not found for uid ${u.uid} in school ${schoolId} or at the root.`);
+                  setState(prev => ({ ...prev, profile: null, loading: false, error }));
+                }
+              }).catch((err) => {
+                setState(prev => ({ ...prev, profile: null, loading: false, error: err }));
+              });
+            }
+          },
+          (error) => {
+            setState(prev => ({ ...prev, profile: null, loading: false, error }));
+          }
+        );
+      } catch (err: any) {
+        setState(prev => ({ ...prev, profile: null, loading: false, error: err }));
+      }
     });
-    return () => unsub();
-  }, [load]);
+
+    return () => {
+      authUnsubscribe();
+      if (profileUnsubscribe) {
+        profileUnsubscribe();
+      }
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     profileCache.delete(auth.currentUser?.uid || '');
     await auth.currentUser?.getIdToken(true); // Force refresh token to get new claims
-    await load(auth.currentUser);
-  }, [load]);
+    // The onSnapshot subscription will automatically pick up any changes
+  }, []);
   
   const setProfile = useCallback((profile: UserProfile) => {
     if (state.user) {
@@ -187,7 +271,6 @@ export function useProfile() {
         setState(prev => ({...prev, profile}));
     }
   }, [state.user]);
-
 
   return useMemo(() => ({
     user: state.user,

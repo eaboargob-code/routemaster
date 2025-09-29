@@ -39,9 +39,8 @@ service cloud.firestore {
 
     // NEW: whether this driver is allowed to supervise boarding/dropping
     // Uses EITHER admin override on the trip OR the driver's own toggle on their user doc.
-    // If you use different field names, change them here (boardingSupervisorId / supervisorMode).
     function canDriverSupervise(sid, tripId) {
-      return tripDoc(sid, tripId).data.boardingSupervisorId == request.auth.uid
+      return tripDoc(sid, tripId).data.allowDriverAsSupervisor == true
         || (hasMe(sid) && me(sid).data.supervisorMode == true);
     } // NEW
 
@@ -77,10 +76,10 @@ service cloud.firestore {
           && ( request.auth.uid == uid
                || (isAdmin(schoolId) || isDriver(schoolId) || isSupervisor(schoolId) || isParent(schoolId)) );
 
-        // Self may update ONLY fcmTokens, phoneNumber, or photoUrl
+        // Self may update ONLY fcmTokens, phoneNumber, photoUrl, or supervisorMode
         allow update: if authed()
           && request.auth.uid == uid
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['fcmTokens','phoneNumber','photoUrl']);
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['fcmTokens','phoneNumber','photoUrl','supervisorMode']);
 
         // Temporary legacy self-updates (keep until app no longer needs it)
         allow update: if authed()
@@ -212,6 +211,15 @@ service cloud.firestore {
           // Driver writes telemetry for their active trip
           allow create: if isDriver(schoolId) && trip().data.driverId == request.auth.uid;
         }
+
+        /* --- trips/{tripId}/locationHistory --- */
+        match /locationHistory/{pointId} {
+          function trip() {
+            return get(/databases/$(db)/documents/schools/$(schoolId)/trips/$(id));
+          }
+          allow create: if isDriver(schoolId) && trip().data.driverId == request.auth.uid;
+          allow read, list: if isAdmin(schoolId) || isSupervisor(schoolId);
+        }
       }
 
       /* -------- trips/{tripId}/passengers -------- */
@@ -235,15 +243,17 @@ service cloud.firestore {
           && trip().data.driverId == request.auth.uid
           && request.resource.data.status == "pending";
 
-        // CHANGED: Driver may UPDATE status only when supervisor mode is allowed,
-        // and ONLY the 'status' field may change. (No driver delete.)
+        // CHANGED: Driver may UPDATE status when supervisor mode is allowed,
+        // and ONLY the 'status' field may change.
         allow update: if isDriver(schoolId)
           && trip().data.driverId == request.auth.uid
-          && canDriverSupervise(schoolId, tripId) // NEW
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status']); // NEW
+          && canDriverSupervise(schoolId, tripId)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status']);
 
-        // CHANGED: prevent driver deletes (admin/supervisor still covered above)
-        allow delete: if false; // NEW
+        // CHANGED: Driver may DELETE when supervisor mode is allowed
+        allow delete: if isDriver(schoolId)
+          && trip().data.driverId == request.auth.uid
+          && canDriverSupervise(schoolId, tripId);
 
         // Parent can read only their child's passenger doc
         allow get, read: if isParent(schoolId)

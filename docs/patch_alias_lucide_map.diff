@@ -1,0 +1,30 @@
+--- a/src\test_map_import.tsx
++++ b/src\test_map_import.tsx
+@@ -1,6 +1,6 @@
+ import React from 'react';
+-import { Map, User, Settings } from 'lucide-react';
++import { Map as MapIcon, User, Settings } from 'lucide-react';
+ 
+ export default function TestComponent() {
+   return (
+     <div>
+@@ -4,8 +4,8 @@
+ export default function TestComponent() {
+   return (
+     <div>
+-      <Map size={24} />
++      <MapIcon size={24} />
+       <User size={24} />
+       <Settings size={24} />
+       <Map className="test-map" />
+     </div>
+@@ -7,7 +7,7 @@
+       <Map size={24} />
+       <User size={24} />
+       <Settings size={24} />
+-      <Map className="test-map" />
++      <MapIcon className="test-map" />
+     </div>
+   );
+ }
+

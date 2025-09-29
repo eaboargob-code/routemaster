@@ -1,12 +1,12 @@
 
 // Client-side (Next.js, Firebase Web v9+)
 import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging";
-import { arrayUnion, arrayRemove, doc, updateDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { arrayUnion, arrayRemove, doc, updateDoc, setDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { db, app } from "@/lib/firebase";
 
 const VAPID = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
 
-export async function registerFcmToken(uid: string) {
+export async function registerFcmToken(uid: string, schoolId: string) {
   if (!VAPID) {
     console.warn("[FCM] Missing VAPID key env");
     return null;
@@ -21,11 +21,15 @@ export async function registerFcmToken(uid: string) {
     const token = await getToken(messaging, { vapidKey: VAPID });
     if (!token) return null;
 
-    // This specifically uses `arrayUnion` to only add the new token,
-    // leaving other user document fields untouched.
-    await updateDoc(doc(db, "users", uid), {
-      fcmTokens: arrayUnion(token)
-    });
+    // Build proper school-based path
+    const ref = doc(db, "schools", schoolId, "users", uid);
+    console.log("[FCM] Writing to path:", `schools/${schoolId}/users/${uid}`);
+    
+    // Create or update the doc, ensuring fcmTokens array exists
+    await setDoc(ref, { fcmTokens: [] }, { merge: true });
+    
+    // Add the token using arrayUnion to only write fcmTokens field
+    await updateDoc(ref, { fcmTokens: arrayUnion(token) });
 
     console.log("[FCM] token saved:", token.slice(0, 12) + "…");
     return token;
@@ -41,8 +45,9 @@ export async function registerFcmToken(uid: string) {
 }
 
 
-export async function unregisterFcmToken(uid: string, token: string) {
-  await updateDoc(doc(db, "users", uid), { fcmTokens: arrayRemove(token) });
+export async function unregisterFcmToken(uid: string, schoolId: string, token: string) {
+  const ref = doc(db, "schools", schoolId, "users", uid);
+  await updateDoc(ref, { fcmTokens: arrayRemove(token) });
 }
 
 

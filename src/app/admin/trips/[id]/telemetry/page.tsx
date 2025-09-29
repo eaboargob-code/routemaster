@@ -9,14 +9,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Map } from "lucide-react";
+import { Map as MapIcon } from "lucide-react";
 
 export default function TripTelemetryPage({ params }: { params: { id: string }}) {
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-            <Map />
+            <MapIcon />
             Trip Telemetry
         </CardTitle>
         <CardDescription>

@@ -1,0 +1,7 @@
+[2025-09-29T18:12:17.576Z] Starting lucide-react Map aliasing codemod (WRITE mode)
+[2025-09-29T18:12:17.589Z] Target directories: src, apps, packages
+[2025-09-29T18:12:17.597Z] Excluded directories: node_modules, .next, dist, build
+[2025-09-29T18:12:17.599Z] File extensions: .tsx, .ts, .jsx, .js
+[2025-09-29T18:12:17.608Z] 
+[2025-09-29T18:12:18.731Z] Directory apps not found, skipping...
+[2025-09-29T18:12:18.760Z] Directory packages not found, skipping...

@@ -75,10 +75,10 @@ export default function SupervisorPage() {
 
   // Register FCM for the supervisor account
   useEffect(() => {
-    if (user?.uid) {
-      registerFcmToken(user.uid).catch(() => {});
+    if (user?.uid && profile?.schoolId) {
+      registerFcmToken(user.uid, profile.schoolId).catch(() => {});
     }
-  }, [user?.uid]);
+  }, [user?.uid, profile?.schoolId]);
 
   const load = useCallback(async () => {
     if (!user || !profile) return;

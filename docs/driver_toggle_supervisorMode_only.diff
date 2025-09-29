@@ -1,0 +1,21 @@
+--- a/src/app/driver/page.tsx
++++ b/src/app/driver/page.tsx
+@@ -326,14 +326,11 @@
+  
+   const handleSetActingAsSupervisor = async (acting: boolean) => {
+-    if (!activeTrip || !profile) return;
++    if (!user || !profile) return;
+     try {
+-      await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
+-        allowDriverAsSupervisor: acting,
++      await updateDoc(sdoc(profile.schoolId, "users", user.uid), {
++        supervisorMode: acting,
+       });
+-      setActiveTrip((prev) =>
+-        prev ? { ...prev, allowDriverAsSupervisor: acting } : null
+-      );
+       toast({
+-        title: `Supervising mode ${acting ? "enabled" : "disabled"}.`,
++        title: `Supervisor mode ${acting ? "enabled" : "disabled"}.`,
+         className: "bg-accent text-accent-foreground border-0",
+       });

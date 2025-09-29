@@ -1,0 +1,30 @@
+--- a/src/app/driver/page.tsx
++++ b/src/app/driver/page.tsx
+@@ -11,4 +11,6 @@ import {
+   addDoc,
+   updateDoc,
++  doc,
++  setDoc,
+   Timestamp,
+   limit,
+@@ -328,9 +330,16 @@ export default function DriverPage() {
+ 
+   const handleSetActingAsSupervisor = async (acting: boolean) => {
+-    if (!user || !profile) return;
++    if (!user?.uid || !profile?.schoolId) {
++      toast({
++        variant: "destructive",
++        title: "Update failed",
++        description: "Missing user ID or school ID",
++      });
++      return;
++    }
++    
+     try {
+-      await updateDoc(sdoc(profile.schoolId, "users", user.uid), {
+-        supervisorMode: acting,
+-      });
++      const ref = doc(db, "schools", profile.schoolId, "users", user.uid);
++      await setDoc(ref, { supervisorMode: acting }, { merge: true });
+       toast({
+         title: `Supervisor mode ${acting ? "enabled" : "disabled"}.`,

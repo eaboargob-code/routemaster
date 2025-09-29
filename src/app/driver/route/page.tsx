@@ -11,6 +11,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  setDoc,
   onSnapshot,
   collection,
   query,
@@ -27,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast"; // 🔧 adjust if your toast hook differs
 
 // Icons (lucide-react)
@@ -39,12 +41,12 @@ import {
   Navigation,
   MapPin,
   School,
-  Map,
   Route,
   RotateCcw,
   Sun,
   Moon,
   Target,
+  Settings,
 } from "lucide-react";
 
 // Google Maps
@@ -149,17 +151,37 @@ export default function DriverRoutePage() {
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [isPassengersOpen, setIsPassengersOpen] = useState(false);
   const [isQrOpen, setIsQrOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // QR Scanner refs
   const lastScanRef = useRef<{ id: string; at: number } | null>(null);
 
+  // Supervisor mode ref for auto-opening drawer
+  const openedBySupervisorRef = useRef(false);
+
   // Route state
+  const [showRoute, setShowRoute] = useState(false);
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
   const [routing, setRouting] = useState(false);
   const [routeMode, setRouteMode] = useState<RouteMode>("morning");
+  const isRoutingRef = useRef(false);
+  const autoDrawRanRef = useRef(false);
+
+  // Preferences state (Goal 3)
+  const [mapTheme, setMapTheme] = useState<"light" | "dark" | "auto">(() => 
+    (localStorage.getItem("driver.mapTheme") as any) || "auto" 
+  );
+  const [haptics, setHaptics] = useState(true);
+  const [sound, setSound] = useState(true);
+  const [bgLocation, setBgLocation] = useState(true);
+
+  // Location tracking refs (Goal 4)
+  const locationWriteCountRef = useRef(0);
+  const lastLocationWriteRef = useRef<number>(0);
+  const visibilityIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Map reference
-  const mapRef = useRef<google.maps.Map | null>(null);
+  const [mapRef, setMapRef] = useState<google.maps.Map | null>(null);
 
   // Google Maps
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
@@ -167,6 +189,26 @@ export default function DriverRoutePage() {
     id: "driver-route-map",
     googleMapsApiKey: apiKey,
   });
+
+  // Map theme persistence
+  useEffect(() => { 
+    localStorage.setItem("driver.mapTheme", mapTheme); 
+  }, [mapTheme]);
+
+  // Map style arrays
+  const LIGHT_STYLE: google.maps.MapTypeStyle[] = [ 
+    { featureType:"poi", elementType:"labels", stylers:[{visibility:"off"}] } 
+  ]; 
+  const DARK_STYLE: google.maps.MapTypeStyle[] = [ 
+    { elementType:"geometry", stylers:[{color:"#242f3e"}]}, 
+    { elementType:"labels.text.stroke", stylers:[{color:"#242f3e"}]}, 
+    { elementType:"labels.text.fill", stylers:[{color:"#746855"}]}, 
+    { featureType:"poi", elementType:"labels", stylers:[{visibility:"off"}]} 
+  ];
+
+  // Resolve effective theme
+  const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)")?.matches; 
+  const effectiveTheme = mapTheme === "auto" ? (prefersDark ? "dark" : "light") : mapTheme;
 
   /* -------------------------- Derived counters/state ------------------------ */
 
@@ -197,20 +239,61 @@ export default function DriverRoutePage() {
 
   const tripStarted = trip?.status === "active";
 
-  // Next stop calculation
+  // Derived canSupervise logic
+  const canSupervise = !!(
+    (trip && user?.uid && trip.supervisorId === user.uid) ||
+    profile?.supervisorMode === true ||
+    trip?.allowDriverAsSupervisor === true
+  );
+
+  // useEffect for canSupervise toggle with toast notifications and auto-open drawer
+  useEffect(() => {
+    toast({
+      title: canSupervise ? "Supervisor mode ON" : "Supervisor mode OFF",
+      description: canSupervise ? "You can board/drop now." : "Board/Drop hidden."
+    });
+
+    // Auto-open Passengers drawer when canSupervise && tripStarted (only once)
+    if (canSupervise && tripStarted && !openedBySupervisorRef.current) {
+      setIsPassengersOpen(true);
+      openedBySupervisorRef.current = true;
+    }
+
+    // Reset the ref when supervisor mode is turned off
+    if (!canSupervise) {
+      openedBySupervisorRef.current = false;
+    }
+  }, [canSupervise, tripStarted, toast]);
+
+  // Apply map styles when effectiveTheme changes
+  useEffect(() => { 
+    if (!mapRef) return; 
+    mapRef.setOptions({ styles: effectiveTheme === "dark" ? DARK_STYLE : LIGHT_STYLE }); 
+  }, [mapRef, effectiveTheme]);
+
+  // Next stop calculation (Goal 5)
   const nextStopId = useMemo(() => {
     if (!driverLatLng) return null;
     
-    const pendingStudents = passengers.filter(p => p.status === "pending" && asLatLng(p) !== null);
-    if (pendingStudents.length === 0) return null;
+    // Filter students based on route mode and status (never include "absent")
+    const validStudents = passengers.filter(p => {
+      if (p.status === "absent" || !asLatLng(p)) return false;
+      if (routeMode === "morning") {
+        return p.status === "pending" || p.status === "boarded";
+      } else {
+        return p.status === "pending";
+      }
+    });
+    
+    if (validStudents.length === 0) return null;
 
     // If we have directions, use the first leg's end location to match student
     if (directions && directions.routes[0]?.legs[0]?.end_location) {
       const firstLegEnd = directions.routes[0].legs[0].end_location;
-      let closestStudent = pendingStudents[0];
+      let closestStudent = validStudents[0];
       let minDistance = Infinity;
       
-      for (const student of pendingStudents) {
+      for (const student of validStudents) {
         const studentPos = asLatLng(student);
         if (!studentPos) continue;
         
@@ -230,11 +313,11 @@ export default function DriverRoutePage() {
       return closestStudent.id;
     }
 
-    // Fallback: find nearest pending stop to driver using haversine
-    let nearestStudent = pendingStudents[0];
+    // Fallback: find nearest valid stop to driver using haversine
+    let nearestStudent = validStudents[0];
     let minDistance = Infinity;
 
-    for (const student of pendingStudents) {
+    for (const student of validStudents) {
       const studentPos = asLatLng(student);
       if (!studentPos) continue;
 
@@ -252,7 +335,7 @@ export default function DriverRoutePage() {
     }
 
     return nearestStudent.id;
-  }, [driverLatLng, passengers, directions]);
+  }, [driverLatLng, passengers, directions, routeMode]);
 
   /* ---------------------------- Firestore listeners ------------------------- */
 
@@ -394,10 +477,66 @@ export default function DriverRoutePage() {
     };
   }, [toast]);
 
-  // Periodically persist driver location to trip (only when active)
+  // Load preferences from localStorage (Goal 3)
+  useEffect(() => {
+    const savedRouteMode = localStorage.getItem("routeMode") as RouteMode;
+    const savedMapTheme = localStorage.getItem("mapTheme") as "light" | "dark";
+    const savedHaptics = localStorage.getItem("haptics");
+    const savedSound = localStorage.getItem("sound");
+    const savedBgLocation = localStorage.getItem("bgLocation");
+
+    if (savedRouteMode && (savedRouteMode === "morning" || savedRouteMode === "afternoon")) {
+      setRouteMode(savedRouteMode);
+    }
+    if (savedMapTheme && (savedMapTheme === "light" || savedMapTheme === "dark")) {
+      setMapTheme(savedMapTheme);
+    }
+    if (savedHaptics !== null) {
+      setHaptics(savedHaptics === "true");
+    }
+    if (savedSound !== null) {
+      setSound(savedSound === "true");
+    }
+    if (savedBgLocation !== null) {
+      setBgLocation(savedBgLocation === "true");
+    }
+  }, []);
+
+  // Save preferences to localStorage when they change (Goal 3)
+  useEffect(() => {
+    localStorage.setItem("routeMode", routeMode);
+  }, [routeMode]);
+
+  useEffect(() => {
+    localStorage.setItem("mapTheme", mapTheme);
+  }, [mapTheme]);
+
+  useEffect(() => {
+    localStorage.setItem("haptics", haptics.toString());
+  }, [haptics]);
+
+  useEffect(() => {
+    localStorage.setItem("sound", sound.toString());
+  }, [sound]);
+
+  useEffect(() => {
+    localStorage.setItem("bgLocation", bgLocation.toString());
+  }, [bgLocation]);
+
+  // Smart location tracking with visibility-based cadence (Goal 4)
   useEffect(() => {
     if (!tripStarted || !trip || !profile?.schoolId || !driverLatLng) return;
-    const write = async () => {
+
+    const writeLocation = async () => {
+      // Skip writes when document is hidden and bgLocation is disabled
+      if (document.hidden && !bgLocation) return;
+
+      const now = Date.now();
+      const timeSinceLastWrite = now - lastLocationWriteRef.current;
+      const requiredInterval = document.hidden ? 90000 : 30000; // 90s hidden, 30s visible
+
+      if (timeSinceLastWrite < requiredInterval) return;
+
       try {
         await updateDoc(doc(db, "schools", profile.schoolId, "trips", trip.id), {
           currentLocation: {
@@ -406,14 +545,61 @@ export default function DriverRoutePage() {
             timestamp: serverTimestamp(),
           },
         });
+
+        lastLocationWriteRef.current = now;
+        locationWriteCountRef.current += 1;
+
+        // Every 3rd write, also add to locationHistory
+        if (locationWriteCountRef.current % 3 === 0) {
+          const historyRef = collection(db, "schools", profile.schoolId, "trips", trip.id, "locationHistory");
+          await setDoc(doc(historyRef, `location_${now}`), {
+            lat: driverLatLng.lat,
+            lng: driverLatLng.lng,
+            timestamp: serverTimestamp(),
+          });
+        }
       } catch (e: any) {
         console.error("Update driver location failed:", e?.message || e);
+        toast({
+          variant: "destructive",
+          title: "Location update failed",
+          description: e?.message || "Failed to update location",
+        });
       }
     };
-    const t = setInterval(write, 30000); // 30s cadence
-    write(); // initial
-    return () => clearInterval(t);
-  }, [tripStarted, driverLatLng, trip, profile?.schoolId]);
+
+    // Initial write
+    writeLocation();
+
+    // Set up interval
+    const interval = setInterval(writeLocation, 15000); // Check every 15s, but write based on visibility
+
+    return () => clearInterval(interval);
+  }, [tripStarted, driverLatLng, trip, profile?.schoolId, bgLocation, toast]);
+
+  // Auto-restore route on mount (Goal 1)
+  useEffect(() => {
+    const restore = localStorage.getItem("routeDrawn") === "true";
+    if (restore && !directions && !routing && !autoDrawRanRef.current && isLoaded) {
+      autoDrawRanRef.current = true;
+      handleShowRoute();
+    }
+  }, [isLoaded]); // Only depend on isLoaded to avoid infinite loops
+
+  // Cleanup effect for performance (Goal 7)
+  useEffect(() => {
+    return () => {
+      // Clear any remaining intervals
+      if (visibilityIntervalRef.current) {
+        clearInterval(visibilityIntervalRef.current);
+      }
+      
+      // Clear geolocation watcher if it exists
+      if (geoWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(geoWatchIdRef.current);
+      }
+    };
+  }, []);
 
   /* ------------------------------- Handlers -------------------------------- */
 
@@ -422,7 +608,7 @@ export default function DriverRoutePage() {
       toast({
         variant: "destructive",
         title: "Cannot Start Trip",
-        description: "No trip loaded.",
+        description: "No trip loaded or school information missing.",
       });
       return;
     }
@@ -430,7 +616,7 @@ export default function DriverRoutePage() {
       toast({
         variant: "destructive",
         title: "Cannot Start Trip",
-        description: "Driver location unavailable.",
+        description: "Driver location unavailable. Please enable location services.",
       });
       return;
     }
@@ -442,13 +628,35 @@ export default function DriverRoutePage() {
       });
       toast({ title: "Trip Started", description: "Route is now active. Safe driving!" });
     } catch (e: any) {
-      console.error(e);
-      toast({ variant: "destructive", title: "Error", description: "Failed to start trip." });
+      console.error("Start trip error:", e);
+      
+      let errorMessage = "Failed to start trip.";
+      if (e?.code === "permission-denied") {
+        errorMessage = "You don't have permission to start this trip.";
+      } else if (e?.code === "unavailable") {
+        errorMessage = "Network error. Please check your connection and try again.";
+      } else if (e?.code === "not-found") {
+        errorMessage = "Trip not found. Please refresh and try again.";
+      }
+      
+      toast({ 
+        variant: "destructive", 
+        title: "Start Trip Failed", 
+        description: errorMessage 
+      });
     }
   }, [trip, profile?.schoolId, driverLatLng, toast]);
 
   const handleEndTrip = useCallback(async () => {
-    if (!trip || !profile?.schoolId) return;
+    if (!trip || !profile?.schoolId) {
+      toast({
+        variant: "destructive",
+        title: "Cannot End Trip",
+        description: "No active trip found.",
+      });
+      return;
+    }
+    
     try {
       await updateDoc(doc(db, "schools", profile.schoolId, "trips", trip.id), {
         status: "ended",
@@ -456,24 +664,77 @@ export default function DriverRoutePage() {
       });
       toast({ title: "Trip Ended", description: "Trip has been successfully ended." });
     } catch (e: any) {
-      console.error(e);
-      toast({ variant: "destructive", title: "Error", description: "Failed to end trip." });
+      console.error("End trip error:", e);
+      
+      let errorMessage = "Failed to end trip.";
+      if (e?.code === "permission-denied") {
+        errorMessage = "You don't have permission to end this trip.";
+      } else if (e?.code === "unavailable") {
+        errorMessage = "Network error. Please check your connection and try again.";
+      } else if (e?.code === "not-found") {
+        errorMessage = "Trip not found. Please refresh and try again.";
+      }
+      
+      toast({ 
+        variant: "destructive", 
+        title: "End Trip Failed", 
+        description: errorMessage 
+      });
     }
   }, [trip, profile?.schoolId, toast]);
 
   const handleStatusUpdate = useCallback(
     async (studentId: string, status: PassengerDoc["status"]) => {
-      if (!trip || !profile?.schoolId) return;
+      if (!trip || !profile?.schoolId) {
+        toast({
+          variant: "destructive",
+          title: "Update Failed",
+          description: "No active trip or school information available.",
+        });
+        return;
+      }
+
+      if (!canSupervise) {
+        toast({
+          variant: "destructive",
+          title: "Permission Denied",
+          description: "You don't have permission to update student status.",
+        });
+        return;
+      }
+
+      const student = passengers.find(p => p.id === studentId);
+      const studentName = student?.name || "Student";
+
       try {
         await updateDoc(doc(db, "schools", profile.schoolId, "trips", trip.id, "passengers", studentId), {
           status,
         });
+        
+        toast({
+          title: "Status Updated",
+          description: `${studentName} marked as ${status}`,
+        });
       } catch (e: any) {
-        console.error(e);
-        toast({ variant: "destructive", title: "Error", description: "Failed to update status." });
+        console.error("Status update error:", e);
+        
+        let errorMessage = "Failed to update student status.";
+        if (e?.code === "permission-denied") {
+          errorMessage = "You don't have permission to update this student.";
+        } else if (e?.code === "not-found") {
+          errorMessage = "Student record not found.";
+        } else if (e?.code === "unavailable") {
+          errorMessage = "Network error. Please check your connection.";
+        }
+        
+        toast({
+          variant: "destructive",
+          title: "Update Failed",
+          description: errorMessage,
+        });
       }
     },
-    [trip, profile?.schoolId, toast]
+    [trip, profile?.schoolId, canSupervise, passengers, toast]
   );
 
   const handleCallParent = useCallback((phone?: string) => {
@@ -541,34 +802,79 @@ export default function DriverRoutePage() {
         
         if (status === google.maps.DirectionsStatus.OK && result) {
           setDirections(result);
+          localStorage.setItem("routeDrawn", "true");
           toast({
             title: "Route Generated",
             description: `Optimized route with ${waypoints.length} stops created.`,
           });
         } else {
           console.error("Directions request failed:", status);
+          
+          let errorMessage = "Unable to generate route. You can still navigate to individual stops.";
+          let errorTitle = "Route Generation Failed";
+          
+          switch (status) {
+            case google.maps.DirectionsStatus.NOT_FOUND:
+              errorMessage = "No route could be found between the specified locations.";
+              break;
+            case google.maps.DirectionsStatus.ZERO_RESULTS:
+              errorMessage = "No route could be found for the given waypoints.";
+              break;
+            case google.maps.DirectionsStatus.MAX_WAYPOINTS_EXCEEDED:
+              errorMessage = "Too many waypoints in the request. Maximum 23 stops allowed.";
+              break;
+            case google.maps.DirectionsStatus.INVALID_REQUEST:
+              errorMessage = "Invalid route request. Please check student locations.";
+              break;
+            case google.maps.DirectionsStatus.OVER_QUERY_LIMIT:
+              errorMessage = "Google Maps quota exceeded. Please try again later.";
+              errorTitle = "Service Temporarily Unavailable";
+              break;
+            case google.maps.DirectionsStatus.REQUEST_DENIED:
+              errorMessage = "Route request denied. Please check API permissions.";
+              errorTitle = "Permission Denied";
+              break;
+            case google.maps.DirectionsStatus.UNKNOWN_ERROR:
+              errorMessage = "Unknown error occurred. Please try again.";
+              break;
+          }
+          
           toast({
             variant: "destructive",
-            title: "Google Directions unavailable",
-            description: "Unable to generate route. You can still navigate to individual stops.",
+            title: errorTitle,
+            description: errorMessage,
           });
         }
       });
     } catch (error) {
       setRouting(false);
       console.error("Route generation error:", error);
+      
+      let errorMessage = "Unable to generate route. You can still navigate to individual stops.";
+      let errorTitle = "Route Generation Error";
+      
+      if (error instanceof Error) {
+        if (error.message.includes("network") || error.message.includes("fetch")) {
+          errorMessage = "Network error. Please check your internet connection and try again.";
+          errorTitle = "Network Error";
+        } else if (error.message.includes("quota") || error.message.includes("limit")) {
+          errorMessage = "Google Maps quota exceeded. Please try again later.";
+          errorTitle = "Service Temporarily Unavailable";
+        } else if (error.message.includes("permission") || error.message.includes("denied")) {
+          errorMessage = "Permission denied. Please check API configuration.";
+          errorTitle = "Permission Error";
+        }
+      }
+      
       toast({
         variant: "destructive",
-        title: "Google Directions unavailable",
-        description: "Unable to generate route. You can still navigate to individual stops.",
+        title: errorTitle,
+        description: errorMessage,
       });
     }
   }, [isLoaded, schoolCenter, driverLatLng, passengers, routeMode, routing, toast]);
 
-  const handleClearRoute = useCallback(() => {
-    setDirections(null);
-    toast({ title: "Route Cleared", description: "Route has been removed from the map." });
-  }, [toast]);
+
 
   const handleNavigateToNext = useCallback(() => {
     if (!nextStopId) {
@@ -596,22 +902,161 @@ export default function DriverRoutePage() {
   }, [nextStopId, passengers, handleNavigateTo, toast]);
 
   const handleRecenter = useCallback(() => {
-    if (!mapRef.current) return;
+    if (!mapRef) return;
     
-    const center = driverLatLng || schoolCenter || { lat: 32.8872, lng: 13.1913 };
-    mapRef.current.panTo(center);
-    mapRef.current.setZoom(14);
+    if (driverLatLng) {
+      // Pan to driver location
+      mapRef.panTo(driverLatLng);
+      mapRef.setZoom(14);
+      toast({ title: "Map Recentered", description: "Map centered on your current location." });
+    } else {
+      // Fit bounds to school + students
+      const bounds = new google.maps.LatLngBounds();
+      if (schoolCenter) bounds.extend(schoolCenter);
+      
+      passengers.forEach(p => {
+        const pos = asLatLng(p);
+        if (pos) bounds.extend(pos);
+      });
+      
+      if (!bounds.isEmpty()) {
+        mapRef.fitBounds(bounds);
+        toast({ title: "Map Recentered", description: "Map fitted to show all locations." });
+      } else {
+        // Fallback to default location
+        const center = { lat: 32.8872, lng: 13.1913 };
+        mapRef.panTo(center);
+        mapRef.setZoom(14);
+        toast({ title: "Map Recentered", description: "Map centered on default location." });
+      }
+    }
+  }, [driverLatLng, schoolCenter, passengers, toast, mapRef]);
+
+  // Route management handlers (Goal 1)
+  const handleShowRoute = useCallback(async () => {
+    if (routing || isRoutingRef.current || !isLoaded) return;
     
-    toast({ title: "Map Recentered", description: "Map centered on your current location." });
-  }, [driverLatLng, schoolCenter, toast]);
+    setRouting(true);
+    isRoutingRef.current = true;
+    
+    try {
+      // Build waypoints from filtered passengers with coords
+      const validStudents = passengers.filter(p => {
+        const pos = asLatLng(p);
+        if (!pos) return false;
+        
+        if (routeMode === "morning") {
+          return p.status === "pending" || p.status === "boarded";
+        } else {
+          return p.status === "pending";
+        }
+      });
+
+      if (validStudents.length === 0) {
+        toast({
+          variant: "destructive",
+          title: "No Route Available",
+          description: "No students with valid coordinates found.",
+        });
+        return;
+      }
+
+      const directionsService = new google.maps.DirectionsService();
+      
+      // Determine origin and destination
+      let origin: LatLng;
+      let destination: LatLng;
+      
+      if (routeMode === "morning") {
+        origin = driverLatLng || schoolCenter || { lat: 32.8872, lng: 13.1913 };
+        destination = schoolCenter || { lat: 32.8872, lng: 13.1913 };
+      } else {
+        origin = schoolCenter || { lat: 32.8872, lng: 13.1913 };
+        destination = driverLatLng || asLatLng(validStudents[validStudents.length - 1]) || schoolCenter || { lat: 32.8872, lng: 13.1913 };
+      }
+
+      // Create waypoints (up to 23 students)
+      const waypoints = validStudents
+        .slice(0, 23)
+        .map(student => {
+          const pos = asLatLng(student);
+          return pos ? { location: pos, stopover: true } : null;
+        })
+        .filter(Boolean) as google.maps.DirectionsWaypoint[];
+
+      const request: google.maps.DirectionsRequest = {
+        origin,
+        destination,
+        waypoints,
+        optimizeWaypoints: true,
+        travelMode: google.maps.TravelMode.DRIVING,
+      };
+
+      directionsService.route(request, (result, status) => {
+        if (status === google.maps.DirectionsStatus.OK && result) {
+          setDirections(result);
+          setShowRoute(true);
+          localStorage.setItem("routeDrawn", "true");
+          toast({ title: "Route Displayed", description: "Route calculated and displayed on map." });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Route Error",
+            description: `Failed to calculate route: ${status}`,
+          });
+        }
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Route Error",
+        description: error?.message || "Failed to calculate route",
+      });
+    } finally {
+      setRouting(false);
+      isRoutingRef.current = false;
+    }
+  }, [routing, passengers, schoolCenter, driverLatLng, routeMode, isLoaded, toast]);
+
+  const handleClearRoute = useCallback(() => {
+    setDirections(null);
+    setShowRoute(false);
+    localStorage.removeItem("routeDrawn");
+    autoDrawRanRef.current = true;
+    toast({ title: "Route Cleared", description: "Route removed from map." });
+  }, [toast]);
 
   const handleMapLoad = useCallback((map: google.maps.Map) => {
-    mapRef.current = map;
+    setMapRef(map);
   }, []);
+
+  // Memoized student markers for performance (Goal 7)
+  const studentMarkers = useMemo(() => {
+    return passengers.map((p) => {
+      const pos = asLatLng(p);
+      if (!pos) return null;
+      
+      // Highlight next stop with green marker
+      const isNextStop = p.id === nextStopId;
+      const icon = isNextStop 
+        ? "https://maps.google.com/mapfiles/ms/icons/green-dot.png"
+        : "https://maps.google.com/mapfiles/ms/icons/red-dot.png";
+      
+      return (
+        <Marker
+          key={`${p.id}-${p.status}-${pos.lat}-${pos.lng}`}
+          position={pos}
+          title={p.name}
+          icon={icon}
+          onClick={() => setSelectedStudentId(p.id)}
+        />
+      );
+    }).filter(Boolean);
+  }, [passengers, nextStopId]);
 
   // QR Scanner effect
   useEffect(() => {
-    if (!isQrOpen) return;
+    if (!isQrOpen || !tripStarted || !canSupervise) return;
     let stop = false;
     let qrScanner: any = null;
     const el = document.getElementById("qr-area");
@@ -719,7 +1164,7 @@ export default function DriverRoutePage() {
         }
       };
     }
-  }, [isQrOpen, passengers, routeMode, handleStatusUpdate, toast]);
+  }, [isQrOpen, tripStarted, canSupervise, passengers, routeMode, handleStatusUpdate, toast]);
 
   /* --------------------------------- UI ------------------------------------ */
 
@@ -749,7 +1194,7 @@ export default function DriverRoutePage() {
       <Card className="absolute top-3 left-3 right-3 z-20 shadow-md">
         <CardContent className="p-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <Map className="h-4 w-4 opacity-70" />
+            <Route className="h-4 w-4 opacity-70" />
             <div className="text-sm font-medium">
               {trip?.routeName || "Route"}
               {trip?.busNumber ? <span className="ml-2 opacity-70">• Bus {trip.busNumber}</span> : null}
@@ -771,6 +1216,24 @@ export default function DriverRoutePage() {
           <Badge variant="outline">Boarded: {counts.boarded}</Badge>
           <Badge variant="outline">Dropped: {counts.dropped}</Badge>
           <Badge variant="outline">Absent: {counts.absent}</Badge>
+          {canSupervise ? (
+            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+              Supervisor Mode
+            </Badge>
+          ) : (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                    View-only
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Board/Drop requires supervisor assignment or driver supervisor mode.</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
         </div>
       </div>
 
@@ -835,12 +1298,23 @@ export default function DriverRoutePage() {
         </Button>
       </div>
 
-      {/* Recenter button */}
-      <div className="absolute bottom-6 left-3 z-30">
+      {/* Bottom-left button cluster */}
+      <div className="absolute bottom-6 left-3 z-30 flex gap-2">
         <Button onClick={handleRecenter} variant="outline" size="sm">
           <RotateCcw className="h-4 w-4 mr-2" />
           Recenter
         </Button>
+        {!directions ? (
+          <Button size="sm" onClick={handleShowRoute} disabled={routing}>
+            <Route className="h-4 w-4 mr-2" />
+            {routing ? "Routing..." : "Show Route"}
+          </Button>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={handleClearRoute}>
+            <Route className="h-4 w-4 mr-2" />
+            Clear Route
+          </Button>
+        )}
       </div>
 
       {/* Floating buttons */}
@@ -850,6 +1324,9 @@ export default function DriverRoutePage() {
         </Button>
         <Button className="rounded-full w-14 h-14 shadow" variant="outline" onClick={() => setIsQrOpen(true)}>
           <QrCode className="h-6 w-6" />
+        </Button>
+        <Button className="rounded-full w-14 h-14 shadow" variant="outline" onClick={() => setShowSettings(true)}>
+          <Settings className="h-6 w-6" />
         </Button>
       </div>
 
@@ -869,9 +1346,6 @@ export default function DriverRoutePage() {
               disableDefaultUI: true,
               zoomControl: true,
               gestureHandling: "greedy",
-              styles: [
-                { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
-              ],
             }}
           >
             {/* Directions Renderer */}
@@ -879,7 +1353,7 @@ export default function DriverRoutePage() {
               <DirectionsRenderer 
                 directions={directions}
                 options={{
-                  suppressMarkers: false,
+                  suppressMarkers: true,
                   polylineOptions: {
                     strokeColor: "#2563eb",
                     strokeWeight: 4,
@@ -908,26 +1382,7 @@ export default function DriverRoutePage() {
             )}
 
             {/* Student markers */}
-            {passengers.map((p) => {
-              const pos = asLatLng(p);
-              if (!pos) return null;
-              
-              // Highlight next stop with green marker
-              const isNextStop = p.id === nextStopId;
-              const icon = isNextStop 
-                ? "https://maps.google.com/mapfiles/ms/icons/green-dot.png"
-                : "https://maps.google.com/mapfiles/ms/icons/red-dot.png";
-              
-              return (
-                <Marker
-                  key={p.id}
-                  position={pos}
-                  title={p.name}
-                  icon={icon}
-                  onClick={() => setSelectedStudentId(p.id)}
-                />
-              );
-            })}
+            {studentMarkers}
 
             {/* Student InfoWindow */}
             {selectedStudentId && (() => {
@@ -975,15 +1430,12 @@ export default function DriverRoutePage() {
                     {tripStarted && (
                       <>
                         <div className="text-xs mb-1 text-gray-600">Quick Status:</div>
-                        <div className="flex gap-1">
+                        <div className={`flex gap-1 ${canSupervise ? "" : "opacity-50 pointer-events-none"}`}>
                           <Button size="sm" variant={s.status === "boarded" ? "default" : "outline"} onClick={() => handleStatusUpdate(s.id, "boarded")}>
-                            Boarded
+                            Board
                           </Button>
                           <Button size="sm" variant={s.status === "dropped" ? "default" : "outline"} onClick={() => handleStatusUpdate(s.id, "dropped")}>
-                            Dropped
-                          </Button>
-                          <Button size="sm" variant={s.status === "absent" ? "destructive" : "outline"} onClick={() => handleStatusUpdate(s.id, "absent")}>
-                            Absent
+                            Drop
                           </Button>
                         </div>
                       </>
@@ -1023,14 +1475,14 @@ export default function DriverRoutePage() {
                     <Button size="sm" variant="outline" onClick={() => handleCallParent(p.parentPhone)} disabled={!p.parentPhone}>
                       Call
                     </Button>
-                    {tripStarted && (
-                      <>
-                        <Button size="sm" onClick={() => handleStatusUpdate(p.id, "boarded")}>Board</Button>
-                        <Button size="sm" variant="secondary" onClick={() => handleStatusUpdate(p.id, "dropped")}>Drop</Button>
-                      </>
-                    )}
                     {pos && (
                       <Button size="sm" variant="outline" onClick={() => handleNavigateTo(pos)}>Nav</Button>
+                    )}
+                    {tripStarted && (
+                      <div className={`flex gap-1 ${canSupervise ? "" : "opacity-50 pointer-events-none"}`}>
+                        <Button size="sm" onClick={() => handleStatusUpdate(p.id, "boarded")}>Board</Button>
+                        <Button size="sm" variant="secondary" onClick={() => handleStatusUpdate(p.id, "dropped")}>Drop</Button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1044,7 +1496,33 @@ export default function DriverRoutePage() {
       <Sheet open={isQrOpen} onOpenChange={setIsQrOpen}>
         <SheetContent side="bottom" className="h-[70vh]">
           <SheetHeader><SheetTitle>QR Scanner</SheetTitle></SheetHeader>
-          <div id="qr-area" className="mt-4"></div>
+          {!tripStarted || !canSupervise ? (
+            <div className="mt-4 text-sm text-gray-600">Scanner available only when trip is active and you have supervisor permissions.</div>
+          ) : <div id="qr-area" className="mt-4"></div>}
+        </SheetContent>
+      </Sheet>
+
+      {/* Settings Sheet */}
+      <Sheet open={showSettings} onOpenChange={setShowSettings}>
+        <SheetContent side="bottom" className="h-[40vh]">
+          <SheetHeader><SheetTitle>Map Settings</SheetTitle></SheetHeader>
+          <div className="mt-4">
+            <h3 className="text-sm font-medium mb-3">Map Theme</h3>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2">
+                <input type="radio" name="mapTheme" checked={mapTheme==="auto"} onChange={()=>setMapTheme("auto")} />
+                Auto (system)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="mapTheme" checked={mapTheme==="light"} onChange={()=>setMapTheme("light")} />
+                Light
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="mapTheme" checked={mapTheme==="dark"} onChange={()=>setMapTheme("dark")} />
+                Dark
+              </label>
+            </div>
+          </div>
         </SheetContent>
       </Sheet>
     </div>

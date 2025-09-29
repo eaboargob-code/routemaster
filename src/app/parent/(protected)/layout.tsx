@@ -218,12 +218,12 @@ export function ParentGuard({ children }: { children: ReactNode }) {
   const { items: notifications, unreadCount, handleMarkAsRead } = useInbox();
   
   useEffect(() => {
-    if (user?.uid) {
+    if (user?.uid && profile?.schoolId) {
       (async () => {
-        await registerFcmToken(user.uid);
+        await registerFcmToken(user.uid, profile.schoolId);
       })();
     }
-  }, [user?.uid]);
+  }, [user?.uid, profile?.schoolId]);
   
   useEffect(() => {
     if (!profileLoading && !user) {

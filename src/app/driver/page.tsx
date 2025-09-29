@@ -10,6 +10,8 @@ import {
   getDoc,
   addDoc,
   updateDoc,
+  doc,
+  setDoc,
   Timestamp,
   limit,
   orderBy,
@@ -47,7 +49,7 @@ import {
   UserCheck,
   Eye,
   User,
-  Map,
+  Map as MapIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
@@ -142,10 +144,10 @@ export default function DriverPage() {
 
   // Register FCM token
   useEffect(() => {
-    if (user?.uid) {
-      registerFcmToken(user.uid).catch(() => {});
+    if (user?.uid && profile?.schoolId) {
+      registerFcmToken(user.uid, profile.schoolId).catch(() => {});
     }
-  }, [user?.uid]);
+  }, [user?.uid, profile?.schoolId]);
 
   const fetchData = useCallback(async () => {
     if (!user || !profile) {
@@ -266,11 +268,14 @@ export default function DriverPage() {
       async (position) => {
         const { latitude, longitude } = position.coords;
         try {
-          await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
-            lastLocation: {
+          const tripRef = doc(db, "schools", profile.schoolId, "trips", activeTrip.id);
+          console.log("Updating trip location at path:", `schools/${profile.schoolId}/trips/${activeTrip.id}`);
+          
+          await updateDoc(tripRef, {
+            currentLocation: {
               lat: latitude,
               lng: longitude,
-              at: serverTimestamp(),
+              timestamp: serverTimestamp(),
             },
           });
           if (!isAuto) {
@@ -325,16 +330,20 @@ export default function DriverPage() {
   /* -------------------- Actions -------------------- */
 
   const handleSetActingAsSupervisor = async (acting: boolean) => {
-    if (!activeTrip || !profile) return;
-    try {
-      await updateDoc(sdoc(profile.schoolId, "trips", activeTrip.id), {
-        allowDriverAsSupervisor: acting,
-      });
-      setActiveTrip((prev) =>
-        prev ? { ...prev, allowDriverAsSupervisor: acting } : null
-      );
+    if (!user?.uid || !profile?.schoolId) {
       toast({
-        title: `Supervising mode ${acting ? "enabled" : "disabled"}.`,
+        variant: "destructive",
+        title: "Update failed",
+        description: "Missing user ID or school ID",
+      });
+      return;
+    }
+    
+    try {
+      const ref = doc(db, "schools", profile.schoolId, "users", user.uid);
+      await setDoc(ref, { supervisorMode: acting }, { merge: true });
+      toast({
+        title: `Supervisor mode ${acting ? "enabled" : "disabled"}.`,
         className: "bg-accent text-accent-foreground border-0",
       });
     } catch (e: any) {
@@ -450,7 +459,13 @@ export default function DriverPage() {
   const getSupervisorContent = () => {
     const supervisorLabel = supervisor?.displayName || supervisor?.email || bus?.supervisorId || "No supervisor assigned";
     
-    if (activeTrip?.allowDriverAsSupervisor) {
+    const effectiveSupervise = !!(
+      activeTrip?.supervisorId === user?.uid ||
+      profile?.supervisorMode === true ||
+      activeTrip?.allowDriverAsSupervisor === true
+    );
+    
+    if (effectiveSupervise) {
       return (
         <div className="flex items-center gap-2">
           <UserCheck className="h-5 w-5 text-primary" />
@@ -598,7 +613,7 @@ export default function DriverPage() {
                   </Button>
                   <Link href="/driver/route" className="flex-1">
                     <Button className="w-full" variant="outline">
-                      <Map className="mr-2" />
+                      <MapIcon className="mr-2" />
                       Route Map
                     </Button>
                   </Link>
@@ -629,7 +644,7 @@ export default function DriverPage() {
               <div className="flex items-center space-x-2">
                 <Switch
                   id="driver-supervisor-mode"
-                  checked={!!activeTrip.allowDriverAsSupervisor}
+                  checked={!!profile?.supervisorMode}
                   onCheckedChange={handleSetActingAsSupervisor}
                   disabled={activeTrip.driverSupervisionLocked}
                 />
