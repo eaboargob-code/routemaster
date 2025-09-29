@@ -1,0 +1,258 @@
+FIRESTORE COLLECTION PATTERNS AND DATABASE PATHS ANALYSIS
+=========================================================
+
+This document analyzes all Firestore collection patterns, database paths, and data access
+patterns found in the RouteMASTER codebase.
+
+## 1. TOP-LEVEL COLLECTIONS
+
+### usersIndex/{uid}
+- Purpose: UID to schoolId lookup for user bootstrap/login
+- Access: User can get/create their own index
+- Usage: Initial authentication and school resolution
+- Files: useProfile.tsx, admin/setup/page.tsx
+
+### users/{uid}
+- Purpose: Global user directory (legacy/fallback)
+- Access: Self-read, school members can read if schoolId matches
+- Usage: Fallback for older data structures
+- Files: useProfile.tsx, admin/users/page.tsx, notifications.ts
+
+## 2. SCHOOL-SCOPED COLLECTIONS
+
+### schools/{schoolId}
+- Purpose: School-level document container
+- Access: Authenticated users can create/get
+- Usage: Root container for all school data
+
+### schools/{schoolId}/users/{uid}
+- Purpose: School-specific user profiles and roles
+- Access: Admin full control, self-update limited fields, school members read
+- Usage: Primary user management within schools
+- Key Fields: role, assignedBusId, assignedRouteId, fcmTokens, phoneNumber, photoUrl
+- Files: Most admin pages, driver/page.tsx, useProfile.tsx
+
+### schools/{schoolId}/users/{uid}/inbox/{noteId}
+- Purpose: User-specific notifications and messages
+- Access: User manages own inbox, admin can create
+- Usage: Notification system, messaging
+- Files: notifications.ts, parent/layout.tsx
+
+### schools/{schoolId}/students/{id}
+- Purpose: Student records and profiles
+- Access: Admin full, staff read/list, parents read own children
+- Key Fields: grade, photoUrl, defaultStopId, primaryParentId
+- Files: admin/students/page.tsx, parent/page.tsx, roster.ts
+
+### schools/{schoolId}/parentStudents/{parentId}
+- Purpose: Parent-to-student relationship mapping
+- Access: Parent read own, staff list, admin full
+- Key Fields: studentIds (array)
+- Files: admin/parents/page.tsx, parent/page.tsx, firestoreQueries.ts
+
+### schools/{schoolId}/absences/{absenceId}
+- Purpose: Student absence records
+- Access: Parents create for own children, staff read/list, admin full
+- Key Fields: parentId, studentId, date, reason
+- Files: admin/absences/page.tsx (referenced)
+
+### schools/{schoolId}/routes/{id}
+- Purpose: Bus route definitions
+- Access: Admin manage, staff/parents read
+- Key Fields: name, active, stops
+- Files: admin/routes/page.tsx, firestoreQueries.ts
+
+### schools/{schoolId}/routes/{routeId}/stops/{stopId}
+- Purpose: Route stop definitions (subcollection)
+- Access: Admin write, all roles read/list
+- Key Fields: order, location, name
+- Files: firestoreQueries.ts
+
+### schools/{schoolId}/buses/{busId}
+- Purpose: Bus fleet management
+- Access: Admin manage, staff read/list
+- Key Fields: driverId, supervisorId, capacity, plateNumber
+- Files: admin/buses/page.tsx, driver/page.tsx, supervisor/page.tsx
+
+### schools/{schoolId}/trips/{id}
+- Purpose: Individual trip instances
+- Access: Complex role-based permissions
+- Key Fields: status, driverId, supervisorId, busId, routeId, allowDriverAsSupervisor
+- Driver Allowed Fields: status, startedAt, endedAt, currentLocation, lastLocation
+- Files: driver/page.tsx, supervisor/page.tsx, admin/trips/page.tsx
+
+### schools/{schoolId}/trips/{tripId}/passengers/{docId}
+- Purpose: Trip passenger roster and status (subcollection)
+- Access: Admin/supervisor full, driver read + conditional update, parents read own children
+- Key Fields: studentId, status (pending/boarded/dropped/absent)
+- Files: TripRoster.tsx, roster.ts, driver/route/page.tsx
+
+### schools/{schoolId}/trips/{tripId}/telemetry/{pointId}
+- Purpose: Trip breadcrumb/location history (subcollection)
+- Access: Admin/supervisor read, driver create for own trips
+- Key Fields: location, timestamp, speed
+- Files: functions/index.ts (referenced)
+
+### schools/{schoolId}/config/transport
+- Purpose: Transport configuration settings
+- Access: Admin only
+- Key Fields: allowDriverAsSupervisor, thresholds
+- Files: firestoreQueries.ts
+
+### schools/{schoolId}/config/location
+- Purpose: School location data
+- Access: Admin write, staff read
+- Key Fields: coordinates, address
+- Files: firestoreQueries.ts
+
+### schools/{schoolId}/config/profile
+- Purpose: School profile information
+- Access: Admin full, drivers read
+- Key Fields: name, address, coordinates, settings
+- Files: admin/setup/page.tsx, admin/debug/page.tsx, driver/route/page.tsx
+
+## 3. FIRESTORE OPERATION PATTERNS
+
+### Read Operations
+- getDoc(): Single document reads
+- getDocs(): Collection queries
+- onSnapshot(): Real-time listeners
+
+### Write Operations
+- addDoc(): Create with auto-generated ID
+- setDoc(): Create/overwrite with specific ID
+- updateDoc(): Partial document updates
+- deleteDoc(): Document deletion
+- writeBatch(): Atomic multi-document operations
+
+### Query Patterns
+- where(): Filtering by field values
+- orderBy(): Sorting results
+- limit(): Limiting result count
+- collection(): Collection references
+- doc(): Document references
+
+## 4. REAL-TIME LISTENERS (onSnapshot)
+
+### Active Trip Monitoring
+- schools/{schoolId}/trips (driver/route/page.tsx)
+- schools/{schoolId}/trips/{tripId}/passengers (TripRoster.tsx)
+
+### Dashboard Updates
+- schools/{schoolId}/users (admin/page.tsx)
+- schools/{schoolId}/buses (admin/page.tsx)
+- schools/{schoolId}/routes (admin/page.tsx)
+- schools/{schoolId}/students (admin/page.tsx)
+- schools/{schoolId}/trips (admin/page.tsx, admin/trips/page.tsx)
+
+### Parent Notifications
+- users/{uid}/inbox (parent/layout.tsx)
+- schools/{schoolId}/trips/{tripId} (parent/page.tsx)
+
+## 5. HELPER FUNCTIONS AND UTILITIES
+
+### schoolPath.ts
+- scol(schoolId, collection): School collection reference
+- sdoc(schoolId, collection, id): School document reference
+
+### firestoreQueries.ts
+- Centralized query functions for common operations
+- User management, route operations, transport config
+- School profile and location management
+
+### firestore-helpers.ts
+- Enhanced onSnapshot wrapper with error logging
+- Improved debugging for real-time listeners
+
+## 6. SECURITY PATTERNS
+
+### Role-Based Access Control
+- isAdmin(), isDriver(), isSupervisor(), isParent()
+- Role validation in Firestore rules
+- Field-level update restrictions
+
+### Supervisor Authority
+- allowDriverAsSupervisor flag on trips
+- canDriverSupervise() function in rules
+- Conditional passenger status updates
+
+### Parent-Child Relationships
+- parentStudents collection for linking
+- isMyChild() validation in rules
+- Restricted access to own children only
+
+## 7. BATCH OPERATIONS
+
+### Student Management
+- Bulk student imports (admin/students/page.tsx)
+- Parent-student relationship updates
+- Bus assignment changes
+
+### Trip Operations
+- Passenger roster creation (roster.ts)
+- Status updates across multiple passengers
+- Trip statistics recalculation
+
+## 8. STORAGE INTEGRATION
+
+### File Upload Paths
+- schools/{schoolId}/students/{studentId}/profile.jpg
+- schools/{schoolId}/students/{studentId}/profile_128.jpg
+- schools/{schoolId}/users/{fileName}
+
+## 9. CLOUD FUNCTIONS INTEGRATION
+
+### Passenger Count Updates
+- Triggered by passenger status changes
+- Path: schools/{schoolId}/trips/{tripId}/passengers/{passengerId}
+- Updates trip-level counts automatically
+
+## 10. TESTING AND DEBUG PATTERNS
+
+### Test Data Patterns
+- student[0-9]+ for test students
+- test-trip-.* for test trips
+- Temporary permissions for debugging
+
+### Debug Collections
+- Special handling in admin/debug/page.tsx
+- Configuration validation
+- User index verification
+
+## 11. CACHING STRATEGIES
+
+### Profile Caching
+- In-memory cache in useProfile.tsx
+- Cache invalidation on auth changes
+- Optimistic updates
+
+### Real-time Data
+- onSnapshot for live updates
+- Automatic UI synchronization
+- Error handling and reconnection
+
+## 12. DATA MIGRATION PATTERNS
+
+### Legacy Support
+- Fallback to /users/{uid} collection
+- Gradual migration to school-scoped structure
+- Backward compatibility maintenance
+
+### Index Management
+- usersIndex for efficient lookups
+- School-to-user relationship mapping
+- Bootstrap process optimization
+
+SUMMARY
+=======
+The RouteMASTER application uses a sophisticated Firestore schema with:
+- School-scoped multi-tenancy
+- Role-based access control
+- Real-time synchronization
+- Hierarchical data organization
+- Comprehensive security rules
+- Efficient querying patterns
+- Scalable architecture design
+
+The database structure supports complex transportation management workflows
+while maintaining security, performance, and real-time capabilities.

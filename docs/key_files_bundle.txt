@@ -1,0 +1,3651 @@
+================================================================================
+KEY FILES BUNDLE - DRY-RUN MODE
+Generated: $(date)
+================================================================================
+
+================================================================================
+FILE: src/app/driver/route/page.tsx
+================================================================================
+'use client';
+
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
+import { doc, updateDoc, onSnapshot, collection, query, where, orderBy, limit, getDocs, addDoc, serverTimestamp, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { useProfile } from '@/lib/useProfile';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { ArrowLeft, MapPin, Users, Clock, Navigation, QrCode, Camera, X, AlertCircle, CheckCircle, UserCheck, UserX, UserMinus, Route, Zap } from 'lucide-react';
+import { GoogleRouteMap } from '@/components/GoogleRouteMap';
+import { scol, sdoc } from '@/lib/schoolPath';
+import { generateQRCode } from '@/lib/qrCodeGenerator';
+
+// 🔧 Adjust these two imports to match your project (e.g. "@/hooks/useAuth", "@/lib/useProfile")
+
+interface Student {
+  id: string;
+  name: string;
+  grade?: string;
+  photoUrl?: string;
+  pickupLocation?: {
+    lat: number;
+    lng: number;
+    address?: string;
+  };
+  dropoffLocation?: {
+    lat: number;
+    lng: number;
+    address?: string;
+  };
+  parentName?: string;
+  parentPhone?: string;
+  status: 'pending' | 'boarded' | 'dropped' | 'absent';
+  boardedAt?: any;
+  droppedAt?: any;
+  stopNumber?: number;
+}
+
+interface Trip {
+  id: string;
+  routeId: string;
+  driverId: string;
+  busId: string;
+  status: 'pending' | 'active' | 'completed';
+  startTime?: any;
+  endTime?: any;
+  type: 'pickup' | 'dropoff';
+  date: string;
+  passengers?: Student[];
+  totalPassengers?: number;
+  boardedCount?: number;
+  droppedCount?: number;
+  absentCount?: number;
+  routeCoordinates?: Array<{ lat: number; lng: number }>;
+  optimizedRoute?: Array<{ lat: number; lng: number }>;
+}
+
+interface RouteInfo {
+  id: string;
+  name: string;
+  description?: string;
+  schoolId: string;
+  stops?: Array<{
+    id: string;
+    name: string;
+    location: { lat: number; lng: number };
+    address?: string;
+    estimatedTime?: string;
+  }>;
+}
+
+interface BusDoc {
+  id: string;
+  plateNumber: string;
+  capacity: number;
+  model?: string;
+  year?: number;
+  status: 'active' | 'maintenance' | 'inactive';
+}
+
+interface School {
+  id: string;
+  name: string;
+  address?: string;
+  location?: {
+    lat: number;
+    lng: number;
+  };
+  city?: string;
+  state?: string;
+  zipCode?: string;
+}
+
+export default function DriverRoutePage() {
+  const router = useRouter();
+  const { user, profile, loading: profileLoading } = useProfile();
+  
+  // State management
+  const [trip, setTrip] = useState<Trip | null>(null);
+  const [route, setRoute] = useState<RouteInfo | null>(null);
+  const [bus, setBus] = useState<BusDoc | null>(null);
+  const [school, setSchool] = useState<School | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [passengers, setPassengers] = useState<Student[]>([]);
+  
+  // QR Scanner state
+  const [showQRScanner, setShowQRScanner] = useState(false);
+  const [qrScannerError, setQrScannerError] = useState<string | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const scannerRef = useRef<any>(null);
+  
+  // Driver location state
+  const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  
+  // Current/Next stop state
+  const [currentStopIndex, setCurrentStopIndex] = useState<number>(0);
+  const [nextStop, setNextStop] = useState<Student | null>(null);
+
+  // Get today's date in YYYY-MM-DD format
+  const today = useMemo(() => {
+    const now = new Date();
+    return now.toISOString().split('T')[0];
+  }, []);
+
+  // Fetch trip data
+  const fetchTripData = useCallback(async () => {
+    if (!profile?.schoolId || !user?.uid) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Query for today's active trip for this driver
+      const tripsRef = scol(profile.schoolId, 'trips');
+      const tripQuery = query(
+        tripsRef,
+        where('driverId', '==', user.uid),
+        where('date', '==', today),
+        where('status', 'in', ['pending', 'active']),
+        orderBy('startTime', 'desc'),
+        limit(1)
+      );
+
+      const tripSnapshot = await getDocs(tripQuery);
+      
+      if (tripSnapshot.empty) {
+        setError('No active trip found for today');
+        setLoading(false);
+        return;
+      }
+
+      const tripDoc = tripSnapshot.docs[0];
+      const tripData = { id: tripDoc.id, ...tripDoc.data() } as Trip;
+      setTrip(tripData);
+
+      // Fetch route information
+      if (tripData.routeId) {
+        const routeDoc = await getDoc(sdoc(profile.schoolId, `routes/${tripData.routeId}`));
+        if (routeDoc.exists()) {
+          setRoute({ id: routeDoc.id, ...routeDoc.data() } as RouteInfo);
+        }
+      }
+
+      // Fetch bus information
+      if (tripData.busId) {
+        const busDoc = await getDoc(sdoc(profile.schoolId, `buses/${tripData.busId}`));
+        if (busDoc.exists()) {
+          setBus({ id: busDoc.id, ...busDoc.data() } as BusDoc);
+        }
+      }
+
+      // Fetch school information
+      const schoolDoc = await getDoc(sdoc(profile.schoolId, 'config/profile'));
+      if (schoolDoc.exists()) {
+        setSchool({ id: profile.schoolId, ...schoolDoc.data() } as School);
+      }
+
+    } catch (err) {
+      console.error('Error fetching trip data:', err);
+      setError('Failed to load trip data');
+    } finally {
+      setLoading(false);
+    }
+  }, [profile?.schoolId, user?.uid, today]);
+
+  // Listen to passengers in real-time
+  useEffect(() => {
+    if (!trip?.id || !profile?.schoolId) return;
+
+    const passengersRef = scol(profile.schoolId, `trips/${trip.id}/passengers`);
+    const passengersQuery = query(passengersRef, orderBy('stopNumber', 'asc'));
+
+    const unsubscribe = onSnapshot(passengersQuery, (snapshot) => {
+      const passengersData: Student[] = [];
+      snapshot.forEach((doc) => {
+        passengersData.push({ id: doc.id, ...doc.data() } as Student);
+      });
+      setPassengers(passengersData);
+      
+      // Update next stop
+      const nextPendingStudent = passengersData.find(p => p.status === 'pending');
+      setNextStop(nextPendingStudent || null);
+    });
+
+    return () => unsubscribe();
+  }, [trip?.id, profile?.schoolId]);
+
+  // Get driver location
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationError('Geolocation is not supported by this browser');
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        setDriverLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        });
+        setLocationError(null);
+      },
+      (error) => {
+        console.error('Geolocation error:', error);
+        setLocationError('Unable to get your location');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 60000
+      }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchTripData();
+  }, [fetchTripData]);
+
+  // Handle trip actions
+  const handleStartTrip = async () => {
+    if (!trip || !profile?.schoolId) return;
+
+    try {
+      const tripRef = sdoc(profile.schoolId, `trips/${trip.id}`);
+      await updateDoc(tripRef, {
+        status: 'active',
+        startTime: serverTimestamp()
+      });
+      
+      // Add to location history
+      if (driverLocation) {
+        const locationRef = scol(profile.schoolId, `trips/${trip.id}/locationHistory`);
+        await addDoc(locationRef, {
+          location: driverLocation,
+          timestamp: serverTimestamp(),
+          type: 'trip_start'
+        });
+      }
+    } catch (err) {
+      console.error('Error starting trip:', err);
+      setError('Failed to start trip');
+    }
+  };
+
+  const handleEndTrip = async () => {
+    if (!trip || !profile?.schoolId) return;
+
+    try {
+      const tripRef = sdoc(profile.schoolId, `trips/${trip.id}`);
+      await updateDoc(tripRef, {
+        status: 'completed',
+        endTime: serverTimestamp()
+      });
+      
+      // Add to location history
+      if (driverLocation) {
+        const locationRef = scol(profile.schoolId, `trips/${trip.id}/locationHistory`);
+        await addDoc(locationRef, {
+          location: driverLocation,
+          timestamp: serverTimestamp(),
+          type: 'trip_end'
+        });
+      }
+      
+      // Navigate back to driver dashboard
+      router.push('/driver');
+    } catch (err) {
+      console.error('Error ending trip:', err);
+      setError('Failed to end trip');
+    }
+  };
+
+  // Handle passenger status updates
+  const updatePassengerStatus = async (passengerId: string, status: 'boarded' | 'dropped' | 'absent') => {
+    if (!trip || !profile?.schoolId) return;
+
+    try {
+      const passengerRef = sdoc(profile.schoolId, `trips/${trip.id}/passengers/${passengerId}`);
+      const updateData: any = { status };
+      
+      if (status === 'boarded') {
+        updateData.boardedAt = serverTimestamp();
+      } else if (status === 'dropped') {
+        updateData.droppedAt = serverTimestamp();
+      }
+      
+      await updateDoc(passengerRef, updateData);
+      
+      // Add to location history
+      if (driverLocation) {
+        const locationRef = scol(profile.schoolId, `trips/${trip.id}/locationHistory`);
+        await addDoc(locationRef, {
+          location: driverLocation,
+          timestamp: serverTimestamp(),
+          type: status,
+          passengerId,
+          passengerName: passengers.find(p => p.id === passengerId)?.name
+        });
+      }
+    } catch (err) {
+      console.error('Error updating passenger status:', err);
+      setError('Failed to update passenger status');
+    }
+  };
+
+  // QR Code scanning functionality
+  const startQRScanner = async () => {
+    setShowQRScanner(true);
+    setQrScannerError(null);
+    setIsScanning(true);
+
+    try {
+      // Check if BarcodeDetector is available (Chrome/Edge)
+      if ('BarcodeDetector' in window) {
+        await startBarcodeDetector();
+      } else {
+        // Fallback to qr-scanner library
+        await startQRScannerLibrary();
+      }
+    } catch (err) {
+      console.error('QR Scanner error:', err);
+      setQrScannerError('Failed to start QR scanner');
+      setIsScanning(false);
+    }
+  };
+
+  const startBarcodeDetector = async () => {
+    if (!videoRef.current) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'environment' } 
+      });
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+
+      const barcodeDetector = new (window as any).BarcodeDetector({
+        formats: ['qr_code']
+      });
+
+      const detectQR = async () => {
+        if (!videoRef.current || !isScanning) return;
+
+        try {
+          const barcodes = await barcodeDetector.detect(videoRef.current);
+          if (barcodes.length > 0) {
+            const qrData = barcodes[0].rawValue;
+            await handleQRScan(qrData);
+          }
+        } catch (err) {
+          console.error(`Error fetching driver ${driverId}:`, err);
+        }
+      }
+      setDrivers(driversData);
+
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError('Failed to load dashboard data');
+    } finally {
+      setLoading(false);
+    }
+  }, [profile?.schoolId, today]);
+
+  // Register FCM token for notifications
+  useEffect(() => {
+    if (user?.uid && profile?.schoolId) {
+      registerFCMToken(user.uid, profile.schoolId).catch(console.error);
+    }
+  }, [user?.uid, profile?.schoolId]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Loading state
+  if (profileLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-600">
+              <AlertCircle className="h-5 w-5" />
+              Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-4">{error}</p>
+            <Button onClick={fetchData} className="w-full">
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const activeTrips = trips.filter(trip => trip.status === 'active');
+  const pendingTrips = trips.filter(trip => trip.status === 'pending');
+  const completedTrips = trips.filter(trip => trip.status === 'completed');
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-4">
+              <UserCheck className="h-8 w-8 text-blue-600" />
+              <div>
+                <h1 className="text-xl font-semibold text-gray-900">Supervisor Dashboard</h1>
+                <p className="text-sm text-gray-500">
+                  Welcome back, {profile?.displayName || user?.email}
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => router.push('/supervisor/profile')}>
+                <Settings className="h-4 w-4 mr-2" />
+                Profile
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Quick Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Today's Trips</p>
+                  <p className="text-2xl font-bold text-gray-900">{trips.length}</p>
+                </div>
+                <Calendar className="h-8 w-8 text-blue-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Active Trips</p>
+                  <p className="text-2xl font-bold text-gray-900">{activeTrips.length}</p>
+                </div>
+                <Route className="h-8 w-8 text-green-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Completed</p>
+                  <p className="text-2xl font-bold text-gray-900">{completedTrips.length}</p>
+                </div>
+                <CheckCircle className="h-8 w-8 text-purple-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Total Passengers</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {trips.reduce((sum, trip) => sum + (trip.totalPassengers || 0), 0)}
+                  </p>
+                </div>
+                <Users className="h-8 w-8 text-orange-600" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Today's Trips */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Route className="h-5 w-5" />
+              Today's Trips ({trips.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {trips.map((trip) => (
+                <div key={trip.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-3 h-3 rounded-full ${
+                      trip.status === 'active' ? 'bg-green-500' :
+                      trip.status === 'completed' ? 'bg-blue-500' :
+                      'bg-gray-400'
+                    }`} />
+                    
+                    <div>
+                      <h4 className="font-medium">
+                        {routes[trip.routeId]?.name || 'Unknown Route'}
+                      </h4>
+                      <p className="text-sm text-gray-600">
+                        {trip.type === 'pickup' ? 'Pickup' : 'Drop-off'} • 
+                        Driver: {drivers[trip.driverId]?.displayName || 'Unknown'} • 
+                        Bus: {buses[trip.busId]?.plateNumber || 'Unknown'}
+                      </p>
+                      <div className="flex items-center gap-4 mt-1">
+                        <span className="text-sm text-gray-500">
+                          {trip.boardedCount || 0}/{trip.totalPassengers || 0} passengers
+                        </span>
+                        {trip.startTime && (
+                          <span className="text-sm text-gray-500">
+                            Started: {new Date(trip.startTime.toDate()).toLocaleTimeString()}
+                          </span>
+                        )}
+                        {trip.endTime && (
+                          <span className="text-sm text-gray-500">
+                            Ended: {new Date(trip.endTime.toDate()).toLocaleTimeString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <Badge variant={
+                      trip.status === 'active' ? 'default' :
+                      trip.status === 'completed' ? 'secondary' :
+                      'outline'
+                    }>
+                      {trip.status}
+                    </Badge>
+                    
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => router.push(`/supervisor/trips/${trip.id}`)}
+                    >
+                      <Eye className="h-4 w-4 mr-2" />
+                      View
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              
+              {trips.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  No trips scheduled for today
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+FILE: src/app/supervisor/login/page.tsx
+================================================================================
+'use client';
+
+import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { UserCheck, Mail, Lock, AlertCircle } from 'lucide-react';
+
+const loginSchema = z.object({
+  email: z.string().email('Please enter a valid email address'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
+
+export default function SupervisorLoginPage() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+  });
+
+  const onSubmit = async (data: LoginFormData) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const userCredential = await signInWithEmailAndPassword(auth, data.email, data.password);
+      
+      // Get user token to check custom claims
+      const token = await userCredential.user.getIdTokenResult();
+      const role = token.claims.role;
+
+      if (role !== 'supervisor' && role !== 'admin') {
+        setError('Access denied. Supervisor credentials required.');
+        await auth.signOut();
+        return;
+      }
+
+      // Redirect to supervisor dashboard
+      router.push('/supervisor');
+    } catch (err: any) {
+      console.error('Login error:', err);
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        setError('Invalid email or password');
+      } else if (err.code === 'auth/too-many-requests') {
+        setError('Too many failed attempts. Please try again later.');
+      } else {
+        setError('Login failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center">
+          <div className="mx-auto w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4">
+            <UserCheck className="h-6 w-6 text-blue-600" />
+          </div>
+          <CardTitle className="text-2xl font-bold">Supervisor Login</CardTitle>
+          <p className="text-gray-600">Sign in to access the supervisor dashboard</p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="supervisor@school.edu"
+                  className="pl-10"
+                  {...register('email')}
+                />
+              </div>
+              {errors.email && (
+                <p className="text-sm text-red-600">{errors.email.message}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Enter your password"
+                  className="pl-10"
+                  {...register('password')}
+                />
+              </div>
+              {errors.password && (
+                <p className="text-sm text-red-600">{errors.password.message}</p>
+              )}
+            </div>
+
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Signing in...' : 'Sign In'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+================================================================================
+FILE: src/app/parent/(protected)/page.tsx
+================================================================================
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { useProfile } from '@/lib/useProfile';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { MapPin, Users, Clock, Navigation, Route, Bus, AlertCircle, CheckCircle, Calendar, User, Phone, Mail, ExternalLink } from 'lucide-react';
+import { scol, sdoc } from '@/lib/schoolPath';
+import { registerFCMToken } from '@/lib/notifications';
+
+interface Student {
+  id: string;
+  name: string;
+  grade?: string;
+  photoUrl?: string;
+  status: 'pending' | 'boarded' | 'dropped' | 'absent';
+  boardedAt?: any;
+  droppedAt?: any;
+  pickupLocation?: {
+    lat: number;
+    lng: number;
+    address?: string;
+  };
+  dropoffLocation?: {
+    lat: number;
+    lng: number;
+    address?: string;
+  };
+}
+
+interface Trip {
+  id: string;
+  routeId: string;
+  driverId: string;
+  busId: string;
+  status: 'pending' | 'active' | 'completed';
+  startTime?: any;
+  endTime?: any;
+  type: 'pickup' | 'dropoff';
+  date: string;
+  totalPassengers?: number;
+  boardedCount?: number;
+  droppedCount?: number;
+  absentCount?: number;
+}
+
+interface RouteInfo {
+  id: string;
+  name: string;
+  description?: string;
+  schoolId: string;
+}
+
+interface BusDoc {
+  id: string;
+  plateNumber: string;
+  capacity: number;
+  model?: string;
+  year?: number;
+  status: 'active' | 'maintenance' | 'inactive';
+}
+
+interface DriverProfile {
+  id: string;
+  displayName: string;
+  email: string;
+  phone?: string;
+  photoUrl?: string;
+}
+
+interface PickupLocationManagerProps {
+  student: Student;
+  onLocationUpdate: (studentId: string, location: { lat: number; lng: number; address?: string }) => void;
+}
+
+const PickupLocationManager: React.FC<PickupLocationManagerProps> = ({ student, onLocationUpdate }) => {
+  const [showLocationInput, setShowLocationInput] = useState(false);
+  const [coordinates, setCoordinates] = useState('');
+  const [address, setAddress] = useState('');
+
+  const handleGoogleMapsLink = () => {
+    if (student.pickupLocation) {
+      const { lat, lng } = student.pickupLocation;
+      const url = `https://www.google.com/maps?q=${lat},${lng}`;
+      window.open(url, '_blank');
+    }
+  };
+
+  const handleLocationSubmit = () => {
+    try {
+      const [lat, lng] = coordinates.split(',').map(coord => parseFloat(coord.trim()));
+      if (isNaN(lat) || isNaN(lng)) {
+        alert('Please enter valid coordinates (lat, lng)');
+        return;
+      }
+      
+      onLocationUpdate(student.id, { lat, lng, address: address || undefined });
+      setShowLocationInput(false);
+      setCoordinates('');
+      setAddress('');
+    } catch (err) {
+      alert('Invalid coordinate format. Please use: lat, lng');
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {student.pickupLocation ? (
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={handleGoogleMapsLink}>
+            <ExternalLink className="h-4 w-4 mr-1" />
+            View on Maps
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setShowLocationInput(true)}>
+            Update Location
+          </Button>
+        </div>
+      ) : (
+        <Button size="sm" onClick={() => setShowLocationInput(true)}>
+          <MapPin className="h-4 w-4 mr-1" />
+          Set Pickup Location
+        </Button>
+      )}
+
+      {showLocationInput && (
+        <div className="space-y-2 p-3 bg-gray-50 rounded">
+          <input
+            type="text"
+            placeholder="Latitude, Longitude (e.g., 40.7128, -74.0060)"
+            value={coordinates}
+            onChange={(e) => setCoordinates(e.target.value)}
+            className="w-full p-2 border rounded"
+          />
+          <input
+            type="text"
+            placeholder="Address (optional)"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            className="w-full p-2 border rounded"
+          />
+          <div className="flex gap-2">
+            <Button size="sm" onClick={handleLocationSubmit}>
+              Save Location
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowLocationInput(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default function ParentPage() {
+  const router = useRouter();
+  const { user, profile, loading: profileLoading } = useProfile();
+  
+  // State management
+  const [students, setStudents] = useState<Student[]>([]);
+  const [trips, setTrips] = useState<Record<string, Trip>>({});
+  const [routes, setRoutes] = useState<Record<string, RouteInfo>>({});
+  const [buses, setBuses] = useState<Record<string, BusDoc>>({});
+  const [drivers, setDrivers] = useState<Record<string, DriverProfile>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Get today's date in YYYY-MM-DD format
+  const today = new Date().toISOString().split('T')[0];
+
+  // Fetch student data and related trip information
+  const fetchData = useCallback(async () => {
+    if (!profile?.schoolId || !user?.uid) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch parent's students
+      const studentsRef = scol(profile.schoolId, 'parentStudents');
+      const studentsQuery = query(
+        studentsRef,
+        where('parentId', '==', user.uid),
+        where('active', '==', true)
+      );
+
+      const studentsSnapshot = await getDocs(studentsQuery);
+      const studentsData: Student[] = [];
+      const tripIds = new Set<string>();
+
+      studentsSnapshot.forEach((doc) => {
+        const studentData = { id: doc.id, ...doc.data() } as Student;
+        studentsData.push(studentData);
+        
+        // Get current trip ID if exists
+        if (studentData.currentTripId) {
+          tripIds.add(studentData.currentTripId);
+        }
+      });
+
+      setStudents(studentsData);
+
+      // Fetch trip information for each student
+      const tripsData: Record<string, Trip> = {};
+      const routeIds = new Set<string>();
+      const busIds = new Set<string>();
+      const driverIds = new Set<string>();
+
+      for (const tripId of tripIds) {
+        try {
+          const tripDoc = await getDoc(sdoc(profile.schoolId, `trips/${tripId}`));
+          if (tripDoc.exists()) {
+            const tripData = { id: tripDoc.id, ...tripDoc.data() } as Trip;
+            tripsData[tripId] = tripData;
+            
+            if (tripData.routeId) routeIds.add(tripData.routeId);
+            if (tripData.busId) busIds.add(tripData.busId);
+            if (tripData.driverId) driverIds.add(tripData.driverId);
+          }
+        } catch (err) {
+          console.error(`Error fetching trip ${tripId}:`, err);
+        }
+      }
+
+      setTrips(tripsData);
+
+      // Fetch route information
+      const routesData: Record<string, RouteInfo> = {};
+      for (const routeId of routeIds) {
+        try {
+          const routeDoc = await getDoc(sdoc(profile.schoolId, `routes/${routeId}`));
+          if (routeDoc.exists()) {
+            routesData[routeId] = { id: routeDoc.id, ...routeDoc.data() } as RouteInfo;
+          }
+        } catch (err) {
+          console.error(`Error fetching route ${routeId}:`, err);
+        }
+      }
+      setRoutes(routesData);
+
+      // Fetch bus information
+      const busesData: Record<string, BusDoc> = {};
+      for (const busId of busIds) {
+        try {
+          const busDoc = await getDoc(sdoc(profile.schoolId, `buses/${busId}`));
+          if (busDoc.exists()) {
+            busesData[busId] = { id: busDoc.id, ...busDoc.data() } as BusDoc;
+          }
+        } catch (err) {
+          console.error(`Error fetching bus ${busId}:`, err);
+        }
+      }
+      setBuses(busesData);
+
+      // Fetch driver information
+      const driversData: Record<string, DriverProfile> = {};
+      for (const driverId of driverIds) {
+        try {
+          const driverDoc = await getDoc(sdoc(profile.schoolId, `users/${driverId}`));
+          if (driverDoc.exists()) {
+            driversData[driverId] = { id: driverDoc.id, ...driverDoc.data() } as DriverProfile;
+          }
+        } catch (err) {
+          console.error(`Error fetching driver ${driverId}:`, err);
+        }
+      }
+      setDrivers(driversData);
+
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError('Failed to load student information');
+    } finally {
+      setLoading(false);
+    }
+  }, [profile?.schoolId, user?.uid]);
+
+  // Register FCM token for notifications
+  useEffect(() => {
+    if (user?.uid && profile?.schoolId) {
+      registerFCMToken(user.uid, profile.schoolId).catch(console.error);
+    }
+  }, [user?.uid, profile?.schoolId]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Handle location updates
+  const handleLocationUpdate = async (studentId: string, location: { lat: number; lng: number; address?: string }) => {
+    if (!profile?.schoolId) return;
+
+    try {
+      const studentRef = sdoc(profile.schoolId, `parentStudents/${studentId}`);
+      await updateDoc(studentRef, {
+        pickupLocation: location
+      });
+      
+      // Update local state
+      setStudents(prev => prev.map(student => 
+        student.id === studentId 
+          ? { ...student, pickupLocation: location }
+          : student
+      ));
+    } catch (err) {
+      console.error('Error updating location:', err);
+      setError('Failed to update pickup location');
+    }
+  };
+
+  // Loading state
+  if (profileLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-600">
+              <AlertCircle className="h-5 w-5" />
+              Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-4">{error}</p>
+            <Button onClick={fetchData} className="w-full">
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-4">
+              <User className="h-8 w-8 text-blue-600" />
+              <div>
+                <h1 className="text-xl font-semibold text-gray-900">Parent Dashboard</h1>
+                <p className="text-sm text-gray-500">
+                  Welcome back, {profile?.displayName || user?.email}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Students Overview */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {students.map((student) => {
+            const currentTrip = student.currentTripId ? trips[student.currentTripId] : null;
+            const route = currentTrip ? routes[currentTrip.routeId] : null;
+            const bus = currentTrip ? buses[currentTrip.busId] : null;
+            const driver = currentTrip ? drivers[currentTrip.driverId] : null;
+
+            return (
+              <Card key={student.id}>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-3">
+                    {student.photoUrl && (
+                      <img 
+                        src={student.photoUrl} 
+                        alt={student.name}
+                        className="w-10 h-10 rounded-full object-cover"
+                      />
+                    )}
+                    <div>
+                      <div className="text-lg">{student.name}</div>
+                      <div className="text-sm text-gray-500 font-normal">
+                        Grade {student.grade}
+                      </div>
+                    </div>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Current Status */}
+                  <div>
+                    <h4 className="font-medium mb-2">Current Status</h4>
+                    <Badge variant={
+                      student.status === 'boarded' ? 'default' :
+                      student.status === 'dropped' ? 'secondary' :
+                      student.status === 'absent' ? 'destructive' :
+                      'outline'
+                    }>
+                      {student.status === 'pending' ? 'Waiting for pickup' :
+                       student.status === 'boarded' ? 'On the bus' :
+                       student.status === 'dropped' ? 'Arrived at school' :
+                       'Absent'}
+                    </Badge>
+                  </div>
+
+                  {/* Trip Information */}
+                  {currentTrip && (
+                    <div>
+                      <h4 className="font-medium mb-2">Trip Information</h4>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <Route className="h-4 w-4 text-gray-400" />
+                          <span>{route?.name || 'Unknown Route'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Bus className="h-4 w-4 text-gray-400" />
+                          <span>{bus?.plateNumber || 'Unknown Bus'}</span>
+                        </div>
+                        {driver && (
+                          <div className="flex items-center gap-2">
+                            <User className="h-4 w-4 text-gray-400" />
+                            <span>{driver.displayName}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <Clock className="h-4 w-4 text-gray-400" />
+                          <span>
+                            {currentTrip.status === 'active' ? 'Trip in progress' :
+                             currentTrip.status === 'completed' ? 'Trip completed' :
+                             'Trip pending'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pickup Location */}
+                  <div>
+                    <h4 className="font-medium mb-2">Pickup Location</h4>
+                    <PickupLocationManager 
+                      student={student}
+                      onLocationUpdate={handleLocationUpdate}
+                    />
+                  </div>
+
+                  {/* Timestamps */}
+                  {(student.boardedAt || student.droppedAt) && (
+                    <div>
+                      <h4 className="font-medium mb-2">Timeline</h4>
+                      <div className="space-y-1 text-sm text-gray-600">
+                        {student.boardedAt && (
+                          <div>Boarded: {new Date(student.boardedAt.toDate()).toLocaleTimeString()}</div>
+                        )}
+                        {student.droppedAt && (
+                          <div>Dropped: {new Date(student.droppedAt.toDate()).toLocaleTimeString()}</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+
+        {students.length === 0 && (
+          <Card>
+            <CardContent className="text-center py-8">
+              <User className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No Students Found</h3>
+              <p className="text-gray-600">
+                No students are currently associated with your account.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+FILE: src/app/parent/login/page.tsx
+================================================================================
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import { useProfile } from '@/lib/useProfile';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { AlertCircle, User, Lock, LogIn } from 'lucide-react';
+
+const loginSchema = z.object({
+  email: z.string().email('Please enter a valid email address'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
+
+export default function ParentLoginPage() {
+  const router = useRouter();
+  const { user, profile, loading: profileLoading } = useProfile();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const form = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      email: '',
+      password: '',
+    },
+  });
+
+  // Redirect if already logged in as parent
+  useEffect(() => {
+    if (!profileLoading && user && profile?.role === 'parent') {
+      router.push('/parent');
+    }
+  }, [user, profile, profileLoading, router]);
+
+  const onSubmit = async (data: LoginFormData) => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, data.email, data.password);
+      
+      // Wait a moment for the profile to load
+      setTimeout(() => {
+        // The useEffect above will handle the redirect
+      }, 1000);
+      
+    } catch (err: any) {
+      console.error('Login error:', err);
+      
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        setError('Invalid email or password');
+      } else if (err.code === 'auth/invalid-credential') {
+        setError('Invalid credentials. Please check your email and password.');
+      } else if (err.code === 'auth/too-many-requests') {
+        setError('Too many failed attempts. Please try again later.');
+      } else {
+        setError('Login failed. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Show loading while checking authentication
+  if (profileLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't show login form if already authenticated as parent
+  if (user && profile?.role === 'parent') {
+    return null;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8">
+        <div className="text-center">
+          <User className="mx-auto h-12 w-12 text-blue-600" />
+          <h2 className="mt-6 text-3xl font-extrabold text-gray-900">
+            Parent Login
+          </h2>
+          <p className="mt-2 text-sm text-gray-600">
+            Sign in to track your child's school transportation
+          </p>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-center">Welcome Back</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                <FormField
+                  control={form.control}
+                  name="email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Email Address</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <User className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                          <Input
+                            {...field}
+                            type="email"
+                            placeholder="Enter your email"
+                            className="pl-10"
+                            disabled={isLoading}
+                          />
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="password"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Password</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Lock className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                          <Input
+                            {...field}
+                            type="password"
+                            placeholder="Enter your password"
+                            className="pl-10"
+                            disabled={isLoading}
+                          />
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {error && (
+                  <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-md">
+                    <AlertCircle className="h-4 w-4 text-red-600" />
+                    <span className="text-sm text-red-600">{error}</span>
+                  </div>
+                )}
+
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <div className="flex items-center gap-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Signing in...
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <LogIn className="h-4 w-4" />
+                      Sign In
+                    </div>
+                  )}
+                </Button>
+              </form>
+            </Form>
+          </CardContent>
+        </Card>
+
+        <div className="text-center">
+          <p className="text-sm text-gray-600">
+            Need help? Contact your school administrator
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+FILE: src/components/GoogleRouteMap.tsx
+================================================================================
+"use client";
+
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Wrapper, Status } from '@googlemaps/react-wrapper';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { 
+  MapPin, 
+  School, 
+  Navigation, 
+  Clock, 
+  Route as RouteIcon,
+  Users,
+  CheckCircle,
+  XCircle,
+  AlertCircle,
+  Phone,
+  Play,
+  Square
+} from 'lucide-react';
+import { 
+  StudentLocation, 
+  SchoolLocation, 
+  DriverLocation,
+  OptimizedStop, 
+  optimizeRoute, 
+  getRouteStatistics,
+  getNextStop
+} from '@/lib/routeOptimization';
+
+// Helper function to validate location coordinates
+function isValidLocation(location: { lat: number; lng: number } | null): location is { lat: number; lng: number } {
+  return location !== null && 
+    typeof location.lat === 'number' && 
+    typeof location.lng === 'number' &&
+    !isNaN(location.lat) && 
+    !isNaN(location.lng);
+}
+
+interface PassengerStatus {
+  studentId: string;
+  status: 'pending' | 'boarded' | 'dropped' | 'absent';
+  timestamp?: any;
+}
+
+interface RouteStats {
+  totalDistance: number;
+  estimatedTime: number;
+  studentsCount: number;
+  completedStops: number;
+}
+
+interface GoogleRouteMapProps {
+  students: {
+    studentId: string;
+    name: string;
+    lat: number;
+    lng: number;
+    address: string;
+    photoUrl?: string;
+    grade?: string;
+    pickupTime?: string;
+    specialNeeds?: string;
+  }[];
+  schoolLocation: { lat: number; lng: number } | null;
+  optimizedStops: OptimizedStop[];
+  routeStats: RouteStats;
+  driverLocation?: DriverLocation;
+  passengerStatuses?: PassengerStatus[];
+  currentStopIndex?: number;
+  onNavigateToStop?: (stop: OptimizedStop) => void;
+  onCallParent?: (studentId: string, phoneNumber?: string) => void;
+  onStartTrip?: (driverLocation: { lat: number; lng: number }) => void;
+  onStopTrip?: () => void;
+  className?: string;
+  tripStarted?: boolean;
+}
+
+// Google Maps component
+function GoogleMap({ 
+  students, 
+  schoolLocation, 
+  optimizedStops, 
+  driverLocation,
+  currentDriverLocation,
+  passengerStatuses = [],
+  currentStopIndex = 0,
+  onNavigateToStop,
+  tripStarted = false,
+  routeCoordinates
+}: {
+  students: {
+    studentId: string;
+    name: string;
+    lat: number;
+    lng: number;
+    address: string;
+    photoUrl?: string;
+    grade?: string;
+    pickupTime?: string;
+    specialNeeds?: string;
+  }[];
+  schoolLocation: { lat: number; lng: number } | null;
+  optimizedStops: OptimizedStop[];
+  driverLocation?: DriverLocation;
+  currentDriverLocation?: { lat: number; lng: number } | null;
+  passengerStatuses: PassengerStatus[];
+  currentStopIndex: number;
+  onNavigateToStop?: (stop: OptimizedStop) => void;
+  tripStarted: boolean;
+  routeCoordinates: google.maps.LatLngLiteral[];
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [map, setMap] = useState<google.maps.Map>();
+  const [directionsService, setDirectionsService] = useState<google.maps.DirectionsService>();
+  const [directionsRenderer, setDirectionsRenderer] = useState<google.maps.DirectionsRenderer>();
+  const markersRef = useRef<(google.maps.marker.AdvancedMarkerElement | google.maps.Marker)[]>([]);
+
+  // Create custom marker with student photo
+  const createStudentPhotoMarker = (photoUrl: string | undefined, status: string, index: number, currentStopIndex: number): string => {
+    // Determine border color and styling based on status and position
+    let borderColor = '#3b82f6'; // Default blue
+    let backgroundColor = '#ffffff'; // Default white background
+    let statusIndicator = '';
+    
+    if (status === 'boarded') {
+      borderColor = '#22c55e'; // Green
+      backgroundColor = '#dcfce7'; // Light green background
+      statusIndicator = '✓'; // Checkmark
+    } else if (status === 'absent') {
+      borderColor = '#ef4444'; // Red
+      backgroundColor = '#fee2e2'; // Light red background
+      statusIndicator = '✗'; // X mark
+    } else if (status === 'dropped') {
+      borderColor = '#06b6d4'; // Cyan
+      backgroundColor = '#cffafe'; // Light cyan background
+      statusIndicator = '↓'; // Down arrow
+    } else if (index === currentStopIndex) {
+      borderColor = '#f59e0b'; // Orange for current stop
+      backgroundColor = '#fef3c7'; // Light orange background
+      statusIndicator = '→'; // Right arrow
+    } else if (index === currentStopIndex + 1) {
+      borderColor = '#8b5cf6'; // Purple for next stop
+      backgroundColor = '#f3e8ff'; // Light purple background
+      statusIndicator = '◉'; // Target symbol
+    }
+
+    // Create SVG marker with enhanced styling
+    const size = 44; // Slightly larger for better visibility
+    const borderWidth = 3;
+    const statusSize = 12; // Size for status indicator
+    
+    if (photoUrl) {
+      // SVG with student photo and status indicator
+      return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+        <svg width="${size}" height="${size + 8}" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <clipPath id="circle-clip-${index}">
+              <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}"/>
+            </clipPath>
+            <filter id="shadow-${index}" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.3)"/>
+            </filter>
+          </defs>
+          <!-- Shadow circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="rgba(0,0,0,0.1)" filter="url(#shadow-${index})"/>
+          <!-- Border circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="${borderColor}"/>
+          <!-- Background circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="${backgroundColor}"/>
+          <!-- Student photo -->
+          <image x="${borderWidth}" y="${borderWidth}" width="${size-borderWidth*2}" height="${size-borderWidth*2}" 
+                 href="${photoUrl}" clip-path="url(#circle-clip-${index})" preserveAspectRatio="xMidYMid slice"/>
+          <!-- Status indicator -->
+          ${statusIndicator ? `
+            <circle cx="${size - 8}" cy="8" r="8" fill="${borderColor}" stroke="white" stroke-width="2"/>
+            <text x="${size - 8}" y="12" font-family="Arial" font-size="10" fill="white" text-anchor="middle" font-weight="bold">${statusIndicator}</text>
+          ` : ''}
+          <!-- Stop number -->
+          <circle cx="8" cy="${size - 8}" r="8" fill="white" stroke="${borderColor}" stroke-width="2"/>
+          <text x="8" y="${size - 4}" font-family="Arial" font-size="8" fill="${borderColor}" text-anchor="middle" font-weight="bold">${index + 1}</text>
+        </svg>
+      `)}`;
+    } else {
+      // SVG with fallback icon and enhanced styling
+      return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+        <svg width="${size}" height="${size + 8}" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="shadow-${index}" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.3)"/>
+            </filter>
+          </defs>
+          <!-- Shadow circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="rgba(0,0,0,0.1)" filter="url(#shadow-${index})"/>
+          <!-- Border circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="${borderColor}"/>
+          <!-- Background circle -->
+          <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="${backgroundColor}"/>
+          <!-- Student icon -->
+          <g transform="translate(${size/2-10}, ${size/2-10})">
+            <path d="M10 10c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" 
+                  fill="#6b7280" stroke="none"/>
+          </g>
+          <!-- Status indicator -->
+          ${statusIndicator ? `
+            <circle cx="${size - 8}" cy="8" r="8" fill="${borderColor}" stroke="white" stroke-width="2"/>
+            <text x="${size - 8}" y="12" font-family="Arial" font-size="10" fill="white" text-anchor="middle" font-weight="bold">${statusIndicator}</text>
+          ` : ''}
+          <!-- Stop number -->
+          <circle cx="8" cy="${size - 8}" r="8" fill="white" stroke="${borderColor}" stroke-width="2"/>
+          <text x="8" y="${size - 4}" font-family="Arial" font-size="8" fill="${borderColor}" text-anchor="middle" font-weight="bold">${index + 1}</text>
+        </svg>
+      `)}`;
+    }
+  };
+
+  // Create custom marker with enhanced yellow school bus icon
+  const createDriverBusMarker = (): string => {
+    const size = 56; // Larger for better visibility
+    const borderWidth = 4;
+    const borderColor = '#f59e0b'; // Orange/yellow border
+    
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+      <svg width="${size}" height="${size + 8}" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <filter id="bus-shadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="rgba(0,0,0,0.4)"/>
+          </filter>
+          <linearGradient id="busGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#fbbf24;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:1" />
+          </linearGradient>
+        </defs>
+        <!-- Shadow circle -->
+        <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="rgba(0,0,0,0.15)" filter="url(#bus-shadow)"/>
+        <!-- Border circle -->
+        <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="${borderColor}"/>
+        <!-- Background circle -->
+        <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="white"/>
+        <!-- School bus -->
+        <g transform="translate(${size/2-16}, ${size/2-12})">
+          <!-- Bus body with gradient -->
+          <rect x="2" y="8" width="28" height="14" rx="3" fill="url(#busGradient)" stroke="#f59e0b" stroke-width="1"/>
+          <!-- Bus front -->
+          <rect x="0" y="10" width="4" height="10" rx="2" fill="url(#busGradient)" stroke="#f59e0b" stroke-width="1"/>
+          <!-- Windows -->
+          <rect x="4" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <rect x="10" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <rect x="16" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <rect x="22" y="10" width="5" height="4" rx="1" fill="#93c5fd" stroke="#1e40af" stroke-width="0.5"/>
+          <!-- Wheels with better styling -->
+          <circle cx="7" cy="22" r="2.5" fill="#374151" stroke="#111827" stroke-width="1"/>
+          <circle cx="7" cy="22" r="1" fill="#6b7280"/>
+          <circle cx="23" cy="22" r="2.5" fill="#374151" stroke="#111827" stroke-width="1"/>
+          <circle cx="23" cy="22" r="1" fill="#6b7280"/>
+          <!-- Door -->
+          <rect x="28" y="12" width="2" height="8" rx="1" fill="#dc2626"/>
+          <!-- School text -->
+          <text x="15" y="18" font-family="Arial" font-size="3.5" fill="#dc2626" text-anchor="middle" font-weight="bold">SCHOOL</text>
+          <!-- Driver indicator -->
+          <circle cx="6" cy="12" r="1.5" fill="#fbbf24"/>
+        </g>
+        <!-- "YOU" indicator -->
+        <circle cx="${size/2}" cy="${size - 10}" r="10" fill="#dc2626" stroke="white" stroke-width="2"/>
+        <text x="${size/2}" y="${size - 6}" font-family="Arial" font-size="6" fill="white" text-anchor="middle" font-weight="bold">YOU</text>
+      </svg>
+    `)}`;
+  };
+
+  // Create custom marker with school building icon
+  const createSchoolMarker = (): string => {
+    const size = 45;
+    const borderWidth = 3;
+    const borderColor = '#10b981'; // Green for school
+    
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+      <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="${size/2}" cy="${size/2}" r="${size/2}" fill="${borderColor}"/>
+        <circle cx="${size/2}" cy="${size/2}" r="${(size-borderWidth*2)/2}" fill="white"/>
+        <g transform="translate(${size/2-12}, ${size/2-12})">
+          <path d="M12 3L2 12h3v8h14v-8h3L12 3zm0 2.69L18 11v7h-3v-6H9v6H6v-7l6-5.31z" 
+                fill="#10b981" stroke="none"/>
+          <rect x="10" y="14" width="4" height="4" fill="#10b981"/>
+          <rect x="7" y="13" width="2" height="2" fill="#10b981"/>
+          <rect x="15" y="13" width="2" height="2" fill="#10b981"/>
+        </g>
+      </svg>
+    `)}`;
+  };
+
+  // Initialize map
+  useEffect(() => {
+    if (ref.current && !map) {
+      // Debug: Log the schoolLocation being used for map center
+      console.log('[GoogleRouteMap] Initializing map with schoolLocation:', schoolLocation);
+      console.log('[GoogleRouteMap] isValidLocation(schoolLocation):', isValidLocation(schoolLocation));
+      
+      const mapCenter = isValidLocation(schoolLocation) ? schoolLocation : { lat: 0, lng: 0 };
+      console.log('[GoogleRouteMap] Map center will be set to:', mapCenter);
+      
+      const newMap = new window.google.maps.Map(ref.current, {
+        center: mapCenter,
+        zoom: 13,
+        mapTypeId: 'roadmap',
+        disableDefaultUI: false,
+        zoomControl: true,
+        streetViewControl: false,
+        fullscreenControl: true,
+        mapTypeControl: false,
+      });
+
+      setMap(newMap);
+      setDirectionsService(new window.google.maps.DirectionsService());
+      setDirectionsRenderer(new window.google.maps.DirectionsRenderer({
+        suppressMarkers: true,
+        polylineOptions: {
+          strokeColor: '#3b82f6',
+          strokeWeight: 4,
+          strokeOpacity: 0.8,
+        },
+      }));
+    }
+  }, [schoolLocation]);
+
+  // [Rest of GoogleRouteMap component implementation truncated for brevity]
+  // The component includes marker creation, route drawing, and map interaction logic
+
+  return <div ref={ref} style={{ width: '100%', height: '100%' }} />;
+}
+
+// Main GoogleRouteMap component with UI
+export default function GoogleRouteMap({
+  students,
+  schoolLocation,
+  optimizedStops,
+  routeStats,
+  driverLocation,
+  passengerStatuses = [],
+  currentStopIndex = 0,
+  onNavigateToStop,
+  onCallParent,
+  onStartTrip,
+  onStopTrip,
+  className = '',
+  tripStarted = false,
+}: GoogleRouteMapProps) {
+  const [currentDriverLocation, setCurrentDriverLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<google.maps.LatLngLiteral[]>([]);
+
+  // Get current and next stops
+  const currentStop = optimizedStops[currentStopIndex];
+  const nextStop = optimizedStops[currentStopIndex + 1];
+
+  // Handle navigation to stop
+  const handleNavigateToStop = (stop: OptimizedStop) => {
+    if (onNavigateToStop) {
+      onNavigateToStop(stop);
+    }
+  };
+
+  // Render loading state if Google Maps API key is missing
+  const render = (status: Status) => {
+    if (status === Status.LOADING) return <div>Loading...</div>;
+    if (status === Status.FAILURE) return <div>Error loading maps</div>;
+    return null;
+  };
+
+  return (
+    <div className={`space-y-4 ${className}`}>
+      {/* Route Statistics */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <RouteIcon className="h-5 w-5" />
+            Route Overview
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-blue-600">{routeStats.studentsCount}</div>
+              <div className="text-sm text-gray-600">Students</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-green-600">{routeStats.completedStops}</div>
+              <div className="text-sm text-gray-600">Completed</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-orange-600">{(routeStats.totalDistance / 1000).toFixed(1)}km</div>
+              <div className="text-sm text-gray-600">Distance</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-purple-600">{Math.round(routeStats.estimatedTime)}min</div>
+              <div className="text-sm text-gray-600">Est. Time</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Map Container */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="h-96 w-full">
+            <Wrapper apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''} render={render}>
+              <GoogleMap
+                students={students}
+                schoolLocation={schoolLocation}
+                optimizedStops={optimizedStops}
+                driverLocation={driverLocation}
+                currentDriverLocation={currentDriverLocation}
+                passengerStatuses={passengerStatuses}
+                currentStopIndex={currentStopIndex}
+                onNavigateToStop={handleNavigateToStop}
+                tripStarted={tripStarted}
+                routeCoordinates={routeCoordinates}
+              />
+            </Wrapper>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Current/Next Stop Information */}
+      {(currentStop || nextStop) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {currentStop && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5 text-orange-600" />
+                  Current Stop
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="font-medium">{currentStop.students[0]?.name}</div>
+                  <div className="text-sm text-gray-600">{currentStop.students[0]?.address}</div>
+                  <Button
+                    onClick={() => handleNavigateToStop(currentStop)}
+                    className="w-full"
+                    size="sm"
+                  >
+                    <Navigation className="h-4 w-4 mr-2" />
+                    Navigate
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {nextStop && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5 text-purple-600" />
+                  Next Stop
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="font-medium">{nextStop.students[0]?.name}</div>
+                  <div className="text-sm text-gray-600">{nextStop.students[0]?.address}</div>
+                  <div className="text-xs text-gray-500">
+                    {nextStop.estimatedArrival && `ETA: ${nextStop.estimatedArrival}`}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+================================================================================
+FILE: src/lib/firebase.ts
+================================================================================
+import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+
+// Initialize Firebase services
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export const storage = getStorage(app);
+
+export default app;
+
+================================================================================
+FILE: src/lib/useProfile.tsx
+================================================================================
+'use client';
+
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { User, onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from './firebase';
+
+interface UserProfile {
+  uid: string;
+  email: string;
+  displayName?: string;
+  photoUrl?: string;
+  role: 'admin' | 'driver' | 'supervisor' | 'parent';
+  schoolId?: string;
+  phone?: string;
+  address?: string;
+  emergencyContact?: string;
+  licenseNumber?: string; // For drivers
+  busId?: string; // For drivers
+  routeIds?: string[]; // For drivers/supervisors
+  studentIds?: string[]; // For parents
+  createdAt?: any;
+  updatedAt?: any;
+  active?: boolean;
+}
+
+interface ProfileContextType {
+  user: User | null;
+  profile: UserProfile | null;
+  loading: boolean;
+  refreshProfile: () => Promise<void>;
+}
+
+const ProfileContext = createContext<ProfileContextType>({
+  user: null,
+  profile: null,
+  loading: true,
+  refreshProfile: async () => {},
+});
+
+export function ProfileProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Function to resolve schoolId from custom claims or user document
+  const resolveSchoolId = async (user: User): Promise<string | undefined> => {
+    try {
+      // First try to get from custom claims
+      const idTokenResult = await user.getIdTokenResult();
+      if (idTokenResult.claims.schoolId) {
+        return idTokenResult.claims.schoolId as string;
+      }
+
+      // Fallback to user document
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      if (userDoc.exists()) {
+        return userDoc.data().schoolId;
+      }
+    } catch (error) {
+      console.error('Error resolving schoolId:', error);
+    }
+    return undefined;
+  };
+
+  // Function to fetch user profile
+  const fetchProfile = async (user: User): Promise<UserProfile | null> => {
+    try {
+      const schoolId = await resolveSchoolId(user);
+      
+      if (!schoolId) {
+        console.warn('No schoolId found for user:', user.uid);
+        return null;
+      }
+
+      // Try to get profile from school-specific collection first
+      const schoolUserDoc = await getDoc(doc(db, 'schools', schoolId, 'users', user.uid));
+      
+      if (schoolUserDoc.exists()) {
+        const data = schoolUserDoc.data();
+        return {
+          uid: user.uid,
+          email: user.email || '',
+          displayName: user.displayName || data.displayName,
+          photoUrl: user.photoURL || data.photoUrl,
+          schoolId,
+          ...data,
+        } as UserProfile;
+      }
+
+      // Fallback to global users collection
+      const globalUserDoc = await getDoc(doc(db, 'users', user.uid));
+      
+      if (globalUserDoc.exists()) {
+        const data = globalUserDoc.data();
+        return {
+          uid: user.uid,
+          email: user.email || '',
+          displayName: user.displayName || data.displayName,
+          photoUrl: user.photoURL || data.photoUrl,
+          schoolId: schoolId || data.schoolId,
+          ...data,
+        } as UserProfile;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+      return null;
+    }
+  };
+
+  // Function to refresh profile
+  const refreshProfile = async () => {
+    if (user) {
+      setLoading(true);
+      const newProfile = await fetchProfile(user);
+      setProfile(newProfile);
+      setLoading(false);
+    }
+  };
+
+  // Listen to auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setUser(user);
+      
+      if (user) {
+        const userProfile = await fetchProfile(user);
+        setProfile(userProfile);
+        
+        // Set up real-time listener for profile updates if we have a schoolId
+        if (userProfile?.schoolId) {
+          const profileRef = doc(db, 'schools', userProfile.schoolId, 'users', user.uid);
+          const unsubscribeProfile = onSnapshot(profileRef, (doc) => {
+            if (doc.exists()) {
+              const data = doc.data();
+              setProfile(prev => prev ? {
+                ...prev,
+                ...data,
+              } as UserProfile : null);
+            }
+          });
+
+          // Return cleanup function
+          return () => unsubscribeProfile();
+        }
+      } else {
+        setProfile(null);
+      }
+      
+      setLoading(false);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  return (
+    <ProfileContext.Provider value={{ user, profile, loading, refreshProfile }}>
+      {children}
+    </ProfileContext.Provider>
+  );
+}
+
+export function useProfile() {
+  const context = useContext(ProfileContext);
+  if (!context) {
+    throw new Error('useProfile must be used within a ProfileProvider');
+  }
+  return context;
+}
+
+================================================================================
+FILE: src/app/supervisor/trips/[id]/TripRoster.tsx
+================================================================================
+"use client";
+
+import { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  collection,
+  query,
+  orderBy,
+  onSnapshot,
+  type DocumentData,
+  getDocs,
+  updateDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { scol, sdoc } from "@/lib/schoolPath";
+import { boardStudent, dropStudent, markAbsent } from "@/lib/roster";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { Bus, UserX, ArrowDownCircle, Clock } from "lucide-react";
+
+type PassengerRow = {
+  id: string;
+  studentName?: string;
+  status: "pending" | "boarded" | "dropped" | "absent";
+  boardedAt?: any | null;
+  droppedAt?: any | null;
+};
+
+type Props = {
+  tripId: string;
+  schoolId: string;
+  canEdit?: boolean; // for driver: true only when allowDriverAsSupervisor === true
+};
+
+/**
+ * Helper to recalculate trip counts and update the parent document.
+ * This should be called after any passenger status change.
+ */
+async function recalcTripCounts(schoolId: string, tripId: string) {
+    const passengersRef = collection(db, `schools/${schoolId}/trips/${tripId}/passengers`);
+    const passengersSnap = await getDocs(passengersRef);
+
+    const counts: Record<PassengerRow["status"], number> = {
+        pending: 0,
+        boarded: 0,
+        dropped: 0,
+        absent: 0,
+    };
+
+    passengersSnap.forEach(doc => {
+        const status = (doc.data()?.status || 'pending') as PassengerRow["status"];
+        if (counts.hasOwnProperty(status)) {
+            counts[status]++;
+        } else {
+            counts.pending++; // Fallback for any invalid status
+        }
+    });
+
+    const tripRef = sdoc(schoolId, "trips", tripId);
+    await updateDoc(tripRef, { counts: counts, updatedAt: serverTimestamp() });
+}
+
+export function Roster({ tripId, schoolId, canEdit = false }: Props) {
+  const { toast } = useToast();
+
+  const [rows, setRows] = useState<PassengerRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null); // studentId that is saving
+
+  // live subscription to passengers under the school-scoped path
+  useEffect(() => {
+    setLoading(true);
+    const q = query(
+      collection(db, `schools/${schoolId}/trips/${tripId}/passengers`),
+      orderBy("studentName") // stable order by student name
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => {
+          const data = d.data() as DocumentData;
+          return {
+            id: d.id,
+            studentName: data.studentName ?? d.id,
+            status: (data.status ?? "pending") as PassengerRow["status"],
+            boardedAt: data.boardedAt ?? null,
+            droppedAt: data.droppedAt ?? null,
+          } as PassengerRow;
+        });
+        setRows(list);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("[Roster] subscribe error", err);
+        toast({
+          variant: "destructive",
+          title: "Update Failed",
+          description: "Missing or insufficient permissions.",
+        });
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [schoolId, tripId, toast]);
+
+  const counts = useMemo(() => {
+    const c = { pending: 0, boarded: 0, absent: 0, dropped: 0 };
+    for (const r of rows) c[r.status] += 1;
+    return c;
+  }, [rows]);
+
+  const doBoard = useCallback(
+    async (studentId: string) => {
+      try {
+        setBusy(studentId);
+        await boardStudent(schoolId, tripId, studentId);
+        await recalcTripCounts(schoolId, tripId);
+        toast({
+          title: "Boarded",
+          description: "Student marked as boarded.",
+          className: "bg-green-600 text-white border-0",
+        });
+      } catch (e: any) {
+        console.error(e);
+        toast({
+          variant: "destructive",
+          title: "Update Failed",
+          description: "Missing or insufficient permissions.",
+        });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [schoolId, tripId, toast]
+  );
+
+  const doDrop = useCallback(
+    async (studentId: string) => {
+      try {
+        setBusy(studentId);
+        await dropStudent(schoolId, tripId, studentId);
+        await recalcTripCounts(schoolId, tripId);
+        toast({
+          title: "Dropped",
+          description: "Student marked as dropped.",
+          className: "bg-blue-600 text-white border-0",
+        });
+      } catch (e: any) {
+        console.error(e);
+        toast({
+          variant: "destructive",
+          title: "Update Failed",
+          description: "Missing or insufficient permissions.",
+        });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [schoolId, tripId, toast]
+  );
+
+  const doAbsent = useCallback(
+    async (studentId: string) => {
+      try {
+        setBusy(studentId);
+        await markAbsent(schoolId, tripId, studentId);
+        await recalcTripCounts(schoolId, tripId);
+        toast({ title: "Absent", description: "Student marked as absent." });
+      } catch (e: any) {
+        console.error(e);
+        toast({
+          variant: "destructive",
+          title: "Update Failed",
+          description: "Missing or insufficient permissions.",
+        });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [schoolId, tripId, toast]
+  );
+
+  if (loading) {
+    return (
+      <div className="text-sm text-muted-foreground">Loading roster…</div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        No students found for this trip.
+      </div>
+    );
+  }
+
+  const statusContent: Record<PassengerRow["status"], React.ReactNode> = {
+    pending: <><Clock className="h-3 w-3 mr-1 inline" />Pending</>,
+    boarded: <><Bus className="h-3 w-3 mr-1 inline" />Boarded</>,
+    dropped: <><ArrowDownCircle className="h-3 w-3 mr-1 inline" />Dropped</>,
+    absent: <><UserX className="h-3 w-3 mr-1 inline" />Absent</>,
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-sm">
+        <span className="mr-3">Total: {rows.length}</span>
+        <span className="mr-3">Pending: {counts.pending}</span>
+        <span className="mr-3">Boarded: {counts.boarded}</span>
+        <span className="mr-3">Absent: {counts.absent}</span>
+        <span>Dropped: {counts.dropped}</span>
+      </div>
+
+      <div className="divide-y rounded-md border">
+        {rows.map((r) => (
+          <div
+            key={r.id}
+            className="flex items-center justify-between px-3 py-2 text-sm"
+          >
+            <div className="flex items-center gap-3">
+              <span className="font-medium">{r.studentName}</span>
+              <Badge
+                variant={
+                  r.status === "boarded"
+                    ? "default"
+                    : r.status === "dropped"
+                    ? "secondary"
+                    : r.status === "absent"
+                    ? "destructive"
+                    : "outline"
+                }
+              >
+                {statusContent[r.status] || r.status}
+              </Badge>
+            </div>
+
+            {canEdit ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy === r.id}
+                  onClick={() => doBoard(r.id)}
+                >
+                  <Bus className="h-4 w-4 mr-1" />
+                  Board
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={busy === r.id}
+                  onClick={() => doAbsent(r.id)}
+                >
+                  <UserX className="h-4 w-4 mr-1" />
+                  Absent
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy === r.id}
+                  onClick={() => doDrop(r.id)}
+                >
+                  <ArrowDownCircle className="h-4 w-4 mr-1" />
+                  Drop
+                </Button>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                Read-only (enable "Supervise" to edit)
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+END OF KEY FILES BUNDLE
+================================================================================
+          requestAnimationFrame(detectQR);
+        }
+      };
+
+      detectQR();
+    } catch (err) {
+      throw new Error('Camera access denied or not available');
+    }
+  };
+
+  const startQRScannerLibrary = async () => {
+    if (!videoRef.current) return;
+
+    try {
+      // Dynamically import qr-scanner
+      const QrScanner = (await import('qr-scanner')).default;
+      
+      scannerRef.current = new QrScanner(
+        videoRef.current,
+        (result: any) => handleQRScan(result.data),
+        {
+          highlightScanRegion: true,
+          highlightCodeOutline: true,
+        }
+      );
+
+      await scannerRef.current.start();
+    } catch (err) {
+      throw new Error('QR Scanner library failed to initialize');
+    }
+  };
+
+  const handleQRScan = async (qrData: string) => {
+    try {
+      // Parse QR code data (assuming it contains passenger ID)
+      const passengerId = qrData.trim();
+      
+      // Find passenger in current trip
+      const passenger = passengers.find(p => p.id === passengerId);
+      if (!passenger) {
+        setQrScannerError('Passenger not found in current trip');
+        return;
+      }
+
+      // Update passenger status based on current status
+      let newStatus: 'boarded' | 'dropped' | 'absent';
+      if (passenger.status === 'pending') {
+        newStatus = 'boarded';
+      } else if (passenger.status === 'boarded') {
+        newStatus = 'dropped';
+      } else {
+        setQrScannerError('Passenger already processed');
+        return;
+      }
+
+      await updatePassengerStatus(passengerId, newStatus);
+      stopQRScanner();
+      
+    } catch (err) {
+      console.error('QR scan handling error:', err);
+      setQrScannerError('Failed to process QR code');
+    }
+  };
+
+  const stopQRScanner = () => {
+    setIsScanning(false);
+    setShowQRScanner(false);
+    setQrScannerError(null);
+
+    // Stop camera stream
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+
+    // Stop QR scanner library
+    if (scannerRef.current) {
+      scannerRef.current.stop();
+      scannerRef.current = null;
+    }
+  };
+
+  // Generate QR code for passenger
+  const generatePassengerQR = async (passengerId: string) => {
+    try {
+      const qrCodeDataUrl = await generateQRCode(passengerId);
+      
+      // Create a new window to display the QR code
+      const qrWindow = window.open('', '_blank', 'width=400,height=400');
+      if (qrWindow) {
+        qrWindow.document.write(`
+          <html>
+            <head><title>Passenger QR Code</title></head>
+            <body style="display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
+              <div style="text-align: center;">
+                <h3>Passenger QR Code</h3>
+                <img src="${qrCodeDataUrl}" alt="QR Code" style="max-width: 300px; max-height: 300px;" />
+                <p>Passenger ID: ${passengerId}</p>
+              </div>
+            </body>
+          </html>
+        `);
+      }
+    } catch (err) {
+      console.error('Error generating QR code:', err);
+      setError('Failed to generate QR code');
+    }
+  };
+
+  // Loading states
+  if (profileLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading trip information...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-600">
+              <AlertCircle className="h-5 w-5" />
+              Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-4">{error}</p>
+            <div className="flex gap-2">
+              <Button onClick={fetchTripData} className="flex-1">
+                Retry
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/driver')} className="flex-1">
+                Back to Dashboard
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // No trip state
+  if (!trip) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Route className="h-5 w-5" />
+              No Active Trip
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-4">
+              You don't have any active trips scheduled for today.
+            </p>
+            <Button onClick={() => router.push('/driver')} className="w-full">
+              Back to Dashboard
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const stats = {
+    total: passengers.length,
+    boarded: passengers.filter(p => p.status === 'boarded').length,
+    dropped: passengers.filter(p => p.status === 'dropped').length,
+    absent: passengers.filter(p => p.status === 'absent').length,
+    pending: passengers.filter(p => p.status === 'pending').length
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => router.push('/driver')}
+                className="flex items-center gap-2"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+              <div>
+                <h1 className="text-xl font-semibold text-gray-900">
+                  {route?.name || 'Route'}
+                </h1>
+                <p className="text-sm text-gray-500">
+                  {trip.type === 'pickup' ? 'Pickup Route' : 'Drop-off Route'} • {bus?.plateNumber}
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <Badge variant={trip.status === 'active' ? 'default' : 'secondary'}>
+                {trip.status}
+              </Badge>
+              {trip.status === 'pending' && (
+                <Button onClick={handleStartTrip} size="sm">
+                  <Zap className="h-4 w-4 mr-2" />
+                  Start Trip
+                </Button>
+              )}
+              {trip.status === 'active' && (
+                <Button onClick={handleEndTrip} variant="destructive" size="sm">
+                  End Trip
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left Column - Trip Stats & Controls */}
+          <div className="space-y-6">
+            {/* Trip Statistics */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5" />
+                  Trip Statistics
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-blue-600">{stats.total}</div>
+                    <div className="text-sm text-gray-500">Total</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-green-600">{stats.boarded}</div>
+                    <div className="text-sm text-gray-500">Boarded</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-purple-600">{stats.dropped}</div>
+                    <div className="text-sm text-gray-500">Dropped</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-orange-600">{stats.pending}</div>
+                    <div className="text-sm text-gray-500">Pending</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* QR Scanner Controls */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <QrCode className="h-5 w-5" />
+                  QR Scanner
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <Button 
+                    onClick={startQRScanner} 
+                    className="w-full"
+                    disabled={isScanning}
+                  >
+                    <Camera className="h-4 w-4 mr-2" />
+                    {isScanning ? 'Scanning...' : 'Scan QR Code'}
+                  </Button>
+                  
+                  {qrScannerError && (
+                    <div className="text-sm text-red-600 bg-red-50 p-2 rounded">
+                      {qrScannerError}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Current/Next Stop */}
+            {nextStop && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <MapPin className="h-5 w-5" />
+                    Next Stop
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      {nextStop.photoUrl && (
+                        <img 
+                          src={nextStop.photoUrl} 
+                          alt={nextStop.name}
+                          className="w-10 h-10 rounded-full object-cover"
+                        />
+                      )}
+                      <div>
+                        <div className="font-medium">{nextStop.name}</div>
+                        <div className="text-sm text-gray-500">
+                          Stop #{nextStop.stopNumber} • Grade {nextStop.grade}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <Button 
+                        size="sm" 
+                        onClick={() => updatePassengerStatus(nextStop.id, 'boarded')}
+                        className="flex-1"
+                      >
+                        <UserCheck className="h-4 w-4 mr-1" />
+                        Board
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant="outline"
+                        onClick={() => updatePassengerStatus(nextStop.id, 'absent')}
+                        className="flex-1"
+                      >
+                        <UserMinus className="h-4 w-4 mr-1" />
+                        Absent
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* Center Column - Map */}
+          <div className="lg:col-span-2">
+            <Card className="h-[600px]">
+              <CardContent className="p-0 h-full">
+                <GoogleRouteMap
+                  trip={trip}
+                  passengers={passengers}
+                  driverLocation={driverLocation}
+                  school={school}
+                  onPassengerUpdate={updatePassengerStatus}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Passenger List */}
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Passengers ({passengers.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {passengers.map((passenger, index) => (
+                <div key={passenger.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm font-medium">
+                      {passenger.stopNumber || index + 1}
+                    </div>
+                    {passenger.photoUrl && (
+                      <img 
+                        src={passenger.photoUrl} 
+                        alt={passenger.name}
+                        className="w-10 h-10 rounded-full object-cover"
+                      />
+                    )}
+                    <div>
+                      <div className="font-medium">{passenger.name}</div>
+                      <div className="text-sm text-gray-500">
+                        Grade {passenger.grade} • {passenger.parentName}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <Badge 
+                      variant={
+                        passenger.status === 'boarded' ? 'default' :
+                        passenger.status === 'dropped' ? 'secondary' :
+                        passenger.status === 'absent' ? 'destructive' :
+                        'outline'
+                      }
+                    >
+                      {passenger.status}
+                    </Badge>
+                    
+                    {passenger.status === 'pending' && (
+                      <div className="flex gap-1">
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => updatePassengerStatus(passenger.id, 'boarded')}
+                        >
+                          <UserCheck className="h-4 w-4" />
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => updatePassengerStatus(passenger.id, 'absent')}
+                        >
+                          <UserMinus className="h-4 w-4" />
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => generatePassengerQR(passenger.id)}
+                        >
+                          <QrCode className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
+                    
+                    {passenger.status === 'boarded' && (
+                      <Button 
+                        size="sm" 
+                        variant="outline"
+                        onClick={() => updatePassengerStatus(passenger.id, 'dropped')}
+                      >
+                        <UserX className="h-4 w-4" />
+                        Drop
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              
+              {passengers.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  No passengers assigned to this trip
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* QR Scanner Modal */}
+      {showQRScanner && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Scan QR Code</h3>
+              <Button variant="ghost" size="sm" onClick={stopQRScanner}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            
+            <div className="relative">
+              <video 
+                ref={videoRef}
+                className="w-full h-64 bg-black rounded-lg object-cover"
+                playsInline
+                muted
+              />
+              <canvas 
+                ref={canvasRef}
+                className="hidden"
+              />
+            </div>
+            
+            {qrScannerError && (
+              <div className="mt-3 text-sm text-red-600 bg-red-50 p-2 rounded">
+                {qrScannerError}
+              </div>
+            )}
+            
+            <div className="mt-4 text-sm text-gray-500 text-center">
+              Point your camera at a passenger's QR code
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+================================================================================
+FILE: src/app/driver/page.tsx
+================================================================================
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, onSnapshot, addDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { useProfile } from '@/lib/useProfile';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { MapPin, Users, Clock, Navigation, Route, Bus, AlertCircle, CheckCircle, Calendar, Phone, User, Zap, RefreshCw } from 'lucide-react';
+import { scol, sdoc } from '@/lib/schoolPath';
+import { registerFCMToken } from '@/lib/notifications';
+
+interface Trip {
+  id: string;
+  routeId: string;
+  driverId: string;
+  busId: string;
+  status: 'pending' | 'active' | 'completed';
+  startTime?: any;
+  endTime?: any;
+  type: 'pickup' | 'dropoff';
+  date: string;
+  totalPassengers?: number;
+  boardedCount?: number;
+  droppedCount?: number;
+  absentCount?: number;
+}
+
+interface RouteInfo {
+  id: string;
+  name: string;
+  description?: string;
+  schoolId: string;
+  estimatedDuration?: number;
+  totalStops?: number;
+}
+
+interface BusDoc {
+  id: string;
+  plateNumber: string;
+  capacity: number;
+  model?: string;
+  year?: number;
+  status: 'active' | 'maintenance' | 'inactive';
+}
+
+interface Supervisor {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  active: boolean;
+}
+
+// Loading component
+const LoadingState = () => (
+  <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="text-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+      <p className="text-gray-600">Loading dashboard...</p>
+    </div>
+  </div>
+);
+
+export default function DriverPage() {
+  const router = useRouter();
+  const { user, profile, loading: profileLoading } = useProfile();
+  
+  // State management
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [routes, setRoutes] = useState<Record<string, RouteInfo>>({});
+  const [buses, setBuses] = useState<Record<string, BusDoc>>({});
+  const [supervisors, setSupervisors] = useState<Supervisor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+
+  // Get today's date in YYYY-MM-DD format
+  const today = new Date().toISOString().split('T')[0];
+
+  // Fetch all data
+  const fetchData = useCallback(async () => {
+    if (!profile?.schoolId || !user?.uid) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch trips for this driver
+      const tripsRef = scol(profile.schoolId, 'trips');
+      const tripsQuery = query(
+        tripsRef,
+        where('driverId', '==', user.uid),
+        where('date', '==', today),
+        orderBy('startTime', 'asc')
+      );
+
+      const tripsSnapshot = await getDocs(tripsQuery);
+      const tripsData: Trip[] = [];
+      const routeIds = new Set<string>();
+      const busIds = new Set<string>();
+
+      tripsSnapshot.forEach((doc) => {
+        const tripData = { id: doc.id, ...doc.data() } as Trip;
+        tripsData.push(tripData);
+        if (tripData.routeId) routeIds.add(tripData.routeId);
+        if (tripData.busId) busIds.add(tripData.busId);
+      });
+
+      setTrips(tripsData);
+
+      // Fetch route information
+      const routesData: Record<string, RouteInfo> = {};
+      for (const routeId of routeIds) {
+        try {
+          const routeDoc = await getDoc(sdoc(profile.schoolId, `routes/${routeId}`));
+          if (routeDoc.exists()) {
+            routesData[routeId] = { id: routeDoc.id, ...routeDoc.data() } as RouteInfo;
+          }
+        } catch (err) {
+          console.error(`Error fetching route ${routeId}:`, err);
+        }
+      }
+      setRoutes(routesData);
+
+      // Fetch bus information
+      const busesData: Record<string, BusDoc> = {};
+      for (const busId of busIds) {
+        try {
+          const busDoc = await getDoc(sdoc(profile.schoolId, `buses/${busId}`));
+          if (busDoc.exists()) {
+            busesData[busId] = { id: busDoc.id, ...busDoc.data() } as BusDoc;
+          }
+        } catch (err) {
+          console.error(`Error fetching bus ${busId}:`, err);
+        }
+      }
+      setBuses(busesData);
+
+      // Fetch supervisors
+      const supervisorsRef = scol(profile.schoolId, 'users');
+      const supervisorsQuery = query(
+        supervisorsRef,
+        where('role', '==', 'supervisor'),
+        where('active', '==', true)
+      );
+
+      const supervisorsSnapshot = await getDocs(supervisorsQuery);
+      const supervisorsData: Supervisor[] = [];
+      supervisorsSnapshot.forEach((doc) => {
+        supervisorsData.push({ id: doc.id, ...doc.data() } as Supervisor);
+      });
+      setSupervisors(supervisorsData);
+
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError('Failed to load dashboard data');
+    } finally {
+      setLoading(false);
+    }
+  }, [profile?.schoolId, user?.uid, today]);
+
+  // Register FCM token for notifications
+  useEffect(() => {
+    if (user?.uid && profile?.schoolId) {
+      registerFCMToken(user.uid, profile.schoolId).catch(console.error);
+    }
+  }, [user?.uid, profile?.schoolId]);
+
+  // Get driver location
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationError('Geolocation is not supported by this browser');
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        setDriverLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        });
+        setLocationError(null);
+      },
+      (error) => {
+        console.error('Geolocation error:', error);
+        setLocationError('Unable to get your location');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 60000
+      }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
+
+  // Send location to server periodically
+  const handleSendLocation = useCallback(async () => {
+    if (!driverLocation || !profile?.schoolId || !user?.uid) return;
+
+    try {
+      const locationRef = scol(profile.schoolId, 'driverLocations');
+      await addDoc(locationRef, {
+        driverId: user.uid,
+        location: driverLocation,
+        timestamp: serverTimestamp(),
+        accuracy: 10 // meters
+      });
+    } catch (err) {
+      console.error('Error sending location:', err);
+    }
+  }, [driverLocation, profile?.schoolId, user?.uid]);
+
+  // Send location every 30 seconds when active trip exists
+  useEffect(() => {
+    const activeTrip = trips.find(trip => trip.status === 'active');
+    if (!activeTrip || !driverLocation) return;
+
+    const interval = setInterval(handleSendLocation, 30000);
+    return () => clearInterval(interval);
+  }, [trips, driverLocation, handleSendLocation]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Trip action handlers
+  const handleStartTrip = async (tripId: string) => {
+    if (!profile?.schoolId) return;
+
+    try {
+      const tripRef = sdoc(profile.schoolId, `trips/${tripId}`);
+      await updateDoc(tripRef, {
+        status: 'active',
+        startTime: serverTimestamp()
+      });
+      
+      // Refresh data
+      await fetchData();
+      
+      // Navigate to route page
+      router.push('/driver/route');
+    } catch (err) {
+      console.error('Error starting trip:', err);
+      setError('Failed to start trip');
+    }
+  };
+
+  const handleEndTrip = async (tripId: string) => {
+    if (!profile?.schoolId) return;
+
+    try {
+      const tripRef = sdoc(profile.schoolId, `trips/${tripId}`);
+      await updateDoc(tripRef, {
+        status: 'completed',
+        endTime: serverTimestamp()
+      });
+      
+      // Refresh data
+      await fetchData();
+    } catch (err) {
+      console.error('Error ending trip:', err);
+      setError('Failed to end trip');
+    }
+  };
+
+  // Loading state
+  if (profileLoading || loading) {
+    return <LoadingState />;
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-600">
+              <AlertCircle className="h-5 w-5" />
+              Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-4">{error}</p>
+            <Button onClick={fetchData} className="w-full">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const activeTrip = trips.find(trip => trip.status === 'active');
+  const pendingTrips = trips.filter(trip => trip.status === 'pending');
+  const completedTrips = trips.filter(trip => trip.status === 'completed');
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-4">
+              <Bus className="h-8 w-8 text-blue-600" />
+              <div>
+                <h1 className="text-xl font-semibold text-gray-900">Driver Dashboard</h1>
+                <p className="text-sm text-gray-500">
+                  Welcome back, {profile?.displayName || user?.email}
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              {driverLocation && (
+                <div className="flex items-center gap-2 text-sm text-green-600">
+                  <MapPin className="h-4 w-4" />
+                  Location Active
+                </div>
+              )}
+              {locationError && (
+                <div className="flex items-center gap-2 text-sm text-red-600">
+                  <AlertCircle className="h-4 w-4" />
+                  Location Error
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Quick Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Today's Trips</p>
+                  <p className="text-2xl font-bold text-gray-900">{trips.length}</p>
+                </div>
+                <Calendar className="h-8 w-8 text-blue-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Active Trip</p>
+                  <p className="text-2xl font-bold text-gray-900">{activeTrip ? '1' : '0'}</p>
+                </div>
+                <Route className="h-8 w-8 text-green-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Completed</p>
+                  <p className="text-2xl font-bold text-gray-900">{completedTrips.length}</p>
+                </div>
+                <CheckCircle className="h-8 w-8 text-purple-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Total Passengers</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {trips.reduce((sum, trip) => sum + (trip.totalPassengers || 0), 0)}
+                  </p>
+                </div>
+                <Users className="h-8 w-8 text-orange-600" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Active Trip */}
+        {activeTrip && (
+          <Card className="mb-6 border-green-200 bg-green-50">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-green-800">
+                <Zap className="h-5 w-5" />
+                Active Trip
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div>
+                    <h3 className="font-semibold text-lg">
+                      {routes[activeTrip.routeId]?.name || 'Unknown Route'}
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      {activeTrip.type === 'pickup' ? 'Pickup Route' : 'Drop-off Route'} • 
+                      {buses[activeTrip.busId]?.plateNumber || 'Unknown Bus'}
+                    </p>
+                    <div className="flex items-center gap-4 mt-2">
+                      <div className="flex items-center gap-1 text-sm">
+                        <Users className="h-4 w-4" />
+                        {activeTrip.totalPassengers || 0} passengers
+                      </div>
+                      <div className="flex items-center gap-1 text-sm">
+                        <CheckCircle className="h-4 w-4" />
+                        {activeTrip.boardedCount || 0} boarded
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={() => router.push('/driver/route')}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    <Navigation className="h-4 w-4 mr-2" />
+                    Continue Route
+                  </Button>
+                  <Button 
+                    variant="outline"
+                    onClick={() => handleEndTrip(activeTrip.id)}
+                  >
+                    End Trip
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Pending Trips */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Clock className="h-5 w-5" />
+                Pending Trips ({pendingTrips.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {pendingTrips.map((trip) => (
+                  <div key={trip.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div>
+                      <h4 className="font-medium">
+                        {routes[trip.routeId]?.name || 'Unknown Route'}
+                      </h4>
+                      <p className="text-sm text-gray-600">
+                        {trip.type === 'pickup' ? 'Pickup' : 'Drop-off'} • 
+                        {buses[trip.busId]?.plateNumber || 'Unknown Bus'}
+                      </p>
+                      <div className="flex items-center gap-4 mt-1">
+                        <span className="text-sm text-gray-500">
+                          {trip.totalPassengers || 0} passengers
+                        </span>
+                        {trip.startTime && (
+                          <span className="text-sm text-gray-500">
+                            {new Date(trip.startTime.toDate()).toLocaleTimeString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <Button 
+                      size="sm"
+                      onClick={() => handleStartTrip(trip.id)}
+                      disabled={!!activeTrip}
+                    >
+                      <Zap className="h-4 w-4 mr-2" />
+                      Start
+                    </Button>
+                  </div>
+                ))}
+                
+                {pendingTrips.length === 0 && (
+                  <div className="text-center py-8 text-gray-500">
+                    No pending trips for today
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Completed Trips */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5" />
+                Completed Trips ({completedTrips.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {completedTrips.map((trip) => (
+                  <div key={trip.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div>
+                      <h4 className="font-medium">
+                        {routes[trip.routeId]?.name || 'Unknown Route'}
+                      </h4>
+                      <p className="text-sm text-gray-600">
+                        {trip.type === 'pickup' ? 'Pickup' : 'Drop-off'} • 
+                        {buses[trip.busId]?.plateNumber || 'Unknown Bus'}
+                      </p>
+                      <div className="flex items-center gap-4 mt-1">
+                        <span className="text-sm text-gray-500">
+                          {trip.boardedCount || 0}/{trip.totalPassengers || 0} completed
+                        </span>
+                        {trip.endTime && (
+                          <span className="text-sm text-gray-500">
+                            Ended: {new Date(trip.endTime.toDate()).toLocaleTimeString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <Badge variant="secondary">
+                      Completed
+                    </Badge>
+                  </div>
+                ))}
+                
+                {completedTrips.length === 0 && (
+                  <div className="text-center py-8 text-gray-500">
+                    No completed trips yet
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Supervisors Contact */}
+        {supervisors.length > 0 && (
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <User className="h-5 w-5" />
+                Supervisor Contacts
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {supervisors.map((supervisor) => (
+                  <div key={supervisor.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                    <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                      <User className="h-5 w-5 text-blue-600" />
+                    </div>
+                    <div>
+                      <div className="font-medium">{supervisor.name}</div>
+                      <div className="text-sm text-gray-600">{supervisor.email}</div>
+                      {supervisor.phone && (
+                        <div className="text-sm text-gray-600 flex items-center gap-1">
+                          <Phone className="h-3 w-3" />
+                          {supervisor.phone}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Location Status */}
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MapPin className="h-5 w-5" />
+              Location Status
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {driverLocation ? (
+              <div className="flex items-center gap-2 text-green-600">
+                <CheckCircle className="h-5 w-5" />
+                <span>Location tracking active</span>
+                <span className="text-sm text-gray-500">
+                  ({driverLocation.lat.toFixed(6)}, {driverLocation.lng.toFixed(6)})
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-red-600">
+                <AlertCircle className="h-5 w-5" />
+                <span>{locationError || 'Location not available'}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+FILE: src/app/supervisor/page.tsx
+================================================================================
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { useProfile } from '@/lib/useProfile';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { MapPin, Users, Clock, Navigation, Route, Bus, AlertCircle, CheckCircle, Calendar, Eye, UserCheck, Settings } from 'lucide-react';
+import { scol, sdoc } from '@/lib/schoolPath';
+import { registerFCMToken } from '@/lib/notifications';
+
+interface Trip {
+  id: string;
+  routeId: string;
+  driverId: string;
+  busId: string;
+  status: 'pending' | 'active' | 'completed';
+  startTime?: any;
+  endTime?: any;
+  type: 'pickup' | 'dropoff';
+  date: string;
+  totalPassengers?: number;
+  boardedCount?: number;
+  droppedCount?: number;
+  absentCount?: number;
+}
+
+interface RouteInfo {
+  id: string;
+  name: string;
+  description?: string;
+  schoolId: string;
+  estimatedDuration?: number;
+  totalStops?: number;
+}
+
+interface BusDoc {
+  id: string;
+  plateNumber: string;
+  capacity: number;
+  model?: string;
+  year?: number;
+  status: 'active' | 'maintenance' | 'inactive';
+}
+
+interface UserProfile {
+  id: string;
+  displayName: string;
+  email: string;
+  role: string;
+  active: boolean;
+  photoUrl?: string;
+}
+
+export default function SupervisorPage() {
+  const router = useRouter();
+  const { user, profile, loading: profileLoading } = useProfile();
+  
+  // State management
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [routes, setRoutes] = useState<Record<string, RouteInfo>>({});
+  const [buses, setBuses] = useState<Record<string, BusDoc>>({});
+  const [drivers, setDrivers] = useState<Record<string, UserProfile>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Get today's date in YYYY-MM-DD format
+  const today = new Date().toISOString().split('T')[0];
+
+  // Fetch all data
+  const fetchData = useCallback(async () => {
+    if (!profile?.schoolId) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch today's trips
+      const tripsRef = scol(profile.schoolId, 'trips');
+      const tripsQuery = query(
+        tripsRef,
+        where('date', '==', today),
+        orderBy('startTime', 'asc')
+      );
+
+      const tripsSnapshot = await getDocs(tripsQuery);
+      const tripsData: Trip[] = [];
+      const routeIds = new Set<string>();
+      const busIds = new Set<string>();
+      const driverIds = new Set<string>();
+
+      tripsSnapshot.forEach((doc) => {
+        const tripData = { id: doc.id, ...doc.data() } as Trip;
+        tripsData.push(tripData);
+        if (tripData.routeId) routeIds.add(tripData.routeId);
+        if (tripData.busId) busIds.add(tripData.busId);
+        if (tripData.driverId) driverIds.add(tripData.driverId);
+      });
+
+      setTrips(tripsData);
+
+      // Fetch route information
+      const routesData: Record<string, RouteInfo> = {};
+      for (const routeId of routeIds) {
+        try {
+          const routeDoc = await getDoc(sdoc(profile.schoolId, `routes/${routeId}`));
+          if (routeDoc.exists()) {
+            routesData[routeId] = { id: routeDoc.id, ...routeDoc.data() } as RouteInfo;
+          }
+        } catch (err) {
+          console.error(`Error fetching route ${routeId}:`, err);
+        }
+      }
+      setRoutes(routesData);
+
+      // Fetch bus information
+      const busesData: Record<string, BusDoc> = {};
+      for (const busId of busIds) {
+        try {
+          const busDoc = await getDoc(sdoc(profile.schoolId, `buses/${busId}`));
+          if (busDoc.exists()) {
+            busesData[busId] = { id: busDoc.id, ...busDoc.data() } as BusDoc;
+          }
+        } catch (err) {
+          console.error(`Error fetching bus ${busId}:`, err);
+        }
+      }
+      setBuses(busesData);
+
+      // Fetch driver information
+      const driversData: Record<string, UserProfile> = {};
+      for (const driverId of driverIds) {
+        try {
+          const driverDoc = await getDoc(sdoc(profile.schoolId, `users/${driverId}`));
+          if (driverDoc.exists()) {
+            driversData[driverId] = { id: driverDoc.id, ...driverDoc.data() } as UserProfile;
+          }
+        } catch (err)

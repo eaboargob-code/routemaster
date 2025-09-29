@@ -1,0 +1,488 @@
+SECURITY, AUTHENTICATION, AND AUTHORIZATION ANALYSIS
+===================================================
+
+This document analyzes the security architecture, authentication systems, authorization patterns, and access control mechanisms in the RouteMASTER application.
+
+## AUTHENTICATION SYSTEM
+=======================
+
+### Firebase Authentication Integration
+The application uses Firebase Authentication as the primary authentication provider.
+
+#### Core Authentication Setup
+**File**: `src/lib/firebase.ts`
+```typescript
+import { getAuth } from "firebase/auth";
+const auth = getAuth(app);
+```
+
+#### Authentication Methods
+1. **Email/Password Authentication**: Primary method across all user types
+2. **No Social Login**: Only email/password authentication implemented
+3. **No Multi-Factor Authentication**: Single-factor authentication only
+
+#### Login Pages by User Type
+- **Admin Login**: `/login` - `src/app/login/page.tsx`
+- **Driver Login**: `/driver/login` - `src/app/driver/login/page.tsx`
+- **Supervisor Login**: `/supervisor/login` - `src/app/supervisor/login/page.tsx`
+- **Parent Login**: `/parent/login` - `src/app/parent/login/page.tsx`
+
+#### Authentication Flow Pattern
+```typescript
+// Standard login pattern across all user types
+const handleLogin = async (data: { email: string; password: string }) => {
+  try {
+    await signInWithEmailAndPassword(auth, data.email, data.password);
+    // Redirect handled by guards after profile resolution
+  } catch (error) {
+    // Error handling with toast notifications
+  }
+};
+```
+
+### User Profile Resolution System
+**File**: `src/lib/useProfile.tsx`
+
+#### Profile Resolution Strategy
+1. **Custom Claims**: First attempts to resolve schoolId from Firebase custom claims
+2. **UsersIndex Lookup**: Fallback to `usersIndex/{uid}` document
+3. **Legacy User Document**: Final fallback to root `users/{uid}` collection
+
+#### School Context Resolution
+```typescript
+async function resolveSchoolId(u: FirebaseUser): Promise<string | null> {
+  // 1. Try custom claims
+  const token = await getIdTokenResult(u, true);
+  const schoolIdFromClaims = token.claims?.schoolId;
+  
+  // 2. Fallback to usersIndex/{uid}
+  const idxSnap = await getDoc(doc(db, "usersIndex", u.uid));
+  
+  // 3. Legacy fallback to /users/{uid}
+  const userSnap = await getDoc(doc(db, "users", u.uid));
+}
+```
+
+#### Profile Caching
+- **In-Memory Cache**: `Map<string, UserProfile>` for performance
+- **Cache Invalidation**: Manual refresh capability
+- **HMR Compatibility**: Prevents re-fetching during development
+
+## AUTHORIZATION SYSTEM
+======================
+
+### Role-Based Access Control (RBAC)
+The application implements a comprehensive RBAC system with four primary roles:
+
+#### User Roles
+1. **Admin**: Full system access, user management, configuration
+2. **Driver**: Route management, student boarding/dropping
+3. **Supervisor**: Trip monitoring, student status oversight
+4. **Parent**: Child tracking, trip status viewing
+
+#### Role Definition
+```typescript
+export type UserRole = "admin" | "driver" | "supervisor" | "parent";
+
+export interface UserProfile {
+  uid: string;
+  email: string | null;
+  role: UserRole;
+  schoolId: string;
+  active?: boolean;
+  pending?: boolean;
+  // ... other fields
+}
+```
+
+### Route Protection System
+The application uses layout-based route protection with role-specific guards.
+
+#### Authentication Guards
+
+##### 1. Admin Guard
+**Implementation**: Implicit through profile resolution
+- **Protected Routes**: `/admin/*`
+- **Access Control**: Requires `role: "admin"` and `active: true`
+
+##### 2. Driver Guard
+**File**: `src/app/driver/DriverGuard.tsx`
+- **Protected Routes**: `/driver/*` (except `/driver/login`)
+- **Access Control**: Requires `role: "driver"` and `active: true`
+- **Fallback**: Redirects to driver login or admin login
+
+##### 3. Supervisor Guard
+**File**: `src/app/supervisor/SupervisorGuard.tsx`
+- **Protected Routes**: `/supervisor/*` (except `/supervisor/login`)
+- **Access Control**: Requires `role: "supervisor"` and `active: true`
+- **Special Feature**: SharedAccessGuard for supervisor mode
+
+##### 4. Parent Guard
+**File**: `src/app/parent/(protected)/layout.tsx`
+- **Protected Routes**: `/parent/(protected)/*`
+- **Access Control**: Requires `role: "parent"` and `active: true`
+- **Additional Features**: Notification system, inbox management
+
+#### Guard Implementation Pattern
+```typescript
+export function RoleGuard({ children }: { children: ReactNode }) {
+  const { user, profile, loading, error } = useProfile();
+  
+  if (loading) return <LoadingScreen />;
+  if (error || !user) return <ErrorScreen />;
+  if (!profile || profile.role !== "expectedRole" || !profile.active) {
+    return <AccessDeniedScreen />;
+  }
+  
+  return <>{children}</>;
+}
+```
+
+### Supervisor Mode System
+**File**: `src/app/supervisor/SharedAccessGuard.tsx`
+
+#### Shared Access Control
+- **Purpose**: Allows drivers to access supervisor functions
+- **Mechanism**: `supervisorMode` flag on user profile
+- **Use Case**: Drivers can perform boarding/dropping supervision
+
+#### Implementation
+```typescript
+function canDriverSupervise(sid, tripId) {
+  return tripDoc(sid, tripId).data.boardingSupervisorId == request.auth.uid
+    || (hasMe(sid) && me(sid).data.supervisorMode == true);
+}
+```
+
+## FIRESTORE SECURITY RULES
+===========================
+
+### Security Rules Architecture
+**File**: `firestore.rules` (284 lines)
+
+#### Helper Functions
+```javascript
+function authed() { return request.auth != null; }
+function hasMe(sid) { 
+  return authed() && exists(/databases/$(db)/documents/schools/$(sid)/users/$(request.auth.uid)); 
+}
+function me(sid) { 
+  return get(/databases/$(db)/documents/schools/$(sid)/users/$(request.auth.uid)); 
+}
+function myRole(sid) { return hasMe(sid) ? me(sid).data.role : null; }
+
+function isAdmin(sid) { return myRole(sid) == "admin"; }
+function isDriver(sid) { return myRole(sid) == "driver"; }
+function isSupervisor(sid) { return myRole(sid) == "supervisor"; }
+function isParent(sid) { return myRole(sid) == "parent"; }
+```
+
+#### Parent-Child Relationship Security
+```javascript
+function parentLink(sid) { 
+  return get(/databases/$(db)/documents/schools/$(sid)/parentStudents/$(request.auth.uid)); 
+}
+function hasParentLink(sid) { 
+  return exists(/databases/$(db)/documents/schools/$(sid)/parentStudents/$(request.auth.uid)); 
+}
+function isMyChild(sid, studentId) {
+  return hasParentLink(sid) && parentLink(sid).data.studentIds.hasAny([studentId]);
+}
+```
+
+#### Trip Status Validation
+```javascript
+function validStatusTransition(old, neu) {
+  return (old == neu)
+    || (old == "scheduled" && neu == "active")
+    || (old == "active" && neu == "ended");
+}
+
+function driverTripUpdateAllowedFields() {
+  return ['status','startedAt','endedAt','currentLocation','lastLocation'];
+}
+```
+
+### Collection-Level Security
+
+#### 1. Users Index (`/usersIndex/{uid}`)
+- **Read/Create**: Own document only (`request.auth.uid == uid`)
+- **Update/Delete**: Forbidden
+- **Purpose**: Bootstrap school resolution
+
+#### 2. Global Users (`/users/{uid}`)
+- **Read**: Own document or same school members
+- **Write**: Forbidden (display-only)
+
+#### 3. School Collections (`/schools/{schoolId}/...`)
+- **Base Requirement**: Must be authenticated school member (`hasMe(schoolId)`)
+- **Role-Based Permissions**: Different access levels per collection
+
+#### 4. Students Collection
+- **Read**: All school members
+- **Write**: Admins only
+- **Parent Access**: Can read own children's data
+
+#### 5. Trips Collection
+- **Read**: All school members
+- **Write**: Admins and assigned drivers
+- **Status Updates**: Drivers can update specific fields only
+
+#### 6. Passengers Collection
+- **Read**: All school members
+- **Write**: Drivers and supervisors (with validation)
+- **Parent Access**: Can read own children's passenger records
+
+## FIREBASE STORAGE SECURITY
+============================
+
+### Storage Rules Architecture
+**File**: `storage.rules` (41 lines)
+
+#### Helper Functions
+```javascript
+function hasMe(schoolId) {
+  return request.auth != null
+    && exists(/databases/(default)/documents/schools/$(schoolId)/users/$(request.auth.uid));
+}
+function isAdmin(schoolId) {
+  return request.auth != null
+    && get(/databases/(default)/documents/schools/$(schoolId)/users/$(request.auth.uid)).data.role == "admin";
+}
+```
+
+#### Storage Access Patterns
+
+##### Student Profile Photos
+- **Path**: `/schools/{schoolId}/students/{studentId}/{fileName}`
+- **Read**: All authenticated school members
+- **Write**: School admins only
+
+##### User Profile Photos
+- **Path**: `/schools/{schoolId}/users/{userId}/{fileName}`
+- **Read**: All authenticated school members
+- **Write**: School admins only
+
+##### Default Deny
+- **All Other Paths**: Explicitly denied
+
+## QR CODE SECURITY SYSTEM
+==========================
+
+### QR Code Cryptographic Security
+**File**: `src/lib/qrCodeGenerator.ts`
+
+#### Signature-Based Validation
+```typescript
+const generateSignature = (studentId: string, schoolId: string, secretKey: string): string => {
+  // Simple signature generation (production note: use proper cryptographic signatures)
+  return btoa(`${studentId}-${schoolId}-${secretKey}`);
+};
+```
+
+#### QR Data Structure
+```typescript
+interface StudentQRData {
+  studentId: string;
+  studentName: string;
+  schoolId: string;
+  timestamp: number;
+  signature: string;  // Tamper detection
+}
+```
+
+#### Security Features
+1. **Secret Key Validation**: Uses `NEXT_PUBLIC_QR_SECRET_KEY`
+2. **Signature Verification**: Prevents QR code tampering
+3. **School Context**: QR codes are school-specific
+4. **Timestamp Inclusion**: Enables expiration if needed
+
+#### Validation Process
+```typescript
+export const validateQRData = (qrString: string, secretKey?: string): StudentQRData | null => {
+  const qrData: StudentQRData = JSON.parse(qrString);
+  
+  // Structure validation
+  if (!qrData.studentId || !qrData.studentName || !qrData.schoolId || !qrData.signature) {
+    return null;
+  }
+  
+  // Signature validation
+  const key = secretKey || process.env.NEXT_PUBLIC_QR_SECRET_KEY || 'default-secret';
+  const expectedSignature = generateSignature(qrData.studentId, qrData.schoolId, key);
+  
+  if (qrData.signature !== expectedSignature) {
+    return null;
+  }
+  
+  return qrData;
+};
+```
+
+### QR Scanning Security
+**File**: `src/components/QRScanner.tsx`
+
+#### Scan Validation
+1. **Duplicate Prevention**: 2-second cooldown between scans
+2. **Format Validation**: JSON structure validation
+3. **Required Fields**: Validates presence of critical fields
+4. **Error Handling**: Comprehensive error reporting
+
+#### Security Considerations
+- **Camera Permissions**: Proper permission handling
+- **Input Sanitization**: JSON parsing with error handling
+- **Rate Limiting**: Prevents rapid-fire scanning abuse
+
+## SESSION MANAGEMENT
+====================
+
+### Firebase Auth Session Handling
+- **Token Management**: Automatic token refresh via Firebase SDK
+- **Session Persistence**: Browser-based session persistence
+- **Logout Mechanism**: `signOut(auth)` across all components
+
+### Profile Session Management
+```typescript
+// Profile refresh mechanism
+const refresh = useCallback(async () => {
+  profileCache.delete(auth.currentUser?.uid || '');
+  await auth.currentUser?.getIdToken(true); // Force refresh token
+  await load(auth.currentUser);
+}, [load]);
+```
+
+### Authentication State Monitoring
+```typescript
+useEffect(() => {
+  const unsub = onAuthStateChanged(auth, (u) => {
+    void load(u);
+  });
+  return () => unsub();
+}, [load]);
+```
+
+## SECURITY VULNERABILITIES AND RECOMMENDATIONS
+==============================================
+
+### Current Security Strengths
+1. **Comprehensive RBAC**: Well-defined role-based access control
+2. **Firestore Security Rules**: Detailed server-side validation
+3. **School Isolation**: Multi-tenant security with school boundaries
+4. **QR Code Signatures**: Tamper detection for QR codes
+5. **Route Protection**: Client-side route guards for all user types
+
+### Security Vulnerabilities
+
+#### 1. QR Code Cryptography
+**Issue**: Basic Base64 encoding instead of proper cryptographic signatures
+**Risk**: QR codes could be reverse-engineered or forged
+**Recommendation**: Implement HMAC-SHA256 or digital signatures
+
+#### 2. Environment Variable Exposure
+**Issue**: `NEXT_PUBLIC_QR_SECRET_KEY` exposed to client-side
+**Risk**: Secret key visible in browser, enabling QR forgery
+**Recommendation**: Move QR validation to server-side API
+
+#### 3. No Rate Limiting
+**Issue**: No rate limiting on authentication or API calls
+**Risk**: Brute force attacks, API abuse
+**Recommendation**: Implement rate limiting middleware
+
+#### 4. Missing Security Headers
+**Issue**: No security headers configuration visible
+**Risk**: XSS, clickjacking, CSRF vulnerabilities
+**Recommendation**: Add security headers in Next.js config
+
+#### 5. No Input Validation Middleware
+**Issue**: Client-side validation only
+**Risk**: Malicious data could bypass client validation
+**Recommendation**: Add server-side validation layer
+
+#### 6. Session Security
+**Issue**: No explicit session timeout or security policies
+**Risk**: Long-lived sessions, session hijacking
+**Recommendation**: Implement session timeout and security policies
+
+### Security Enhancements Needed
+
+#### 1. Server-Side API Layer
+- **Purpose**: Move sensitive operations to server-side
+- **Implementation**: Next.js API routes with validation
+- **Benefits**: Hide secrets, add rate limiting, improve validation
+
+#### 2. Cryptographic Improvements
+```typescript
+// Recommended QR signature approach
+import crypto from 'crypto';
+
+const generateSecureSignature = (data: string, secret: string): string => {
+  return crypto.createHmac('sha256', secret).update(data).digest('hex');
+};
+```
+
+#### 3. Security Middleware
+```typescript
+// Recommended middleware structure
+export function middleware(request: NextRequest) {
+  // Rate limiting
+  // CSRF protection
+  // Security headers
+  // Authentication validation
+}
+```
+
+#### 4. Input Validation Layer
+```typescript
+// Recommended validation approach
+import { z } from 'zod';
+
+const StudentQRSchema = z.object({
+  studentId: z.string().uuid(),
+  studentName: z.string().min(1).max(100),
+  schoolId: z.string().uuid(),
+  timestamp: z.number().positive(),
+  signature: z.string().min(1)
+});
+```
+
+## COMPLIANCE AND AUDIT CONSIDERATIONS
+=====================================
+
+### Data Protection
+1. **Student Privacy**: Comprehensive access controls for student data
+2. **Parent Access**: Restricted to own children only
+3. **School Isolation**: Multi-tenant data separation
+4. **Audit Trails**: Limited audit logging (needs enhancement)
+
+### Access Control Audit
+1. **Role Verification**: Regular role and permission audits needed
+2. **Inactive Users**: Automatic deactivation mechanisms needed
+3. **Permission Reviews**: Periodic access reviews recommended
+
+### Security Monitoring
+1. **Failed Login Tracking**: Not implemented (needs addition)
+2. **Suspicious Activity**: No monitoring (needs implementation)
+3. **Security Alerts**: No alerting system (needs implementation)
+
+## SECURITY TESTING RECOMMENDATIONS
+===================================
+
+### Authentication Testing
+1. **Role Escalation**: Test role boundary enforcement
+2. **Session Management**: Test session timeout and invalidation
+3. **Password Security**: Test password policies and reset flows
+
+### Authorization Testing
+1. **Cross-School Access**: Verify school isolation
+2. **Parent-Child Boundaries**: Test parent access restrictions
+3. **Role-Based Access**: Verify role permission enforcement
+
+### QR Code Security Testing
+1. **Signature Validation**: Test QR code tampering detection
+2. **Replay Attacks**: Test duplicate scan prevention
+3. **Malformed Data**: Test QR code parsing robustness
+
+### Infrastructure Security
+1. **Firebase Rules**: Test Firestore and Storage rule enforcement
+2. **API Security**: Test API endpoint security (when implemented)
+3. **Client-Side Security**: Test XSS and injection vulnerabilities

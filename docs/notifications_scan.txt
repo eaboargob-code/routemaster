@@ -1,0 +1,535 @@
+================================================================================
+NOTIFICATIONS SCAN - RouteMASTER
+================================================================================
+Generated: 2025-01-27
+Scope: Find notification writes and push logic
+
+================================================================================
+SUMMARY
+================================================================================
+
+The RouteMASTER application implements a comprehensive notification system using
+Firebase Cloud Messaging (FCM) for push notifications and Firestore for inbox
+storage. The system automatically sends notifications to parents when their
+child's bus status changes (boarded, dropped, absent) and provides both
+foreground and background notification handling.
+
+Key Components:
+- Firebase Functions trigger on passenger status changes
+- FCM token registration for drivers, supervisors, and parents
+- Client-side foreground notification handling
+- Service worker for background notifications
+- Inbox system for notification history
+- Parent notification UI with bell icon and dropdown
+
+================================================================================
+DETAILED FINDINGS
+================================================================================
+
+1. SERVER-SIDE NOTIFICATION TRIGGERS (Firebase Functions)
+================================================================================
+
+File: functions/src/index.ts
+Lines: 75-133, 140-175
+
+Context:
+```typescript
+async function sendNotificationsToParents(schoolId: string, studentId: string, studentName: string, status: string) {
+    // 1. Find all parents linked to this student
+    const parentLinksQuery = db.collection(`schools/${schoolId}/parentStudents`).where('studentIds', 'array-contains', studentId);
+    
+    // 2. Get FCM tokens for each parent
+    const allTokens: string[] = [];
+    parentDocs.forEach(doc => {
+        const tokens = doc.data()?.fcmTokens;
+        if (Array.isArray(tokens)) {
+            allTokens.push(...tokens);
+        }
+    });
+    
+    // 3. Construct and send the message
+    const message = {
+        notification: {
+            title: `Bus Status Update for ${studentName}`,
+            body: `${studentName} has been marked as '${status}'.`,
+        },
+        data: {
+            studentId: studentId,
+            studentName: studentName,
+            status: status,
+            kind: 'passengerStatus',
+        },
+        tokens: allTokens,
+    };
+
+    const response = await messaging.sendEachForMulticast(message);
+}
+
+export const onPassengerWrite = onDocumentWritten(
+  "schools/{schoolId}/trips/{tripId}/passengers/{passengerId}",
+  async (event) => {
+    // Check if the status has actually changed
+    if (afterData && beforeData?.status !== afterData?.status) {
+        const newStatus = afterData.status;
+        // Don't send for 'pending' or on initial document creation
+        if (newStatus && newStatus !== 'pending') {
+            await sendNotificationsToParents(schoolId, studentId, studentName, newStatus);
+        }
+    }
+  }
+);
+```
+
+Purpose: Automatically sends push notifications to parents when passenger status changes
+
+Trigger Path: schools/{schoolId}/trips/{tripId}/passengers/{passengerId}
+Notification Types: boarded, dropped, absent (not pending)
+
+2. CLIENT-SIDE FCM TOKEN REGISTRATION
+================================================================================
+
+File: src/lib/notifications.ts
+Lines: 9-42
+
+Context:
+```typescript
+export async function registerFcmToken(uid: string) {
+  if (!VAPID) {
+    console.warn("[FCM] Missing VAPID key env");
+    return null;
+  }
+  if (!(await isSupported())) {
+    console.warn("[FCM] Not supported in this browser/context");
+    return null;
+  }
+
+  try {
+    const messaging = getMessaging(app);
+    const token = await getToken(messaging, { vapidKey: VAPID });
+    if (!token) return null;
+
+    // Uses arrayUnion to only add the new token
+    await updateDoc(doc(db, "users", uid), {
+      fcmTokens: arrayUnion(token)
+    });
+
+    console.log("[FCM] token saved:", token.slice(0, 12) + "…");
+    return token;
+  } catch (e: any) {
+    if (e.code === 'messaging/permission-blocked') {
+        // User denied notification permission - fail silently
+    } else {
+        console.error("[FCM] registerFcmToken failed:", e);
+    }
+    return null;
+  }
+}
+```
+
+Purpose: Registers FCM tokens for push notifications
+Storage: users/{uid}.fcmTokens (array field)
+Used by: Drivers, supervisors, and parents
+
+3. FCM TOKEN REGISTRATION USAGE
+================================================================================
+
+File: src/app/driver/page.tsx
+Lines: 22, 143-146
+
+Context:
+```typescript
+import { registerFcmToken } from "@/lib/notifications";
+
+// Register FCM token
+useEffect(() => {
+  if (user?.uid) {
+    registerFcmToken(user.uid).catch(() => {});
+  }
+}, [user?.uid]);
+```
+
+File: src/app/supervisor/page.tsx
+Lines: 11, 76-79
+
+Context:
+```typescript
+import { registerFcmToken } from "@/lib/notifications";
+
+// Register FCM for the supervisor account
+useEffect(() => {
+  if (user?.uid) {
+    registerFcmToken(user.uid).catch(() => {});
+  }
+}, [user?.uid]);
+```
+
+File: src/app/parent/(protected)/layout.tsx
+Lines: 223
+
+Context:
+```typescript
+await registerFcmToken(user.uid);
+```
+
+Purpose: All user types register for push notifications on login/page load
+
+4. FOREGROUND NOTIFICATION HANDLING
+================================================================================
+
+File: src/lib/notifications.ts
+Lines: 50-63
+
+Context:
+```typescript
+export function onForegroundNotification(
+  handler: (payload: { title?: string; body?: string; data?: any }) => void
+) {
+  isSupported().then((ok) => {
+    if (!ok) return;
+    const messaging = getMessaging(app);
+    return onMessage(messaging, (payload) => {
+      console.log("[FCM] onMessage foreground:", payload);
+      const n = payload.notification || {};
+      handler({ title: n.title, body: n.body, data: payload.data });
+    });
+  });
+}
+```
+
+File: src/app/parent/(protected)/layout.tsx
+Lines: 237-248
+
+Context:
+```typescript
+const unsubscribe = onForegroundNotification((notification) => {
+  toast({
+    title: notification.title,
+    description: notification.body,
+  });
+  logBell(user.uid, {
+    title: notification.title || "New Notification",
+    body: notification.body || "",
+    data: notification.data,
+  });
+});
+```
+
+Purpose: Handles notifications when app is in foreground, shows toast and logs to inbox
+
+5. BACKGROUND NOTIFICATION HANDLING (Service Worker)
+================================================================================
+
+File: public/firebase-messaging-sw.js
+Lines: 1-22
+
+Context:
+```javascript
+firebase.initializeApp({
+  "projectId": "routemaster-admin-k1thy",
+  "appId": "1:1071157867562:web:e6a8686b2849d515157f53",
+  "storageBucket": "routemaster-admin-k1thy.firebasestorage.app",
+  "apiKey": "AIzaSyAX-YaK7opiuKe8vQ0bH4RStr6UCVdlOEk",
+  "authDomain": "routemaster-admin-k1thy.firebaseapp.com",
+  "messagingSenderId": "1071157867562"
+});
+
+const messaging = firebase.messaging();
+
+messaging.onBackgroundMessage(({ notification, data }) => {
+  const title = (notification && notification.title) || "RouteMaster";
+  const body  = (notification && notification.body) || "";
+  self.registration.showNotification(title, {
+    body, data, icon: "/icon-192.png", badge: "/badge.png"
+  });
+});
+```
+
+Purpose: Handles notifications when app is in background or closed
+Features: Custom icon and badge for notifications
+
+6. INBOX SYSTEM FOR NOTIFICATION HISTORY
+================================================================================
+
+File: src/lib/notifications.ts
+Lines: 65-71
+
+Context:
+```typescript
+export async function logBell(uid: string, n: { title: string; body: string; data?: any }) {
+  await addDoc(collection(db, "users", uid, "inbox"), {
+    ...n,
+    createdAt: serverTimestamp(),
+    read: false,
+  });
+}
+```
+
+File: src/app/parent/(protected)/layout.tsx
+Lines: 44-85
+
+Context:
+```typescript
+function useInbox() {
+  const { user, profile } = useProfile();
+  const [items, setItems] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    // Prefer school path: schools/{schoolId}/users/{uid}/inbox
+    // Fallback to: users/{uid}/inbox
+    const base = pathKind === "school" && profile?.schoolId
+      ? scol(profile.schoolId, `users/${user.uid}/inbox`)
+      : collection(db, "users", user.uid, "inbox");
+
+    const qy = query(base, orderBy("createdAt", "desc"), limit(25));
+    return onSnapshot(qy, (snap) => {
+      const rows: Notification[] = [];
+      snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+      setItems(rows);
+      setUnreadCount(rows.filter((r) => !r.read).length);
+    });
+  }, [user?.uid, profile?.schoolId]);
+}
+```
+
+Purpose: Stores notification history in Firestore inbox collections
+Paths: schools/{schoolId}/users/{uid}/inbox OR users/{uid}/inbox
+Features: Read/unread tracking, chronological ordering, 25 item limit
+
+7. PARENT NOTIFICATION UI
+================================================================================
+
+File: src/app/parent/(protected)/layout.tsx
+Lines: 122-170
+
+Context:
+```typescript
+function Header({ notifications, unreadCount, onMarkAsRead }: { 
+  notifications: Notification[], 
+  unreadCount: number, 
+  onMarkAsRead: () => void 
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" className="relative">
+          <Bell className="h-5 w-5" />
+          {unreadCount > 0 && (
+            <Badge variant="destructive" className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 text-xs">
+              {unreadCount}
+            </Badge>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {notifications.length > 0 ? (
+          notifications.map(n => (
+            <DropdownMenuItem key={n.id} className="flex flex-col items-start p-3">
+              <div className="font-medium">{n.title}</div>
+              <div className="text-sm text-muted-foreground">{n.body}</div>
+              <div className="text-xs text-muted-foreground mt-1">
+                {n.createdAt?.toDate?.()?.toLocaleString() || ""}
+              </div>
+            </DropdownMenuItem>
+          ))
+        ) : (
+          <DropdownMenuItem disabled>No new notifications</DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+```
+
+Purpose: Bell icon with unread count badge and dropdown showing recent notifications
+
+8. NOTIFICATION DATA STRUCTURE
+================================================================================
+
+File: src/app/parent/(protected)/layout.tsx
+Lines: 29-35
+
+Context:
+```typescript
+export interface Notification {
+  id: string;
+  title: string;
+  body: string;
+  data?: any;
+  createdAt?: any;
+  read?: boolean;
+}
+```
+
+Purpose: TypeScript interface for notification objects
+
+9. PARENT STUDENT LINKING FOR NOTIFICATIONS
+================================================================================
+
+File: functions/src/index.ts
+Lines: 84-91
+
+Context:
+```typescript
+// 1. Find all parents linked to this student
+const parentLinksQuery = db.collection(`schools/${schoolId}/parentStudents`).where('studentIds', 'array-contains', studentId);
+const parentLinksSnap = await parentLinksQuery.get();
+
+if (parentLinksSnap.empty) {
+    logger.log(`No parents linked to student ${studentId}.`);
+    return;
+}
+
+const parentIds = parentLinksSnap.docs.map(doc => doc.id);
+```
+
+Purpose: Uses parentStudents collection to find which parents should receive notifications
+Collection: schools/{schoolId}/parentStudents
+Field: studentIds (array containing student IDs)
+
+10. NOTIFICATION INTEGRATION WITH PASSENGER STATUS
+================================================================================
+
+File: src/app/parent/(protected)/page.tsx
+Lines: 483-490
+
+Context:
+```typescript
+// Find the most recent, relevant notification from the inbox
+const notification = notifications
+  .filter(n => n.data?.studentId === student.id)
+  .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))[0];
+
+// Combine live passenger data with notification data
+const normStatus = (notification?.data?.status || p?.status || "").toLowerCase().trim();
+```
+
+Purpose: Parent dashboard combines live passenger data with notification history
+
+11. ADMIN NOTIFICATION PLACEHOLDER
+================================================================================
+
+File: src/app/admin/messages/page.tsx
+Lines: 16, 24, 34
+
+Context:
+```typescript
+// - Fetch messages from schools/{schoolId}/users/{adminUid}/inbox
+
+<CardTitle>My Inbox</CardTitle>
+
+<AlertDescription>
+  The functionality to list messages from your inbox will be implemented here.
+</AlertDescription>
+```
+
+Purpose: Planned admin inbox functionality (not yet implemented)
+
+================================================================================
+NOTIFICATION FLOW SUMMARY
+================================================================================
+
+1. **Registration Flow**:
+   - User logs in (driver/supervisor/parent)
+   - FCM token is registered and stored in users/{uid}.fcmTokens array
+   - Token is associated with user account for push delivery
+
+2. **Trigger Flow**:
+   - Driver/supervisor marks student status (boarded/dropped/absent)
+   - Firebase Function onPassengerWrite triggers
+   - Function finds parents linked to student via parentStudents collection
+   - Function retrieves FCM tokens for all linked parents
+   - Push notification sent to all parent devices
+
+3. **Delivery Flow**:
+   - **Background**: Service worker shows system notification
+   - **Foreground**: onMessage handler shows toast and logs to inbox
+   - **Inbox**: Notification stored in users/{uid}/inbox for history
+
+4. **UI Flow**:
+   - Parent sees bell icon with unread count
+   - Clicking bell shows dropdown with recent notifications
+   - Parent dashboard shows combined live + notification status
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+Required for notifications:
+- NEXT_PUBLIC_FIREBASE_VAPID_KEY: VAPID key for FCM token generation
+- Firebase config in firebase-messaging-sw.js (hardcoded)
+
+================================================================================
+COLLECTIONS USED
+================================================================================
+
+1. **users/{uid}**:
+   - fcmTokens: string[] - Array of FCM tokens for push delivery
+
+2. **users/{uid}/inbox**:
+   - title: string
+   - body: string
+   - data: any
+   - createdAt: Timestamp
+   - read: boolean
+
+3. **schools/{schoolId}/users/{uid}/inbox** (alternative path):
+   - Same structure as above, school-scoped
+
+4. **schools/{schoolId}/parentStudents/{parentId}**:
+   - studentIds: string[] - Array of student IDs linked to parent
+
+5. **schools/{schoolId}/trips/{tripId}/passengers/{studentId}**:
+   - status: string - Triggers notifications on change
+   - studentId: string
+   - studentName: string
+
+================================================================================
+NOTIFICATION TYPES
+================================================================================
+
+Currently implemented:
+- **Passenger Status Updates**: boarded, dropped, absent
+  - Title: "Bus Status Update for {studentName}"
+  - Body: "{studentName} has been marked as '{status}'."
+  - Data: { studentId, studentName, status, kind: 'passengerStatus' }
+
+Not implemented:
+- Trip start/end notifications
+- Route change notifications
+- Emergency notifications
+- Schedule change notifications
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+1. **Add More Notification Types**:
+   - Trip departure/arrival notifications
+   - Route delays or changes
+   - Emergency alerts
+   - Schedule updates
+
+2. **Improve Token Management**:
+   - Clean up invalid/expired FCM tokens
+   - Handle token refresh scenarios
+   - Add token unregistration on logout
+
+3. **Enhanced Notification Settings**:
+   - Allow parents to configure notification preferences
+   - Add quiet hours or do-not-disturb settings
+   - Notification frequency controls
+
+4. **Complete Admin Inbox**:
+   - Implement admin message/notification viewing
+   - Add admin-to-parent messaging capability
+   - Bulk notification sending for announcements
+
+5. **Add Notification Analytics**:
+   - Track delivery success rates
+   - Monitor notification engagement
+   - Identify and clean up inactive tokens
+
+================================================================================

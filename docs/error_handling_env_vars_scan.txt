@@ -1,0 +1,253 @@
+ERROR HANDLING, TOASTS, AND ENVIRONMENT VARIABLES ANALYSIS
+==========================================================
+
+This document analyzes error handling patterns, toast notifications, monitoring systems, and environment variables in the RouteMASTER application.
+
+## ERROR HANDLING PATTERNS
+=========================
+
+### Toast Notification System
+The application uses a comprehensive toast notification system built on Radix UI:
+
+#### Core Toast Infrastructure
+- **Hook**: `@/hooks/use-toast` - Custom hook for toast management
+- **Components**: `@/components/ui/toast` - Radix UI-based toast components
+- **Provider**: `@/components/ui/toaster` - Toast provider and viewport
+- **Integration**: Imported in `src/app/layout.tsx` as `<Toaster />`
+
+#### Toast Usage Patterns
+1. **Success Notifications**: Green toasts for successful operations
+2. **Error Notifications**: Red destructive variant for errors
+3. **Warning Notifications**: Yellow/amber for warnings
+4. **Info Notifications**: Blue for informational messages
+
+#### Key Files Using Toasts
+- `src/app/parent/(protected)/layout.tsx` - Profile errors and access control
+- `src/app/supervisor/trips/[id]/page.tsx` - Trip data loading errors
+- `src/app/test-qr/page.tsx` - QR scanning success/error feedback
+- `src/components/QRScanner.tsx` - Camera and scanning errors
+- `src/app/driver/route/page.tsx` - Geolocation and school settings errors
+- `src/app/supervisor/page.tsx` - Data loading and permissions errors
+- `src/components/BulkQROperations.tsx` - Bulk operation results
+- `src/app/parent/(protected)/page.tsx` - Location updates and trip errors
+
+### Error Handling Strategies
+
+#### 1. Try-Catch Blocks
+Extensive use of try-catch for async operations:
+```typescript
+try {
+  // Firebase operations
+  await updateDoc(ref, data);
+  toast({ title: "Success", description: "Data updated" });
+} catch (error) {
+  console.error("Operation failed:", error);
+  toast({ 
+    variant: "destructive", 
+    title: "Error", 
+    description: error.message 
+  });
+}
+```
+
+#### 2. Firebase Error Handling
+- **Firestore Listeners**: Custom error handlers in `src/lib/firestore-helpers.ts`
+- **Authentication Errors**: Handled in login pages with user-friendly messages
+- **Permission Errors**: Specific handling for access denied scenarios
+
+#### 3. Geolocation Error Handling
+- **GeolocationService**: Comprehensive error handling in `src/lib/geolocation.ts`
+- **Error Codes**: Mapped to user-friendly messages
+- **Permission Handling**: Graceful degradation when location access denied
+
+#### 4. QR Code Error Handling
+- **Scanning Errors**: Invalid format, camera access, processing failures
+- **Audio Feedback**: Error sounds for failed scans
+- **Visual Feedback**: Error states in UI components
+
+### Audio Feedback System
+Located in `src/lib/audioFeedback.ts`:
+- **Success Sounds**: High-pitched success tones
+- **Error Sounds**: Low-pitched error tones, buzz, or alert sounds
+- **Boarding/Dropping Sounds**: Specific audio cues for student actions
+- **Configurable**: Different tone types (buzz, error, alert)
+
+## MONITORING AND ANALYTICS
+==========================
+
+### Current Monitoring Status
+**Limited Monitoring Implementation** - Basic error logging without external services.
+
+### Available Monitoring
+1. **Console Logging**: Extensive console.error() and console.warn() usage
+2. **Firebase Functions Logging**: Using Firebase Functions logger
+3. **Client-Side Error Boundaries**: Basic React error handling
+
+### Missing Monitoring Services
+1. **Sentry**: No Sentry error tracking found
+2. **Firebase Analytics**: Analytics dependencies present but not initialized
+3. **Firebase Performance**: Performance dependencies present but not initialized
+4. **Firebase Crashlytics**: Not implemented
+
+### Firebase Analytics/Performance Dependencies
+Found in package-lock.json but not actively used:
+- `@firebase/analytics`: 0.10.16
+- `@firebase/analytics-compat`: 0.2.22
+- `@firebase/performance`: 0.7.6
+- `@firebase/performance-compat`: 0.2.19
+
+### Error Logging Patterns
+```typescript
+// Standard pattern throughout codebase
+try {
+  // Operation
+} catch (error) {
+  console.error('Operation failed:', error);
+  // User notification via toast
+  toast({ variant: "destructive", title: "Error", description: error.message });
+}
+```
+
+## ENVIRONMENT VARIABLES
+=======================
+
+### Environment Variable Structure
+The application uses `.env.local` files (gitignored) for configuration.
+
+### Firebase Configuration Variables
+#### Client-Side (NEXT_PUBLIC_*)
+- `NEXT_PUBLIC_FIREBASE_API_KEY` - Firebase API key
+- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` - Firebase auth domain
+- `NEXT_PUBLIC_FIREBASE_PROJECT_ID` - Firebase project ID
+- `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` - Firebase storage bucket
+- `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` - FCM sender ID
+- `NEXT_PUBLIC_FIREBASE_APP_ID` - Firebase app ID
+- `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` - Analytics measurement ID (unused)
+
+#### Server-Side (Firebase Admin)
+- `FIREBASE_CLIENT_EMAIL` - Service account email
+- `FIREBASE_PRIVATE_KEY` - Service account private key
+- `FIREBASE_PRIVATE_KEY_ID` - Service account key ID
+- `FIREBASE_CLIENT_ID` - Service account client ID
+
+### Google Services Variables
+- `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` - Google Maps JavaScript API key
+- `NEXT_PUBLIC_FIREBASE_VAPID_KEY` - Firebase Cloud Messaging VAPID key
+
+### Application-Specific Variables
+- `NEXT_PUBLIC_QR_SECRET_KEY` - QR code encryption/validation key
+- `GCLOUD_PROJECT` - Google Cloud project ID (for functions)
+- `GOOGLE_CLOUD_PROJECT` - Alternative Google Cloud project ID
+- `GOOGLE_APPLICATION_CREDENTIALS` - Service account credentials path
+
+### Environment Variable Usage Patterns
+
+#### Firebase Client Configuration
+```typescript
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
+};
+```
+
+#### Firebase Admin Configuration
+```typescript
+const serviceAccount = {
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+  privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+};
+```
+
+### Environment Variable Validation
+- **Debug Logging**: Environment variable presence checked in admin initialization
+- **Fallback Values**: Default values provided for some variables
+- **Error Handling**: Missing variables cause initialization failures
+
+## FEATURE FLAGS AND CONFIGURATION
+=================================
+
+### Configuration System
+The application uses Firestore documents for feature configuration:
+
+#### School-Level Configuration
+- **Path**: `schools/{schoolId}/config/profile`
+- **Contains**: School metadata, location, settings
+- **Path**: `schools/{schoolId}/config/transport`
+- **Contains**: Transport-specific settings
+- **Path**: `schools/{schoolId}/config/location`
+- **Contains**: Geographic configuration
+
+#### Configuration Access Patterns
+```typescript
+// Reading configuration
+const configRef = doc(db, `schools/${schoolId}/config/profile`);
+const configDoc = await getDoc(configRef);
+
+// Updating configuration
+await updateTransportConfig(schoolId, newSettings);
+```
+
+### Dynamic Feature Control
+1. **Supervisor Mode**: Runtime permission system
+2. **Bulk Operations**: Permission-based feature access
+3. **Audio Feedback**: Configurable sound types
+4. **Map Providers**: Google Maps vs OpenStreetMap selection
+
+### No Traditional Feature Flags
+- No environment-based feature flags found
+- No feature flag service integration (LaunchDarkly, etc.)
+- Features controlled through database configuration and user permissions
+
+## ERROR RECOVERY STRATEGIES
+===========================
+
+### Offline Handling
+- **IndexedDB Cache**: `src/lib/offlineCache.ts` for offline data storage
+- **Sync Mechanisms**: Automatic sync when connection restored
+- **Graceful Degradation**: App continues functioning with cached data
+
+### Permission Recovery
+- **Access Denied Screens**: User-friendly error pages
+- **Profile Resolution**: Automatic profile fetching and error recovery
+- **School Context**: Fallback mechanisms for school resolution
+
+### Network Error Handling
+- **Retry Logic**: Implicit in Firebase SDK
+- **Timeout Handling**: Browser-level timeout management
+- **Connection Status**: No explicit connection monitoring
+
+## RECOMMENDATIONS FOR IMPROVEMENT
+=================================
+
+### Error Monitoring Enhancements
+1. **Implement Sentry**: Add comprehensive error tracking
+2. **Enable Firebase Analytics**: Activate existing analytics dependencies
+3. **Add Firebase Performance**: Monitor app performance metrics
+4. **Custom Error Boundaries**: React error boundaries for better UX
+
+### Environment Variable Management
+1. **Validation Layer**: Runtime validation of required environment variables
+2. **Type Safety**: TypeScript interfaces for environment variables
+3. **Documentation**: Comprehensive .env.example file
+
+### Feature Flag System
+1. **Runtime Feature Flags**: Implement dynamic feature control
+2. **A/B Testing**: Add experimentation capabilities
+3. **Gradual Rollouts**: Feature rollout management
+
+### Error Handling Improvements
+1. **Centralized Error Handler**: Global error handling service
+2. **Error Classification**: Categorize errors by severity and type
+3. **User-Friendly Messages**: Improve error message clarity
+4. **Retry Mechanisms**: Automatic retry for transient failures
+
+### Monitoring Dashboard
+1. **Error Metrics**: Track error rates and types
+2. **Performance Metrics**: Monitor app performance
+3. **User Experience**: Track user journey and pain points
+4. **Alerting**: Real-time alerts for critical errors

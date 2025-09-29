@@ -1,3 +1,15 @@
+FIRESTORE SECURITY RULES - CURRENT VERSION
+==========================================
+
+This is the complete content of the firestore.rules file from the RouteMASTER project.
+Exported for analysis and documentation purposes.
+
+FILE: firestore.rules
+TOTAL LINES: 284
+RULES VERSION: 2
+
+==========================================
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
@@ -122,7 +134,7 @@ service cloud.firestore {
       }
 
       /* -------- absences --------
-         Parents create their own child’s absence; can read their own records only.
+         Parents create their own child's absence; can read their own records only.
          Staff can read/list for roster prep. Admin full. */
       match /absences/{absenceId} {
         // Admin
@@ -139,7 +151,7 @@ service cloud.firestore {
         // Prevent parents from listing all absences
         allow list: if false;
 
-        // Staff (driver/supervisor) read/list for today’s roster planning
+        // Staff (driver/supervisor) read/list for today's roster planning
         allow read, list: if isDriver(schoolId) || isSupervisor(schoolId);
       }
 
@@ -153,7 +165,7 @@ service cloud.firestore {
         allow list: if isDriver(schoolId) || isSupervisor(schoolId);
 
         /* ---- stops subcollection ----
-           Parents may read a child’s stop info for map display.
+           Parents may read a child's stop info for map display.
            Staff lists stops to render driver map & planning UI.
            Admin writes. */
         match /stops/{stopId} {

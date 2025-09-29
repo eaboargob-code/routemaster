@@ -1,0 +1,105 @@
+PROJECT SNAPSHOT - DRY RUN ANALYSIS
+=====================================
+
+1. REPOSITORY TREE (2-LEVEL) - /src and /lib
+=============================================
+
+/src structure:
+├── ai/
+│   ├── dev.ts
+│   ├── flows/
+│   └── genkit.ts
+├── app/
+│   ├── ClientShell.tsx
+│   ├── admin/
+│   ├── api/
+│   ├── driver/
+│   ├── favicon.ico
+│   ├── globals.css
+│   ├── layout.tsx
+│   ├── login/
+│   ├── nav/
+│   ├── page.tsx
+│   ├── parent/
+│   ├── supervisor/
+│   ├── test-audio/
+│   ├── test-import/
+│   └── test-qr/
+├── components/
+│   ├── BulkQROperations.tsx
+│   ├── DevRoleSwitcher.tsx
+│   ├── EnhancedPassengerList.tsx
+│   ├── GoogleRouteMap.tsx
+│   ├── LocationPicker.tsx
+│   ├── OpenStreetRouteMap.tsx
+│   ├── QRScanner.tsx
+│   ├── RouteMap.tsx
+│   ├── SupervisorModePanel.tsx
+│   ├── driver/
+│   ├── icons.tsx
+│   └── ui/
+├── functions/
+│   └── src/
+├── hooks/
+│   ├── use-mobile.tsx
+│   └── use-toast.ts
+└── lib/
+    ├── audioFeedback.ts
+    ├── datetime.ts
+    ├── firebase-admin.ts
+    ├── firebase.ts
+    ├── firestore-helpers.ts
+    ├── firestoreQueries.ts
+    ├── geolocation.ts
+    ├── locationParser.ts
+    ├── notifications.ts
+    ├── offlineCache.ts
+    ├── qrCodeGenerator.ts
+    ├── roster.ts
+    ├── routeOptimization.ts
+    ├── schoolPath.ts
+    ├── supervisorMode.ts
+    ├── useProfile.tsx
+    └── utils.ts
+
+Note: No separate /lib directory exists at project root level.
+
+2. NEXT_PUBLIC_GOOGLE_MAPS_API_KEY USAGE
+========================================
+
+Found in 2 files:
+- src/components/GoogleRouteMap.tsx:720
+- src/app/driver/route/page.tsx:165, 859
+
+3. @react-google-maps/api USAGE
+===============================
+
+Found in 4 files:
+- DriverPage_Audit.md:147, 350 (documentation)
+- package.json:45 (dependency)
+- src/app/driver/route/page.tsx:57 (import)
+- package-lock.json:40, 6001, 6019 (lock file entries)
+
+4. ENVIRONMENT VARIABLE NAMES REFERENCED
+========================================
+
+NEXT_PUBLIC Variables:
+- NEXT_PUBLIC_QR_SECRET_KEY
+- NEXT_PUBLIC_FIREBASE_PROJECT_ID
+- NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+- NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+- NEXT_PUBLIC_FIREBASE_API_KEY
+- NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+- NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+- NEXT_PUBLIC_FIREBASE_APP_ID
+- NEXT_PUBLIC_FIREBASE_VAPID_KEY
+
+Server-side Variables:
+- FIREBASE_CLIENT_EMAIL
+- FIREBASE_PRIVATE_KEY
+- GCLOUD_PROJECT
+- GOOGLE_CLOUD_PROJECT
+- FIREBASE_PRIVATE_KEY_ID
+- FIREBASE_CLIENT_ID
+
+Total unique environment variables: 15

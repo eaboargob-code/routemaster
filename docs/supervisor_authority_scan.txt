@@ -1,0 +1,250 @@
+================================================================================
+SUPERVISOR AUTHORITY TOKENS AND PATTERNS SCAN
+================================================================================
+Generated: 2025-01-27
+Purpose: Comprehensive scan of supervisor authority mechanisms in the RouteMASTER codebase
+
+================================================================================
+1. PRIMARY SUPERVISOR AUTHORITY TOKENS
+================================================================================
+
+1.1 allowDriverAsSupervisor (Boolean Flag)
+-------------------------------------------
+Location: Trip documents in Firestore
+Purpose: Enables drivers to act with supervisor privileges for specific trips
+
+Found in:
+- src/app/supervisor/page.tsx (lines 47, 162)
+- src/app/admin/trips/page.tsx (lines 55, 178)
+- src/app/admin/settings/page.tsx (lines 45, 384, 433)
+- src/lib/firestoreQueries.ts (line 240)
+- src/app/driver/page.tsx (lines 84, 331, 334, 373, 453, 632, 647)
+- src/app/supervisor/trips/[id]/AdminTripActions.tsx (lines 35, 103, 132)
+- src/app/supervisor/trips/[id]/page.tsx (line 24, 59)
+- src/app/supervisor/trips/[id]/TripRoster.tsx (line 34)
+
+Usage Pattern:
+```typescript
+interface Trip {
+  allowDriverAsSupervisor?: boolean;
+}
+
+// Check if driver can supervise
+if (trip.allowDriverAsSupervisor) {
+  // Grant supervisor privileges
+}
+```
+
+1.2 SupervisorMode Service (Core Authority System)
+--------------------------------------------------
+Location: src/lib/supervisorMode.ts
+Purpose: Centralized supervisor mode management with session tracking and permissions
+
+Key Components:
+- SupervisorModeService class
+- SupervisorSession interface
+- SupervisorPermissions interface
+- Session persistence and audit logging
+
+================================================================================
+2. SUPERVISOR PERMISSIONS SYSTEM
+================================================================================
+
+2.1 SupervisorPermissions Interface
+-----------------------------------
+Location: src/lib/supervisorMode.ts (line 4)
+
+Permissions Structure:
+```typescript
+export interface SupervisorPermissions {
+  canEditRoster: boolean;
+  canMarkAbsent: boolean;
+  canBoardStudents: boolean;
+  canDropStudents: boolean;
+  canBulkOperations: boolean;
+  canViewAuditLog: boolean;
+  canExportData: boolean;
+  canModifyTrip: boolean;
+}
+```
+
+2.2 Permission Checking Methods
+-------------------------------
+- isSupervisorModeActive(): boolean (line 134)
+- hasPermission(permission: keyof SupervisorPermissions): boolean (line 144)
+- isDriverSupervisorActive(): boolean (line 430)
+
+================================================================================
+3. SESSION MANAGEMENT
+================================================================================
+
+3.1 SupervisorSession Interface
+-------------------------------
+Location: src/lib/supervisorMode.ts (line 33)
+
+Session Structure:
+```typescript
+export interface SupervisorSession {
+  id: string;
+  driverId: string;
+  driverName: string;
+  startTime: Date;
+  permissions: SupervisorPermissions;
+  isActive: boolean;
+}
+```
+
+3.2 Session Control Functions
+-----------------------------
+- startDriverSupervisorSession() (line 418)
+- endDriverSupervisorSession() (line 426)
+- getCurrentSession() (line 139)
+
+================================================================================
+4. UI COMPONENTS WITH SUPERVISOR AUTHORITY
+================================================================================
+
+4.1 SupervisorModePanel Component
+---------------------------------
+Location: src/components/SupervisorModePanel.tsx
+Purpose: UI for managing supervisor mode sessions and permissions
+
+Key Features:
+- Session start/stop controls
+- Permission toggles
+- Audit log viewing
+- CSV export functionality
+
+4.2 TripRoster Component (canEdit prop)
+--------------------------------------
+Location: src/app/supervisor/trips/[id]/TripRoster.tsx
+Purpose: Passenger roster with conditional editing based on supervisor authority
+
+Usage:
+```typescript
+canEdit={!!activeTrip.allowDriverAsSupervisor}
+```
+
+4.3 AdminTripActions Component
+------------------------------
+Location: src/app/supervisor/trips/[id]/AdminTripActions.tsx
+Purpose: Trip administration with driver supervision toggle
+
+Key Function:
+```typescript
+const handleToggleDriverSupervision = (canSupervise: boolean) => {
+  const updateData = { allowDriverAsSupervisor: canSupervise };
+}
+```
+
+================================================================================
+5. AUTHORITY CHECKING PATTERNS
+================================================================================
+
+5.1 Driver Supervision Check
+----------------------------
+Pattern found in multiple files:
+```typescript
+const isDriverSupervising = profile.role === 'driver' && 
+                           user.uid === fetchedTrip.driverId && 
+                           !!fetchedTrip.allowDriverAsSupervisor;
+```
+
+5.2 Edit Permission Logic
+------------------------
+```typescript
+const canEdit = isAdmin || isSupervisor || isDriverSupervising;
+```
+
+5.3 Bulk Operations Authority
+----------------------------
+Location: src/components/BulkQROperations.tsx
+```typescript
+return isDriverSupervisorActive() && 
+       supervisorModeService.hasPermission('canBulkOperations');
+```
+
+================================================================================
+6. FIRESTORE INTEGRATION
+================================================================================
+
+6.1 Trip Query with Supervisor Filter
+-------------------------------------
+Location: src/lib/firestoreQueries.ts (line 240)
+```typescript
+where("allowDriverAsSupervisor", "==", true)
+```
+
+6.2 Trip Update for Supervisor Authority
+----------------------------------------
+Pattern for enabling/disabling driver supervision:
+```typescript
+const updateData: Record<string, any> = { 
+  allowDriverAsSupervisor: canSupervise 
+};
+```
+
+================================================================================
+7. ADMIN SETTINGS INTEGRATION
+================================================================================
+
+7.1 Admin Settings Schema
+-------------------------
+Location: src/app/admin/settings/page.tsx
+```typescript
+allowDriverAsSupervisor: z.boolean()
+```
+
+Default Value: false (line 384)
+Form Field: name="allowDriverAsSupervisor" (line 433)
+
+================================================================================
+8. TEST AND DEVELOPMENT INTEGRATION
+================================================================================
+
+8.1 QR Scanner Test Mode
+------------------------
+Location: src/app/test-qr/page.tsx
+- SupervisorModePanel integration (line 9, 216)
+- isSupervisorMode prop for QRScanner (line 201)
+
+8.2 QRScanner Component
+----------------------
+Location: src/components/QRScanner.tsx
+- isSupervisorMode prop (line 35, 45)
+- Conditional supervisor UI (line 237)
+
+================================================================================
+9. SECURITY CONSIDERATIONS
+================================================================================
+
+9.1 Authority Validation Points
+------------------------------
+1. Trip-level: allowDriverAsSupervisor flag
+2. Session-level: SupervisorSession validation
+3. Permission-level: Individual permission checks
+4. UI-level: Conditional rendering based on authority
+
+9.2 Audit Trail
+---------------
+- Session tracking in SupervisorModeService
+- Audit log export functionality
+- CSV export for compliance
+
+================================================================================
+10. SUMMARY OF AUTHORITY FLOW
+================================================================================
+
+1. Admin enables allowDriverAsSupervisor for specific trips
+2. Driver starts supervisor session via SupervisorModePanel
+3. SupervisorModeService validates and tracks session
+4. UI components check authority via:
+   - allowDriverAsSupervisor flag
+   - isDriverSupervisorActive()
+   - hasPermission() checks
+5. Actions are logged for audit purposes
+6. Session can be ended manually or automatically
+
+================================================================================
+END OF SUPERVISOR AUTHORITY SCAN
+================================================================================

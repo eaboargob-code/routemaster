@@ -1,0 +1,339 @@
+================================================================================
+ABSENCES FLOW SCAN - RouteMASTER
+================================================================================
+Generated: 2025-01-27
+Scope: Find where parents create absences and where driver/supervisor read them
+
+================================================================================
+SUMMARY
+================================================================================
+
+The RouteMASTER application currently implements absence marking functionality
+primarily through driver/supervisor interfaces during active trips. There is
+NO parent-initiated absence creation functionality found. The absence system
+works by marking students as "absent" in trip passenger records rather than
+using a dedicated absences collection.
+
+Key Findings:
+- Absence marking is done by drivers/supervisors during trips
+- No parent absence creation functionality found
+- Planned absences collection (schools/{schoolId}/absences) exists but not implemented
+- Absences are stored as passenger status in trips/{tripId}/passengers
+- Admin absences page exists but is placeholder only
+
+================================================================================
+DETAILED FINDINGS
+================================================================================
+
+1. ABSENCE MARKING FUNCTIONALITY (DRIVER/SUPERVISOR)
+================================================================================
+
+File: src/lib/roster.ts
+Lines: 109-115
+
+Context:
+```typescript
+export async function markAbsent(schoolId: string, tripId: string, studentId: string) {
+  const ref = sdoc(schoolId, `trips/${tripId}/passengers`, studentId);
+  return updateDoc(ref, {
+    status: "absent",
+    updatedAt: Timestamp.now(),
+  });
+}
+```
+
+Purpose: Core function to mark a student as absent in a trip's passenger record
+
+2. SUPERVISOR ABSENCE MARKING UI
+================================================================================
+
+File: src/app/supervisor/trips/[id]/TripRoster.tsx
+Lines: 166-180
+
+Context:
+```typescript
+const doAbsent = useCallback(
+  async (studentId: string) => {
+    try {
+      setBusy(studentId);
+      await markAbsent(schoolId, tripId, studentId);
+      await recalcTripCounts(schoolId, tripId);
+      toast({ title: "Absent", description: "Student marked as absent." });
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: "Missing or insufficient permissions.",
+      });
+    } finally {
+      setBusy(null);
+    }
+  },
+  [schoolId, tripId, toast]
+);
+```
+
+Lines: 256-259
+
+Context:
+```typescript
+<Button
+  size="sm"
+  variant="outline"
+  onClick={() => doAbsent(r.id)}
+>
+  Absent
+</Button>
+```
+
+Purpose: Supervisor interface to mark students absent during trip management
+
+3. DRIVER ABSENCE MARKING UI
+================================================================================
+
+File: src/app/driver/route/page.tsx
+Lines: 985-986
+
+Context:
+```typescript
+<Button 
+  size="sm" 
+  variant={s.status === "absent" ? "destructive" : "outline"} 
+  onClick={() => handleStatusUpdate(s.id, "absent")}
+>
+  Absent
+</Button>
+```
+
+Lines: 773
+
+Context:
+```typescript
+<Badge variant="outline">Absent: {counts.absent}</Badge>
+```
+
+Purpose: Driver interface to mark students absent and view absence counts
+
+4. PARENT ABSENCE VIEWING (READ-ONLY)
+================================================================================
+
+File: src/app/parent/(protected)/page.tsx
+Lines: 494, 527-531
+
+Context:
+```typescript
+const isAbsent = normStatus === 'absent';
+
+// ... later in render ...
+
+} else if (isAbsent) {
+  badge = (
+    <Badge variant="destructive">
+      <XCircle className="mr-1 h-3 w-3" />
+      Marked Absent
+    </Badge>
+  );
+  time = notification?.createdAt || p?.updatedAt || state.lastLocationAt;
+  label = "Marked ";
+```
+
+Purpose: Parents can view when their child has been marked absent but cannot create absences
+
+5. ADMIN ABSENCES PAGE (PLACEHOLDER)
+================================================================================
+
+File: src/app/admin/absences/page.tsx
+Lines: 14-41
+
+Context:
+```typescript
+export default function AbsencesPage() {
+  // TODO: Implement the logic for this page.
+  // - Fetch today's absences from schools/{schoolId}/absences
+  // - Join with student and parent data to show names.
+  // - Implement filtering and search.
+  
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+            <UserX />
+            Today's Absences
+        </CardTitle>
+        <CardDescription>
+          This is a placeholder page to view student absences for the current day.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Alert>
+          <AlertTitle>Under Construction</AlertTitle>
+          <AlertDescription>
+            The functionality to view, filter, and export student absences will be implemented here.
+          </AlertDescription>
+        </Alert>
+      </CardContent>
+    </Card>
+  );
+}
+```
+
+Purpose: Planned admin interface for viewing absences (not yet implemented)
+
+6. ADMIN NAVIGATION INCLUDES ABSENCES
+================================================================================
+
+File: src/app/admin/components/header.tsx
+Lines: 30
+
+Context:
+```typescript
+{ href: "/admin/absences", label: "Absences", icon: UserX },
+```
+
+Purpose: Navigation link to absences page exists in admin interface
+
+7. ABSENCE STATUS TRACKING IN DATA STRUCTURES
+================================================================================
+
+File: src/app/driver/route/page.tsx
+Lines: 90, 174
+
+Context:
+```typescript
+status: "pending" | "boarded" | "dropped" | "absent";
+
+// ... later ...
+
+const c = { pending: 0, boarded: 0, dropped: 0, absent: 0 };
+```
+
+File: src/app/supervisor/trips/[id]/TripRoster.tsx
+Lines: 26, 49, 111
+
+Context:
+```typescript
+status: "pending" | "boarded" | "dropped" | "absent";
+
+// ... later ...
+
+absent: 0,
+
+// ... later ...
+
+const c = { pending: 0, boarded: 0, absent: 0, dropped: 0 };
+```
+
+Purpose: Absence status is tracked as one of the passenger statuses in trips
+
+8. ABSENCE COUNTING AND DISPLAY
+================================================================================
+
+File: src/app/supervisor/trips/[id]/TripRoster.tsx
+Lines: 205, 214
+
+Context:
+```typescript
+absent: <><UserX className="h-3 w-3 mr-1 inline" />Absent</>,
+
+// ... later ...
+
+<span className="mr-3">Absent: {counts.absent}</span>
+```
+
+File: src/app/driver/page.tsx
+Lines: 91, 379
+
+Context:
+```typescript
+absent: number;
+
+// ... later ...
+
+absent: 0,
+```
+
+Purpose: Absence counts are displayed in both driver and supervisor interfaces
+
+================================================================================
+PATTERNS NOT FOUND
+================================================================================
+
+1. Parent Absence Creation:
+   - No UI found for parents to create/submit absences
+   - No forms for absence requests or excuses
+   - No parent-initiated absence workflow
+
+2. Dedicated Absences Collection Usage:
+   - collection(db, "schools", schoolId, "absences") referenced but not implemented
+   - No actual reads/writes to the absences collection found
+   - Admin page mentions this collection but doesn't use it
+
+3. Advance Absence Planning:
+   - No functionality for creating absences before trip day
+   - No absence scheduling or calendar integration
+   - No excuse/reason capture for absences
+
+4. Absence Approval Workflow:
+   - No approval process for parent-submitted absences
+   - No admin review of absence requests
+   - No absence verification system
+
+================================================================================
+CURRENT ABSENCE FLOW
+================================================================================
+
+1. **Trip Creation**: Students are added to trip passenger roster with "pending" status
+
+2. **During Trip**: 
+   - Driver or supervisor can mark students as "absent" using the roster interface
+   - This updates the passenger record in trips/{tripId}/passengers/{studentId}
+   - Status changes from "pending" to "absent"
+
+3. **Parent Notification**:
+   - Parents can see their child's absence status in their dashboard
+   - Status is displayed as "Marked Absent" with timestamp
+
+4. **Counting and Reporting**:
+   - Absence counts are displayed in driver and supervisor interfaces
+   - Absences are included in trip statistics
+
+================================================================================
+PLANNED BUT NOT IMPLEMENTED
+================================================================================
+
+1. **Dedicated Absences Collection**:
+   - schools/{schoolId}/absences collection is referenced in admin page
+   - Intended for storing advance absence notifications
+   - Would allow parents to submit absences before trip day
+
+2. **Admin Absence Management**:
+   - Admin page exists but shows placeholder content
+   - Planned features: view, filter, export absences
+   - Would join absence data with student and parent information
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+1. **Implement Parent Absence Creation**:
+   - Add UI for parents to submit advance absences
+   - Create forms for absence date, reason, and student selection
+   - Implement writes to schools/{schoolId}/absences collection
+
+2. **Connect Absence Systems**:
+   - Link advance absences to trip passenger status
+   - Auto-mark students absent if advance absence exists
+   - Provide override capability for drivers/supervisors
+
+3. **Complete Admin Interface**:
+   - Implement the planned admin absences page
+   - Add filtering, search, and export functionality
+   - Show both advance and trip-day absences
+
+4. **Add Absence Workflow**:
+   - Implement absence approval process if needed
+   - Add absence reason capture and display
+   - Consider notification system for absence submissions
+
+================================================================================
